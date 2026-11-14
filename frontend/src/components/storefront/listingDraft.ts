@@ -19,8 +19,11 @@ export interface ListingDraft {
   fixed: Record<string, ParamValue>
   colours: string[]
   media_ids: string[]
-  /** Every colour of an order is of one material (#6152). */
-  one_material: boolean
+  /**
+   * The materials a print may be made of, in the shop's order; empty is the shop's default
+   * (`storefront_materials`, #6258). The editor keeps them as read; it has no control yet.
+   */
+  materials: string[]
 }
 
 /** The schema's own hidden group: never shown to a customer, so never offered. */
@@ -30,7 +33,7 @@ export const MAX_TEXT_LENGTH = 200
 const NUMBERS: ReadonlySet<string> = new Set(['number', 'integer', 'slider'])
 
 export function emptyDraft(slug = '', commit = ''): ListingDraft {
-  return { slug, commit, title: '', description: '', params: {}, fixed: {}, colours: [], media_ids: [], one_material: false }
+  return { slug, commit, title: '', description: '', params: {}, fixed: {}, colours: [], media_ids: [], materials: [] }
 }
 
 export function draftOf(listing: StorefrontListing): ListingDraft {
@@ -43,7 +46,7 @@ export function draftOf(listing: StorefrontListing): ListingDraft {
     fixed: listing.fixed,
     colours: listing.colours,
     media_ids: listing.media_ids,
-    one_material: listing.one_material,
+    materials: listing.materials,
   }
 }
 
@@ -401,7 +404,8 @@ export function previewListing(
       const filament = customerFilaments(filaments).find((f) => f.id === id)
       return filament ? [{ id, colour: filament.colour, colour_name: filament.colour_name, material: filament.material }] : []
     }),
-    one_material: draft.one_material,
+    // #6258: empty is the shop's default, which the preview does not read.
+    materials: draft.materials,
     media: draft.media_ids.flatMap((id) => {
       const item = media.find((m) => m.id === id)
       return item ? [{ url: mediaUrl(item), kind: item.kind, caption: item.caption }] : []

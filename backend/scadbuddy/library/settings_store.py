@@ -845,6 +845,8 @@ class SettingsPatch(BaseModel):
     storefront_render_concurrency: int | None = None
     storefront_draft_ttl_days: int | None = None
     storefront_requests_enabled: bool | None = None
+    #: The materials a storefront print may be made of, in order (#6258).
+    storefront_materials: list[str] | None = None
     #: The storefront's mail (#5283); the password is sealed apart, never a setting.
     storefront_mail_host: str | None = None
     storefront_mail_port: int | None = None

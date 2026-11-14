@@ -138,6 +138,8 @@ class SettingsView(BaseModel):
     storefront_render_concurrency: int = 2
     storefront_draft_ttl_days: int = 30
     storefront_requests_enabled: bool = False
+    #: The materials a storefront print may be made of, in the shop's order (#6258).
+    storefront_materials: list[str] = Field(default_factory=lambda: ["PETG", "PLA"])
     #: The storefront's mail (#5283): SMTP host, port, user, From and the TLS mode
     #: (`starttls`, `implicit` or `none`). The password is sealed apart
     #: (`GET /storefront/mail/password` says whether it is set).

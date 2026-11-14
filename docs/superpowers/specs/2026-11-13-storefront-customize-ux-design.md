@@ -77,6 +77,23 @@ customize page "horrible". A Playwright walk on 2026-11-13 confirmed each point:
   Why picks and not slots: the slot order is known only after the render, and a hex
   alone cannot tell PLA from PETG.
 
+- **As built since #6258 (replaces `one_material` and `picks`).** One material per print
+  is always on. `ListingInput.materials: list[str]` holds the allowed materials in the
+  shop's order (casefolded, at most 16, repeats dropped); empty is the shop's default,
+  the live setting `storefront_materials` (default `["PETG", "PLA"]`).
+  `PublicListing.materials` is the effective list, and the public listing offers only
+  filaments of those materials. `picks` goes from `RenderBody` and `AddListingItem`: a
+  pick is the colour in `values`. `inputs.py` `resolve_choice` is the one rule the
+  render, the estimate and the add use: the colours the request gives fix the material
+  (the first allowed one that offers each of them); a colour it does not give keeps the
+  listing's default when that material offers it, else takes the closest colour the
+  material offers (`closest_colour.py`, CIEDE2000 with alpha, pinned by
+  `test-fixtures/storefront/closest-colour.json`). Colours of no one material are 422
+  `listing_colours_clash` with `parts`. Each slot takes that material's filament of its
+  colour. Publish refuses a listing filament of a material it does not allow (422
+  `listing_material_not_allowed`; support filaments are not checked). The render row
+  keeps the resolved `material`, which the estimate prices by.
+
 ### 5.2 Colour picker (frontend, `storefront/components/ColourPicker.tsx`)
 
 - Closed, a colour parameter is one row: label, the picked swatch, its name and
@@ -88,7 +105,8 @@ customize page "horrible". A Playwright walk on 2026-11-13 confirmed each point:
   the same name and material show the short hex after the name.
 - With `one_material`, a single "Material" control sits above the parameters; each
   picker then lists only that material. Changing material re-picks each colour to the
-  nearest hex in the new material (RGB distance), and says so.
+  nearest hex in the new material (RGB distance), and says so. (#6258 removed this
+  control and `one_material`; the cascade picker that replaces it is #6258's page PR.)
 - Keyboard: arrow keys move through the grid, Enter picks, Escape closes.
 
 ### 5.3 Automatic render (frontend, `CustomizePage.tsx`)

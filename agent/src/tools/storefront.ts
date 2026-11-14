@@ -126,8 +126,8 @@ export const storefrontTools: Tool[] = [
             ...withColourChoices(listing, schema, filaments),
             colours: listing.colours,
             media_ids: sellMedia(record.media ?? []),
-            // #6152: the shop restricts a listing to one material in the back office.
-            one_material: false,
+            // #6258: none of its own, so the shop's default (`storefront_materials`); the shop sets them in the back office.
+            materials: [],
           },
         }),
         `draft a storefront listing of ${name}`,

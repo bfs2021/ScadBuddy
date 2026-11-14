@@ -17,8 +17,9 @@ import re
 from datetime import datetime
 from typing import Annotated, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
+from scadbuddy.core.settings import unique_materials
 from scadbuddy.library.libraries import ModelLibrary
 from scadbuddy.library.media import MediaKind
 from scadbuddy.orders.customer_links import MAX_LINK_CHARS
@@ -182,10 +183,16 @@ class ListingInput(BaseModel):
     colours: list[str] = Field(default_factory=list)
     #: Ids of the template's media (``template_media``), in the order to show them.
     media_ids: list[str] = Field(default_factory=list)
-    #: Every colour of an order is of one material (#6152): each pick, the filament of
-    #: each offered colour left at its default, and every slot filament share one; else
-    #: 422 ``listing_mixed_material``.
-    one_material: bool = False
+    #: The materials a print of this listing may be made of, in the shop's order of
+    #: preference (#6258). Compared casefolded, at most `MAX_MATERIALS`, repeats dropped
+    #: (`unique_materials`). Empty is the shop's default (``storefront_materials``). A
+    #: print is always of one material (`inputs.py` `resolve_choice`).
+    materials: list[str] = Field(default_factory=list)
+
+    @field_validator("materials")
+    @classmethod
+    def _materials(cls, value: list[str]) -> list[str]:
+        return unique_materials(value, "materials")
 
 
 class Listing(ListingInput):
@@ -368,10 +375,13 @@ class PublicListing(BaseModel):
     title: str
     description: str
     params: dict[str, PublicParam]
-    #: The listing filaments a visitor may pick: never a support material (#6152).
+    #: The listing filaments a visitor may pick: never a support material (#6152), and
+    #: only of a material in ``materials`` (#6258).
     colours: list[PublicFilament]
-    #: Every pick must share one material (#6152).
-    one_material: bool = False
+    #: The materials a print may be made of, in the shop's order (#6258): the listing's,
+    #: else the shop's default (``storefront_materials``). A print is of one of them: the
+    #: first that offers every colour the visitor gives (`inputs.py` `resolve_choice`).
+    materials: list[str]
     media: list[PublicMedia]
     updated_at: datetime
 
@@ -417,15 +427,11 @@ class RenderBody(BaseModel):
     #: The listing's ``updated_at`` as the page read it: another is 409 ``listing_changed``.
     listing_updated_at: datetime
     values: dict[str, ParamValue] = Field(default_factory=dict, max_length=200)
-    #: The listing filament the visitor chose for each colour slot of the render.
+    #: The listing filament the visitor chose for each colour slot of the render. It
+    #: must be of the material the colours resolve to (`inputs.py` `resolve_choice`).
+    #: A colour the visitor picks is its value in ``values`` (#6258): the CRUD side
+    #: finds its filament.
     colours: dict[ColourSlotIndex, str] = Field(default_factory=dict, max_length=64)
-    #: The listing filament the visitor picked for each offered colour parameter, by
-    #: parameter name (#6152). Its colour must be the parameter's value. The CRUD side
-    #: maps picks to the render's slots by colour, so the page never guesses a slot.
-    picks: dict[
-        Annotated[str, StringConstraints(max_length=200)],
-        Annotated[str, StringConstraints(max_length=200)],
-    ] = Field(default_factory=dict, max_length=200)
 
 
 class StoreRender(BaseModel):

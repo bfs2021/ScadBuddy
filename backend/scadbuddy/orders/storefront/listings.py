@@ -54,6 +54,7 @@ from scadbuddy.orders.storefront.inputs import (
     InputReason,
     customer_filaments,
     effective_default,
+    effective_materials,
     same_value,
     value_reason,
 )
@@ -118,7 +119,7 @@ _needs_s3_warned: float | None = None
 
 _COLUMNS = (
     "id, slug, commit, title, description, position, published, params, fixed, colours,"
-    " media_ids, one_material, snapshot, media, published_at, created_at, updated_at"
+    " media_ids, materials, snapshot, media, published_at, created_at, updated_at"
 )
 _NUMBERS = frozenset({"number", "integer", "slider"})
 #: Each sort's columns, the last of each the id, so a page boundary never splits ties.
@@ -234,7 +235,7 @@ class ListingStore:
             row = conn.execute(
                 "INSERT INTO storefront_listings"
                 " (slug, commit, title, description, position, params, fixed, colours, media_ids,"
-                " one_material)"
+                " materials)"
                 " VALUES (%s, %s, %s, %s,"
                 " (SELECT coalesce(max(position) + 1, 0) FROM storefront_listings),"
                 f" %s, %s, %s, %s, %s) RETURNING {_COLUMNS}",
@@ -255,7 +256,7 @@ class ListingStore:
             Jsonb(dumped["fixed"]),
             body.colours,
             body.media_ids,
-            body.one_material,
+            body.materials,
         )
 
     def update(
@@ -265,14 +266,14 @@ class ListingStore:
         when it changed after ``expected_updated_at`` was read, 404 when it is gone, 422
         ``listing_choice_empty`` for a choice with nothing to choose."""
         _check_choices(body)
-        slug, commit, title, description, params, fixed, colours, media_ids, one_material = (
+        slug, commit, title, description, params, fixed, colours, media_ids, materials = (
             self._fields(body)
         )
         with self.pool.connection() as conn, conn.transaction():
             row = conn.execute(
                 "UPDATE storefront_listings SET slug = %s, commit = %s, title = %s,"
                 " description = %s, params = %s, fixed = %s, colours = %s, media_ids = %s,"
-                " one_material = %s, published = false, snapshot = NULL, media = '[]',"
+                " materials = %s, published = false, snapshot = NULL, media = '[]',"
                 " published_at = NULL,"
                 " updated_at = clock_timestamp()"
                 f" WHERE id = %s AND updated_at = %s RETURNING {_COLUMNS}",
@@ -285,7 +286,7 @@ class ListingStore:
                     fixed,
                     colours,
                     media_ids,
-                    one_material,
+                    materials,
                     listing_id,
                     expected_updated_at,
                 ),
@@ -616,6 +617,14 @@ class ListingStore:
             ).fetchall()
         return {row["id"]: row["colour"] for row in rows}
 
+    def filament_materials(self) -> dict[str, str]:
+        """Each price-book filament not archived, by id: its material (#6258)."""
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT id, material FROM filaments WHERE archived_at IS NULL"
+            ).fetchall()
+        return {row["id"]: row["material"] for row in rows}
+
     def support_filaments(self) -> set[str]:
         """The ids of the price-book filaments not archived whose material is a support
         material (`wire.py` `is_support`, #6152)."""
@@ -816,6 +825,28 @@ def checked_fixed(
     return fixed
 
 
+def check_materials(
+    body: ListingInput, materials: Mapping[str, str], allowed: Collection[str]
+) -> None:
+    """422 ``listing_material_not_allowed`` (with ``name``, the filament id) for a
+    listing filament whose material (``materials``, by id) is not one of ``allowed``,
+    casefolded (#6258: the listing's materials, else the shop's default). A support
+    material is the shop's choice and never offered (#6152), so it is not checked: a
+    locked support colour still needs its filament."""
+    wanted = {m.casefold() for m in allowed}
+    for filament_id in body.colours:
+        material = materials.get(filament_id)
+        if material is None or is_support(material):
+            continue  # `checked_fixed` refuses a filament the price book lacks.
+        if material.casefold() not in wanted:
+            raise _unprocessable(
+                "listing_material_not_allowed",
+                f"{filament_id!r} is {material}, which this listing does not allow; allow"
+                f" {material} or take the filament out",
+                filament_id,
+            )
+
+
 async def _commit_facts(core: Core, slug: str, commit: str) -> ListingSnapshot:
     """The commit's schema, pipeline flag, name and library pins, without the snapshot
     key; 422 ``listing_reference`` for a slug or commit that is not a revision of a
@@ -919,6 +950,7 @@ async def publish(core: Core, store: ListingStore, listing_id: str) -> Listing:
     409 ``storefront_needs_s3`` unless the store is S3; 422 ``listing_param_unknown``,
     ``listing_bounds_outside_schema``, ``listing_fixed_invalid``,
     ``listing_default_invalid``, ``listing_colour_unknown``, ``listing_media_unknown``,
+    ``listing_material_not_allowed`` (`check_materials`, #6258),
     ``listing_reference`` or ``listing_pipeline_unsupported`` for a listing its commit or
     the price book does not back; 409 ``listing_changed`` when it was edited while it was
     being published; 409 ``listing_publishing`` while another
@@ -946,6 +978,12 @@ async def _publish(
     colours = await asyncio.to_thread(store.filament_colours)
     supports = await asyncio.to_thread(store.support_filaments)
     fixed = checked_fixed(facts.schema_, listing, colours, supports)
+    shop = (await asyncio.to_thread(core.settings_store.snapshot)).runtime.storefront_materials
+    check_materials(
+        listing,
+        await asyncio.to_thread(store.filament_materials),
+        effective_materials(listing, shop),
+    )
     refs = BlobRefs(core.projection.pool)
     try:
         key = await snapshots.ensure(listing.slug, listing.commit)
@@ -1159,12 +1197,17 @@ def cursor_after(cursor: str) -> tuple[int, str]:
 
 
 async def public_card(
-    content: ContentStore, listing: Listing, filaments: Mapping[str, Filament]
+    content: ContentStore,
+    listing: Listing,
+    filaments: Mapping[str, Filament],
+    shop_materials: Sequence[str],
 ) -> PublicListingCard:
     """``listing`` as a card of the public list (#6154): its first picture as the one
-    presigned GET, and whether every colour it offers still has a filament."""
+    presigned GET, and whether every colour it offers still has a filament a customer
+    may pick (`customer_filaments`: of an allowed material, never support, #6258)."""
     assert listing.snapshot is not None
-    colours = {filaments[i].colour.casefold() for i in listing.colours if i in filaments}
+    materials = effective_materials(listing, shop_materials)
+    colours = {f.colour.casefold() for f in customer_filaments(listing, filaments, materials)}
     by_name = {p.name: p for p in listing.snapshot.schema_.parameters}
     # As the page's `colourGone` (`frontend/src/storefront/params.ts`): a colour with no
     # filament left cannot be ordered.
@@ -1192,17 +1235,23 @@ async def public_card(
 
 
 async def public_listing(
-    content: ContentStore, listing: Listing, filaments: Mapping[str, Filament]
+    content: ContentStore,
+    listing: Listing,
+    filaments: Mapping[str, Filament],
+    shop_materials: Sequence[str],
 ) -> PublicListing:
     """The published ``listing`` as the public site shows it: each bound with its
-    schema label and group, the listing's filaments the price book still has
-    (``filaments``, by id) and a customer may pick (never a support material,
-    `customer_filaments`, #6152), and each media file as a presigned GET of
-    `PUBLIC_MEDIA_TTL`. A media file the index lost is left out, and logged."""
+    schema label and group, its effective materials (the listing's, else
+    ``shop_materials``, #6258), the listing's filaments the price book still has
+    (``filaments``, by id) and a customer may pick (never a support material, and only
+    of those materials, `customer_filaments`, #6152, #6258), and each media file as a
+    presigned GET of `PUBLIC_MEDIA_TTL`. A media file the index lost is left out, and
+    logged."""
     assert listing.snapshot is not None
     by_name = {p.name: p for p in listing.snapshot.schema_.parameters}
+    materials = effective_materials(listing, shop_materials)
     # Never a support filament: support is the shop's choice (#6152).
-    offered = customer_filaments(listing, filaments)
+    offered = customer_filaments(listing, filaments, materials)
     colours = {f.colour.casefold() for f in offered}
     media: list[PublicMedia] = []
     for item in listing.media:
@@ -1227,8 +1276,8 @@ async def public_listing(
             )
             for f in offered
         ],
+        materials=materials,
         media=media,
-        one_material=listing.one_material,
         updated_at=listing.updated_at,
     )
 

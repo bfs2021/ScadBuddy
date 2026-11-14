@@ -532,7 +532,7 @@ export type MachineRateInputs = {
 export type StorefrontListing = Required<Schemas['Listing']>
 export type StorefrontListingInput = Defaulted<
   Schemas['ListingInput'],
-  'description' | 'params' | 'fixed' | 'colours' | 'media_ids' | 'one_material'
+  'description' | 'params' | 'fixed' | 'colours' | 'media_ids' | 'materials'
 >
 export type ListingBound = Schemas['NumberBound'] | Schemas['ChoiceBound'] | Schemas['TextBound']
 /** #6157 — one row of the back office's list, and a page of them. */
