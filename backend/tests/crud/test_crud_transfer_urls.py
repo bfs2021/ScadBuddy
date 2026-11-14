@@ -257,8 +257,26 @@ async def test_remote_blobs_retries_store_unavailable_as_a_passing_failure(
     `CrudUnavailableError`, which the LAN upload's retry policy tries again."""
     monkeypatch.setattr(output_reader, "TRANSFER_URL_BUDGET", 0.5)
     content = _Content({}, failure=ClientError({"Error": {"Code": "SlowDown"}}, "HeadObject"))
+    # The budget runs on a virtual clock that only the backoff advances, so a slow
+    # runner's request time cannot spend it before the second try (#6252).
+    now = [0.0]
+
+    async def sleep(seconds: float) -> None:
+        now[0] += seconds
+
+    app = _app(tmp_path, content)
+    crud = CrudClient(
+        INTERNAL,
+        "print",
+        ServiceAuth(_Token("sbsvc_print")),
+        transport=httpx.ASGITransport(app=app),
+        unavailable_budget=0.5,
+        clock=lambda: now[0],
+        sleep=sleep,
+    )
+    blobs = RemoteBlobs(crud, client=httpx.AsyncClient(transport=httpx.ASGITransport(app=app)))
     with pytest.raises(CrudUnavailableError) as raised:
-        await _read(_blobs(_app(tmp_path, content)), KEY)
+        await _read(blobs, KEY)
     assert raised.value.problem["reason"] == STORE_UNAVAILABLE
     assert len(content.asked) > 1
 
