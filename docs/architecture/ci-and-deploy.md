@@ -84,7 +84,8 @@ How to cut a release, read a deploy or deploy by hand:
 
 `ci.yml` runs on PRs, the merge queue, pushes to `main`, a weekly schedule and dispatch
 (`.github/workflows/ci.yml:48-67`). The required check is its `summary` job, **CI
-Summary**, which needs every job (`ci.yml:2410-2414`). Lane selection (`layout`,
+Summary**, which needs every job except `lfs-fixtures` and `dispatch-review`
+(`ci.yml:2410-2414`). Lane selection (`layout`,
 `select-lanes.sh`, `go-select`) is described in
 [`CLAUDE.md`](../../CLAUDE.md#ci-and-caching-rules).
 

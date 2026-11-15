@@ -32,9 +32,11 @@ In development (`SCADBUDDY_TEMPORAL_WORKER_INPROCESS`), the API also serves `ren
 (`e2e-stack/compose.yaml:83-95`).
 
 Versioned deployments: `scadbuddy-library`, `scadbuddy-render`, `scadbuddy-projects`
-(`scadbuddy/workflows/client.py:60-65`) and the agent's `scadbuddy-agent`. The print
-worker's queue and the slicer are unversioned (`scadbuddy/main.py:1619-1707`;
-`workers/rust/bins/scadbuddy-slicer/src/lib.rs:1-2`).
+(`scadbuddy/workflows/client.py:60-65`), `scadbuddy-print` for the print worker given a
+build id (`scadbuddy/workflows/client.py:242-251`, `scadbuddy/worker.py:1539-1563`) and the
+agent's `scadbuddy-agent`. Unversioned: the API's in-process print worker in development
+(`scadbuddy/main.py:1619-1707`) and the slicer
+(`workers/rust/bins/scadbuddy-slicer/src/lib.rs:1-2`).
 
 ## Operations: one shape for writes
 

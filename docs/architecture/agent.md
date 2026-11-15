@@ -98,7 +98,7 @@ The ingress sends these paths to port 8081 ahead of the backend
 
 ### Tools
 
-`ALL_TOOLS` (`tools/index.ts:46-84`) is about 360 tools in 36 groups: catalogue, customizer,
+`ALL_TOOLS` (`tools/index.ts:46-84`) is about 360 tools in 37 groups: catalogue, customizer,
 outputs, arrange, history, files, workspace, libraries, print, prints, farm, filament,
 printers, spools, orders (65), flows, sessions, browser and more. They are served on
 `/mcp` (`tools/projections.ts:195-210`) and given to each turn as the in-process MCP server
