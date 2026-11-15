@@ -1295,8 +1295,9 @@ clusters. It serves `/healthz` (`{"ok": true, "build_id": …, "task_queue": …
   start's settles take an `Idempotency-Key`), so the worker holds no rack pool. Through
   them too go the SB spool in each of a native run's trays and their presets, what a LAN
   start uses of them, the kept copy of Bambuddy's local presets and a native slice's start
-  (`…/filament/trays`, `…/filament/presets`, `…/filament/print-uses`, `…/held-presets`,
-  `…/native-slices`; a start's uses and a run's settle take an `Idempotency-Key`).
+  (`…/filament/trays`, `…/filament/presets`, `…/filament/print-uses`, area `filament`;
+  `…/held-presets`, `…/native-slices`; a start's uses and a run's settle take an
+  `Idempotency-Key`).
   A LAN print reads a native slice's sliced 3MF by a URL the API mints for it
   (`…/transfer-urls`, #5298 Task 32): the internal blob route's, its token signed under
   the API's KEK and good for 10 minutes, on every `store_backend`, so the pod reaches the
@@ -1322,7 +1323,8 @@ clusters. It serves `/healthz` (`{"ok": true, "build_id": …, "task_queue": …
   503 `store_unavailable`, which the worker retries. The worker signs nothing. It does
   not `LISTEN`. It waits until the API lists every area in `worker.py` `PRINT_CRUD_AREAS` (`settings`, `runs`, `operations`,
   `events`, `printer-ensure`, `reprints`, `uploads`, `previews`, `copy-leases`, `links`,
-  `lan-imports`, `printers`, `rack`, `spools`, `transfer-urls` and `access-codes`) before
+  `lan-imports`, `printers`, `rack`, `spools`, `transfer-urls`, `access-codes` and
+  `filament`) before
   it serves. Its
   build id is `SCADBUDDY_REVISION`, stamped in the image.
 - **Versioning:** the worker deployment `scadbuddy-print`, made current at start as the

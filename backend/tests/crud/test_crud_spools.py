@@ -94,7 +94,7 @@ def _public(cls: type) -> set[str]:
 def test_the_area_is_served_and_awaited() -> None:
     assert "spools" in PRINT_CRUD_AREAS
     # Appended, so an older API's list is a prefix of a newer one's.
-    assert CRUD_AREAS["print"][-3:] == ["spools", "transfer-urls", "access-codes"]
+    assert CRUD_AREAS["print"][-4:] == ["spools", "transfer-urls", "access-codes", "filament"]
 
 
 def test_the_print_worker_is_granted_no_table() -> None:

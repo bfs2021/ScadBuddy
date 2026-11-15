@@ -64,7 +64,7 @@ and the key's newest row). ``replace_records`` takes an ``Idempotency-Key`` of i
 a new UUID per call, sent again on the client's retries: a refresh's body carries its
 time. The refresh, the tray links and the shelf's edits are the API's.
 
-`RemoteFilamentTrays` and `RemotePrintUses` (area ``spools``, #6262 Task 6) are a native
+`RemoteFilamentTrays` and `RemotePrintUses` (area ``filament``, #6262 Task 6) are a native
 run's reads of the SB spools in its printer's trays and their presets
 (`filament/inventory.py` `SbSpoolReads`, natural reads), and a LAN start's uses and their
 settle (`filament/print_uses.py` `PrintUses`), each of which takes an
@@ -1510,8 +1510,9 @@ NATIVE_SPOOLS_API_ONLY = ("get", "create", "update", "delete")
 class RemoteNativeSpools(NativeSpoolStore):
     """`spools/native.py` `NativeSpoolStore` (Q29) over ``…/print/native-spools`` (area
     ``spools``). Blocking, as the SQL store is: callers on the loop use a thread. No
-    pool. The worker reads the shelf (the native provider); a LAN start's uses and their
-    settle are `RemotePrintUses`' (#6262)."""
+    pool. No caller since #6262 Task 6 (the worker read the shelf for the native
+    provider, which it no longer builds); Task 12 drops it. A LAN start's uses and their
+    settle are `RemotePrintUses`'."""
 
     def __init__(self, client: CrudSyncClient) -> None:
         self._client = client
@@ -1533,8 +1534,9 @@ _refuse(RemoteNativeSpools, "NativeSpoolStore", NATIVE_SPOOLS_API_ONLY)
 
 
 class RemoteFilamentTrays:
-    """`filament/inventory.py` `SbSpoolReads` over ``…/print/filament`` (area ``spools``,
-    #6262 Task 6): the SB spool in each tray a native run's printer reports, and the held
+    """`filament/inventory.py` `SbSpoolReads` over ``…/print/filament`` (area ``filament``,
+    #6262 Task 6): the SB spool in each tray a native run's printer reports (the trays
+    only: the route sends no shelf), and the held
     spools' presets, as the API's own inventory reads them. Both are reads, natural, sent
     again on the client's retries; the trays as a ``POST`` so their RFID keys stay out
     of the URL (spec 2026-10-01 §7)."""
@@ -1564,7 +1566,7 @@ class RemoteFilamentTrays:
 
 class RemotePrintUses:
     """`filament/print_uses.py` `PrintUses` over ``…/print/filament/print-uses`` (area
-    ``spools``, #6262 Task 6): a LAN start's uses and their settle, each one route, one
+    ``filament``, #6262 Task 6): a LAN start's uses and their settle, each one route, one
     transaction on the API, its row locks included (plan D6). Each answer is what that
     call booked, which a resend would not repeat (the rows read booked then), so each
     takes an ``Idempotency-Key`` of its own, a new UUID per call, sent again on the

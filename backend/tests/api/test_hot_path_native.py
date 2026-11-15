@@ -36,7 +36,7 @@ from scadbuddy.bambuddy.trays import tray_spool_id
 from scadbuddy.core.paths import DataPaths
 from scadbuddy.core.settings import Settings
 from scadbuddy.filament.component import FILAMENT, Filament
-from scadbuddy.filament.inventory import PoolSbSpoolReads
+from scadbuddy.filament.inventory import PoolSbSpoolReads, read_sb_spools
 from scadbuddy.filament.models import (
     EffectivePreset,
     HeldSpool,
@@ -564,17 +564,27 @@ def test_a_failed_trays_read_still_prints(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A read of the SB spools that fails plans on the trays alone: never the run's
-    failure."""
+    failure. The run's own read is counted, not the background slice's."""
     row = lan_row(native_app, fake_lan)
     held_spool(native_app)
     planned = _run_plans(monkeypatch)
+    in_run = False
     reads = 0
+
+    async def run_read(*args: Any) -> Any:
+        nonlocal in_run
+        in_run = True
+        try:
+            return await read_sb_spools(*args)
+        finally:
+            in_run = False
 
     async def broken(*_: Any) -> Any:
         nonlocal reads
-        reads += 1
+        reads += in_run
         raise ConnectionError("the API is away")
 
+    monkeypatch.setattr(print_activities, "read_sb_spools", run_read)
     monkeypatch.setattr(PoolSbSpoolReads, "trays", broken)
 
     with forbid_bambuddy(spans, BASE):
@@ -583,7 +593,7 @@ def test_a_failed_trays_read_still_prints(
     assert run["status"] == "succeeded", run
     ((held, _),) = planned
     assert held is None
-    assert reads >= 1
+    assert reads == 1
 
 
 def test_a_native_plan_warns_on_the_held_spools_grams(

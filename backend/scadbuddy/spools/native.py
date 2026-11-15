@@ -499,7 +499,7 @@ class NativeSpoolStore:
         a ``print_ended`` event is `SpoolInUseError`: it stays, archived, since its ledger
         keeps a finished print. Its cached copy
         goes at the provider's next refresh, as an archived one's does."""
-        return FilamentSpoolStore(self._pool).delete(spool_id, refusing=("print_ended",))
+        return FilamentSpoolStore(self._pool).delete(spool_id, refusing=(ledger.PRINT_ENDED,))
 
     # -- internals --------------------------------------------------------------------
 

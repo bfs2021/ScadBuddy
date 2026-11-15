@@ -101,7 +101,7 @@ provider's records and a settle take an ``Idempotency-Key`` and run with their l
 The two ``…/native-spools/uses`` routes are kept for a print worker from before #6262
 Task 6 across the deploy: they book and settle as the ``…/filament/print-uses`` routes do.
 
-A native run's SB spools and what its LAN starts use of them (area ``spools``, #6262 Task
+A native run's SB spools and what its LAN starts use of them (area ``filament``, #6262 Task
 6) are `filament/inventory.py`'s and `filament/print_uses.py`'s, for `RemoteFilamentTrays`
 and `RemotePrintUses`: ``…/filament/trays`` (the SB spool in each tray a printer reports,
 a ``POST`` read so the trays' RFID keys stay out of the URL), ``…/filament/presets`` (the
@@ -1878,13 +1878,15 @@ async def settle_spool_uses(
     summary="The SB spool in each tray a printer reports",
     description=(
         "The SB spool each of `seen` (the printer's trays, from its stored report) holds,"
-        " and the shelf, as the API's own inventory reads them (#6262). A read, sent as a"
-        " `POST` so the trays' RFID keys stay out of the URL."
+        " as the API's own inventory reads them (#6262). The trays only: `shelf` is"
+        " always empty, since a plan's choices are the trays. A read, sent as a `POST` so"
+        " the trays' RFID keys stay out of the URL."
     ),
 )
 async def filament_trays(body: TraysAsk, filament: FilamentDep) -> TrayView:
     """Natural: a read."""
-    return await asyncio.to_thread(filament.inventory.trays, body.printer_id, body.seen)
+    view = await asyncio.to_thread(filament.inventory.trays, body.printer_id, body.seen)
+    return TrayView(trays=view.trays, shelf=[])
 
 
 @router.post(

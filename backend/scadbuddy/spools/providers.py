@@ -87,8 +87,9 @@ class SettingsOnly:
 
 
 #: Builds a feature's provider over the core services and the components, which are
-#: ``None`` in a process with no registry (the print worker): a provider that needs a
-#: component returns ``None`` there. ``None`` when the feature has none.
+#: ``None`` in a process with no registry (the print worker until #6262 Task 6, which
+#: builds none since; Task 12 drops the case): a provider that needs a component returns
+#: ``None`` there. ``None`` when the feature has none.
 SpoolProviderBuild = Callable[[ProviderCore, Components | None], SpoolProvider | None]
 
 

@@ -1487,6 +1487,7 @@ PRINT_CRUD_AREAS = frozenset(
         "spools",
         "transfer-urls",
         "access-codes",
+        "filament",
     }
 )
 

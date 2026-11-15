@@ -21,7 +21,8 @@ class Spools:
     providers: list[SpoolProvider]
     #: Every printer's trays from its latest report, for the refresh's ``seen`` half
     #: (`spools/seen.py`, over the printer registry's report store); ``None`` in a
-    #: process that runs no refresh (the print worker), which reads providers only.
+    #: process that runs no refresh. No such process builds one since #6262 Task 6 (the
+    #: print worker did, for its providers); Task 12 drops the field with the overlay.
     trays: TraySource | None = None
 
 

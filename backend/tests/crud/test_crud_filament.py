@@ -16,6 +16,8 @@ import httpx
 import pytest
 from psycopg.types.json import Jsonb
 
+from scadbuddy.api import crud_areas
+from scadbuddy.api.crud_areas import CRUD_AREAS
 from scadbuddy.auth.service_credentials import ServiceCredentialStore
 from scadbuddy.core.settings import Settings
 from scadbuddy.crud.client import CrudClient, CrudRefusedError
@@ -30,16 +32,27 @@ from scadbuddy.filament.print_uses import SlotUse
 from scadbuddy.filament.spools import FilamentSpoolStore
 from scadbuddy.library.settings_store import SettingsStore
 from scadbuddy.spools.models import SeenTray
+from scadbuddy.worker import PRINT_CRUD_AREAS
 from tests.conftest import UNUSED_TEMPORAL_ADDRESS
 from tests.crud.crud_support import print_crud_app, served_print_crud, threaded_print_crud
 
-pytestmark = pytest.mark.requires_postgres
+pg = pytest.mark.requires_postgres
 
 PRINTER = UUID("5d0c8f1e-0000-4000-8000-000000006262")
 #: An invented tag, as a tray reports one.
 TAG = "5CADB0DDF1A7E5000000000000006262"
 RUN = "run-6262-crud"
 STARTED = datetime(2026, 11, 15, 9, 0, tzinfo=UTC)
+
+
+def test_the_print_worker_waits_for_the_filament_area() -> None:
+    """The routes are an area of their own, appended last, so a new worker waits for an
+    API that serves them (`wait_for_areas`) rather than booking into a 404 mid-roll."""
+    assert "filament" in PRINT_CRUD_AREAS
+    assert CRUD_AREAS["print"][-1] == "filament"
+    # The area's note names its routes (`crud_areas.py`).
+    note = " ".join(Path(crud_areas.__file__).read_text().replace("#:", "").split())
+    assert "Its ``filament`` area is ``…/print/filament/trays``" in note
 
 
 @pytest.fixture
@@ -109,10 +122,12 @@ def _print_events(store: SettingsStore, spool: UUID) -> list[str]:
     ]
 
 
+@pg
 async def test_the_trays_route_needs_the_print_credential(store: SettingsStore) -> None:
     """No credential is 401, another caller's is 403; the print worker's answers the
     `TrayView` the API's own inventory reads."""
     held = _tagged(store)
+    on_shelf = _spool(store)
     app = print_crud_app(store, ServiceCredentialStore(store.pool))
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://api"
@@ -139,11 +154,16 @@ async def test_the_trays_route_needs_the_print_credential(store: SettingsStore) 
         response = await crud.request("POST", f"{BASE}/filament/trays", json=_trays_body())
         assert response.status_code == 200
         view = TrayView.model_validate(response.json())
-        assert view == FilamentInventory(store.pool).trays(PRINTER, _seen())
+        own = FilamentInventory(store.pool).trays(PRINTER, _seen())
+        assert view.trays == own.trays
         assert view.trays[0].spool is not None and view.trays[0].spool.id == held
+        # The trays only: a plan's choices are the trays, so the shelf is not sent.
+        assert [spool.id for spool in own.shelf] == [on_shelf]
+        assert view.shelf == []
         assert await RemoteFilamentTrays(crud).trays(PRINTER, _seen()) == view
 
 
+@pg
 async def test_the_presets_answer_as_the_apis_own(store: SettingsStore, crud: CrudClient) -> None:
     spool = _tagged(store)
     spools = FilamentSpoolStore(store.pool)
@@ -162,6 +182,7 @@ async def test_the_presets_answer_as_the_apis_own(store: SettingsStore, crud: Cr
     assert await RemoteFilamentTrays(crud).presets([]) == {}
 
 
+@pg
 async def test_a_retried_print_uses_call_writes_once(
     store: SettingsStore, crud: CrudClient
 ) -> None:

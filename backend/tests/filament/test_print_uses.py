@@ -16,6 +16,7 @@ import pytest
 from psycopg.types.json import Jsonb
 
 from scadbuddy.bambuddy.filaments import SpoolOption
+from scadbuddy.bambuddy.print_run import PreparedPlates
 from scadbuddy.bambuddy.progress import CopyProgress, PrintProgress
 from scadbuddy.bambuddy.stages import Stage
 from scadbuddy.core.components import Components, Core
@@ -32,6 +33,7 @@ from scadbuddy.filament.print_uses import (
     slot_uses,
 )
 from scadbuddy.filament.spools import FilamentSpoolStore
+from scadbuddy.workflows.print_activities import PrintActivities, PrintDeps
 from tests.conftest import PgPool
 
 RUN = "run-6262"
@@ -226,4 +228,33 @@ def test_the_filament_component_settles_from_the_follows_reads() -> None:
         print_follower=SimpleNamespace(on_read=[]),
     )
     filament_component._build(cast(Core, core), cast(Components, SimpleNamespace()))
-    assert len(core.print_follower.on_read) == 1
+    (hook,) = core.print_follower.on_read
+    assert hook.__qualname__ == f"{print_use_hook.__qualname__}.<locals>.hook"
+
+
+class _Reads:
+    """SB spool reads that must not be reached."""
+
+    async def trays(self, *_: Any) -> Any:
+        raise AssertionError("read with no printer")
+
+    async def presets(self, *_: Any) -> Any:
+        raise AssertionError("read with no printer")
+
+
+class _BrokenReports:
+    def get(self, printer_id: str) -> Any:
+        raise ConnectionError("the API is away")
+
+
+async def test_a_failed_report_read_plans_on_the_trays_alone() -> None:
+    """The run's plan reads the printer's stored report first; when that read fails it
+    plans on the trays alone and goes on (`PrintActivities._sb_spools`)."""
+    deps = SimpleNamespace(
+        sb_spools=_Reads(),
+        printers=SimpleNamespace(get=lambda printer_id: object()),
+        reports=_BrokenReports(),
+    )
+    activities = PrintActivities(cast(PrintDeps, deps))
+    prepared = SimpleNamespace(lan_start=True, printer="row-1")
+    assert await activities._sb_spools(cast(PreparedPlates, prepared)) is None

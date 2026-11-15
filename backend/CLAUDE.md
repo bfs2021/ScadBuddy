@@ -417,7 +417,8 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   tag or a person's tray link; its presets by `sb_number`, `filament/presets.py`). The
   run's plan and the dialog's background slice read them alike where they run
   (`filament/inventory.py` `read_sb_spools`: the API's Postgres, or the print worker's
-  CRUD routes `…/print/filament/trays` and `…/filament/presets`, `RemoteFilamentTrays`),
+  CRUD routes `…/print/filament/trays` and `…/filament/presets`, area `filament`,
+  `RemoteFilamentTrays`),
   the run from the printer's stored report; a failed read plans on the trays alone. A
   LAN start books its slots' grams as `print_started` estimates at the plate's start in
   `filament_spool_events`, and the run's settle books each start's `print_ended` actual
@@ -557,12 +558,14 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   one is 503 `LAN_NEEDS_KEK`), and its rack hotends' usage (`RemoteRackUsage`, a
   `RackUsageStore` with no pool, area `rack`, #5298 Task 30: a LAN start's picks are one
   route and one transaction on the API; every write but `seen` takes an
-  `Idempotency-Key`; `spool_history` is the API's), and its spools, ScadBuddy's own spools
-  and their uses, the kept presets and a native slice's start (`RemoteSpoolStore`,
-  `RemoteNativeSpools`, `RemoteHeldPresets`, `RemoteNativeSlices`, area `spools`, #5298
-  Task 31: each write runs whole on the API under its lock; a provider's records and a
-  run's settle take an `Idempotency-Key`; the refresh, tray links and the shelf's edits
-  are the API's), and a LAN print's read URL of a native slice's file (`RemoteBlobs`
+  `Idempotency-Key`; `spool_history` is the API's), and the kept presets and a native
+  slice's start (`RemoteHeldPresets`, `RemoteNativeSlices`, area `spools`, #5298 Task 31:
+  each write runs whole on the API under its lock; `RemoteSpoolStore` and
+  `RemoteNativeSpools` have no caller since #6262 Task 6, and Task 12 drops them), and the
+  SB spools in a native run's trays and what its LAN starts use of them
+  (`RemoteFilamentTrays`, `RemotePrintUses`, area `filament`, #6262 Task 6: an area of its
+  own, so the worker waits for an API that serves it; a start's uses and a run's settle
+  take an `Idempotency-Key`), and a LAN print's read URL of a native slice's file (`RemoteBlobs`
   asks the API, area `transfer-urls`, #5298 Task 32; it signs nothing), and it
   does not LISTEN, so it keeps no `RecentRuns`; every
   workflow on it AUTO_UPGRADE (`print_deployment`'s default, #2066; `FollowPrint` names

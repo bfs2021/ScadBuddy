@@ -48,7 +48,7 @@ Conn = Connection[DictRow]
 #: A print run's events (`filament/print_uses.py`): ``ref_kind`` `PRINT_RUN`, ``ref_id``
 #: ``run/subtask/slot``. A start books a `PRINT_STARTED` event of source
 #: `PRINT_ESTIMATE`; its settle a `PRINT_ENDED` one of source `PRINT_ACTUAL`.
-PRINT_RUN = "print_run"
+PRINT_RUN: Final = "print_run"
 PRINT_STARTED: Final = "print_started"
 PRINT_ENDED: Final = "print_ended"
 PRINT_ESTIMATE: Final = "print_estimate"
@@ -57,8 +57,8 @@ PRINT_ACTUAL: Final = "print_actual"
 _COLUMNS = ", ".join(m.SpoolEvent.model_fields)
 _ABSOLUTE = frozenset({"scale", "person", "bb", "ams_remain"})
 _MANUAL = frozenset({"scale", "person"})
-_DELTA = frozenset({"print_actual", "print_estimate"})
-_USED = frozenset({"print_started", "print_ended"})
+_DELTA = frozenset({PRINT_ACTUAL, PRINT_ESTIMATE})
+_USED = frozenset({PRINT_STARTED, PRINT_ENDED})
 
 
 def record(
