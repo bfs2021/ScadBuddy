@@ -225,6 +225,8 @@ def test_a_link_takes_an_archived_spools_tag(pg_pool: PgPool) -> None:
     inventory.link(printer, 0, 1, a, _seen(tray_uuid=UUID_A), actor="ann")
     assert spools.open_binding(s0) is None
     assert spools.open_binding(a) is not None
+    unbound = [e for e in spools.events(s0) if e.kind == "tag_unbound"]
+    assert [e.data.get("reason") for e in unbound] == ["rebound"]
     held = _holder(inventory.trays(printer, [_seen(tray_uuid=UUID_A)]))
     assert (held.spool.id if held.spool else None, held.found_by) == (a, "tag")
 
