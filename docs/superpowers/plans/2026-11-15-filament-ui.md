@@ -672,3 +672,22 @@ fewer clicks; the builder cites the Bambu Studio source they compare against.
 - [ ] **Step 5:** Commit `docs(filament): notes for the Filament section and SB spools (#6262)`; open the PR `feat(filament): Filament section, spool edit page, SB spools everywhere (#6262)`, body `Closes #6262`, `Closes #6316`, the four parts and what each leaves working, a section naming the removed tools `native_spool_list`, `native_spool_get`, `native_spool_upsert` and `native_spool_delete` with their `filament_*` replacements, so a saved flow's author knows what to change, a line that the old tables stay until the follow-up drop PR (link the controller's issue), the session marker and the footer.
 
 ## Decisions made while building (#6262)
+
+- Task 2: the summary's `loaded` counts unarchived spools in `ams`-kind locations until
+  Task 4 defines trays; `value_left` uses the effective `cost_per_kg` until Task 13's
+  default lands.
+- Task 2: a type's `label_weight_g` edit refreshes every unarchived spool that inherits it
+  (locked in id order), because a stale grams-left would be visible to the user.
+- Task 3: the migration expands a row with `*` in either key column, not only `('*','*')`;
+  a single-`*` row the old API accepted would otherwise fail the new CHECK and stop the
+  API's start.
+- Task 3: the printer model key is `upper(btrim(printers.model))` plus `H2C` always, the
+  form in every Bambuddy recording, `printers/store.py` and `e2e-stack/seed.sh`.
+- Task 3: a spool's first type drops its `migrated` rows wherever `type_id` is first set:
+  `FilamentSpoolStore.update` and `bambuddy_pull._link` (the only two writers).
+- Task 3: a whole-list `set_presets` keeps `migrated` on each row whose key and values are
+  unchanged; a new or changed row is the person's.
+- Task 3: until Task 11 deletes `spools/native.py`, a native preset edit records the old
+  value from a person's own H2C/0.4 row when one exists. Accepted: short-lived.
+- Task 3: the model rule lives in `filament/presets.py` and in the migration's SQL, linked
+  by comments, with no parity test: the merged migration cannot change.
