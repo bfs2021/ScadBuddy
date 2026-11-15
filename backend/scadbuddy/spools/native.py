@@ -26,8 +26,10 @@ from psycopg.rows import DictRow
 from psycopg_pool import ConnectionPool
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
+from scadbuddy.bambuddy.resolver import PRINTER_MODEL
 from scadbuddy.filament import ledger
 from scadbuddy.filament.colour import normalise_rgba
+from scadbuddy.filament.presets import any_printer_keys
 from scadbuddy.filament.spools import FilamentSpoolStore
 from scadbuddy.spools.models import SpoolSnapshot, clean_tag_uid, clean_tray_uuid
 
@@ -169,14 +171,17 @@ class NativeSpoolExistsError(ValueError):
 ACTOR = "native"
 #: The material of a spool that names none (the 1302Z migration's).
 UNKNOWN = "Unknown"
-#: The preset a native spool keeps: it names no printer model or nozzle (#6262 adds them).
-_ANY = "*"
+#: The key a native spool's one preset reads from (#6262): the resolver's model
+#: (`bambuddy/resolver.py` `PRINTER_MODEL`) and its default nozzle. Its write keeps the
+#: preset under every key a preset for any printer becomes (`filament/presets.py`
+#: `any_printer_keys`), marked ``migrated`` as the 0706Z migration marks them.
+_SHOWN_KEY = (PRINTER_MODEL, "0.4")
 #: A native spool read off the filament tables: its effective brand, material, colour,
 #: name and label weight (the spool's own, else its type's; `filament/types.py`
-#: `effective`), its ledger's grams left, its ``*`` preset and the tag it shows (the open
+#: `effective`), its ledger's grams left, its `_SHOWN_KEY` preset and the tag it shows (the open
 #: binding's, or, archived, the one its archive closed). ``Unknown``, the material a spool
 #: that names none is given, reads as none, as the native record had it.
-_READ = """
+_READ = f"""
 SELECT s.id, CASE WHEN upper(mat.name) <> upper(%(unknown)s) THEN mat.name END AS material,
        left(coalesce(s.rgba, t.rgba), 7) AS colour,
        br.name AS brand, coalesce(s.colour_name, t.colour_name) AS name,
@@ -185,7 +190,8 @@ SELECT s.id, CASE WHEN upper(mat.name) <> upper(%(unknown)s) THEN mat.name END A
        CASE WHEN tag.shown THEN tag.tray_uuid END AS tray_uuid,
        CASE WHEN tag.shown THEN tag.tag_uid END AS tag_uid,
        (SELECT p.slicer_filament FROM filament_spool_presets p WHERE p.spool_id = s.id
-        AND p.printer_model = '*' AND p.nozzle_diameter = '*') AS preset,
+        AND p.printer_model = '{_SHOWN_KEY[0]}' AND p.nozzle_diameter = '{_SHOWN_KEY[1]}')
+       AS preset,
        s.note, s.archived_at, s.created_at, s.updated_at
 FROM filament_spools s
 LEFT JOIN filament_spool_types t ON t.id = s.type_id
@@ -268,19 +274,23 @@ def _rgba(colour: str | None) -> str | None:
 
 
 def _set_preset(conn: Conn, spool_id: UUID, preset: str | None) -> None:
+    """Keep ``preset`` under every key a preset for any printer becomes, as ``migrated``
+    rows; ``None`` deletes them. A row a person set for a key (not ``migrated``) is
+    theirs and is left as it is, as the 0706Z migration leaves it."""
     if preset is None:
         conn.execute(
-            "DELETE FROM filament_spool_presets WHERE spool_id = %s"
-            " AND printer_model = %s AND nozzle_diameter = %s",
-            (spool_id, _ANY, _ANY),
+            "DELETE FROM filament_spool_presets WHERE spool_id = %s AND migrated", (spool_id,)
         )
         return
-    conn.execute(
-        "INSERT INTO filament_spool_presets (spool_id, printer_model, nozzle_diameter,"
-        " slicer_filament) VALUES (%s, %s, %s, %s) ON CONFLICT (spool_id, printer_model,"
-        " nozzle_diameter) DO UPDATE SET slicer_filament = excluded.slicer_filament",
-        (spool_id, _ANY, _ANY, preset),
-    )
+    for model, nozzle in any_printer_keys(conn):
+        conn.execute(
+            "INSERT INTO filament_spool_presets (spool_id, printer_model, nozzle_diameter,"
+            " slicer_filament, migrated) VALUES (%s, %s, %s, %s, true)"
+            " ON CONFLICT (spool_id, printer_model, nozzle_diameter) DO UPDATE"
+            " SET slicer_filament = excluded.slicer_filament"
+            " WHERE filament_spool_presets.migrated",
+            (spool_id, model, nozzle, preset),
+        )
 
 
 def _close_open(conn: Conn, spool_id: UUID, reason: str, actor: str) -> None:
@@ -656,7 +666,7 @@ class NativeSpoolStore:
 
     @staticmethod
     def _edit(conn: Conn, current: Mapping[str, Any], patch: NativeSpoolPatch, actor: str) -> None:
-        """The sent fields kept on the spool's row and its ``*`` preset, as one ``edited``
+        """The sent fields kept on the spool's row and its preset, as one ``edited``
         event of ``[before, after]`` per change; then ``remaining_g`` as a reading."""
         sent = patch.model_fields_set
         spool_id: UUID = current["id"]
@@ -687,7 +697,7 @@ class NativeSpoolStore:
             was = conn.execute(
                 "SELECT slicer_filament FROM filament_spool_presets WHERE spool_id = %s"
                 " AND printer_model = %s AND nozzle_diameter = %s",
-                (spool_id, _ANY, _ANY),
+                (spool_id, *_SHOWN_KEY),
             ).fetchone()
             old = None if was is None else was["slicer_filament"]
             if old != patch.preset:

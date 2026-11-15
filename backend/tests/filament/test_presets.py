@@ -6,12 +6,14 @@ from decimal import Decimal
 from uuid import UUID
 
 import pytest
+from pydantic import ValidationError
 
 from scadbuddy.filament.catalog import CatalogRefError, CatalogStore
 from scadbuddy.filament.models import (
     Material,
     SpoolCreate,
     SpoolKValueCreate,
+    SpoolPatch,
     SpoolPresetCreate,
     SpoolTypeCreate,
     TypeKValue,
@@ -20,6 +22,7 @@ from scadbuddy.filament.models import (
 from scadbuddy.filament.presets import effective_k_values, effective_presets, preset_for
 from scadbuddy.filament.spools import FilamentSpoolStore
 from scadbuddy.filament.types import SpoolTypeStore, TypeRowsDuplicateError
+from scadbuddy.spools.native import NativeSpoolCreate, NativeSpoolPatch, NativeSpoolStore
 from tests.conftest import PgPool
 from tests.support.printers import bambuddy_printer
 
@@ -179,3 +182,109 @@ def test_a_spool_only_k_key_shows_and_a_repeated_key_is_refused(
         assert effective_k_values(conn, spool_id) == saved
     with pytest.raises(TypeRowsDuplicateError):
         spools.set_k_values(spool_id, [own, own], actor="ann")
+
+
+def _migrated(pool: PgPool, spool_id: UUID, filament: str) -> None:
+    """The rows the presets-per-nozzle migration makes of a native ``*`` preset."""
+    with pool.connection() as conn:
+        for nozzle in ("0.2", "0.4", "0.6", "0.8"):
+            conn.execute(
+                "INSERT INTO filament_spool_presets (spool_id, printer_model, nozzle_diameter,"
+                " slicer_filament, migrated) VALUES (%s, 'H2C', %s, %s, true)",
+                (spool_id, nozzle, filament),
+            )
+
+
+def _rows(pool: PgPool, spool_id: UUID) -> list[tuple[str, str, str, bool]]:
+    with pool.connection() as conn:
+        rows = conn.execute(
+            "SELECT printer_model, nozzle_diameter, slicer_filament, migrated"
+            " FROM filament_spool_presets WHERE spool_id = %s"
+            " ORDER BY printer_model, nozzle_diameter",
+            (spool_id,),
+        ).fetchall()
+    return [tuple(r.values()) for r in rows]
+
+
+def test_a_first_type_drops_the_migrated_presets(pg_pool: PgPool) -> None:
+    types, spools, type_id, _ = _type_with_spool(pg_pool)
+    types.set_presets(type_id, [_type_preset(type_id, "0.6", "T6")])
+    kind = types.get(type_id)
+    assert kind is not None
+    needs = spools.create(SpoolCreate(material_id=kind.material_id), actor="ann")
+    _migrated(pg_pool, needs.id, "P1")
+    # A row the person set themselves is theirs: a type never drops it.
+    with pg_pool.connection() as conn:
+        conn.execute(
+            "UPDATE filament_spool_presets SET slicer_filament = 'MINE', migrated = false"
+            " WHERE spool_id = %s AND nozzle_diameter = '0.2'",
+            (needs.id,),
+        )
+    spools.update(needs.id, SpoolPatch(type_id=type_id), actor="ann")
+    presets = spools.presets(needs.id)
+    assert presets is not None
+    assert [(p.nozzle_diameter, p.slicer_filament, p.overridden) for p in presets] == [
+        ("0.2", "MINE", True),
+        ("0.6", "T6", False),
+    ]
+    (edited,) = [e for e in spools.events(needs.id) if e.kind == "edited"]
+    assert edited.data["changes"]["type_id"] == [None, str(type_id)]
+    before, after = edited.data["changes"]["presets"]
+    assert [r["slicer_filament"] for r in before] == ["MINE", "P1", "P1", "P1"]
+    assert [r["slicer_filament"] for r in after] == ["MINE"]
+
+
+def test_a_later_type_keeps_the_presets(pg_pool: PgPool) -> None:
+    types, spools, type_id, spool_id = _type_with_spool(pg_pool)
+    _migrated(pg_pool, spool_id, "P1")
+    kind = types.get(type_id)
+    assert kind is not None
+    other = types.create(
+        SpoolTypeCreate(
+            code="PLA-Y", material_id=kind.material_id, label_weight_g=1000, rgba="#000000FF"
+        )
+    )
+    spools.update(spool_id, SpoolPatch(type_id=other.id), actor="ann")
+    assert [r[3] for r in _rows(pg_pool, spool_id)] == [True] * 4
+    (edited,) = [e for e in spools.events(spool_id) if e.kind == "edited"]
+    assert "presets" not in edited.data["changes"]
+
+
+def test_a_native_upsert_with_a_preset_still_works(pg_pool: PgPool) -> None:
+    native = NativeSpoolStore(pg_pool)
+    made = native.create(NativeSpoolCreate(material="PLA", preset="GFA00"))
+    assert made.preset == "GFA00"
+    assert _rows(pg_pool, made.id) == [
+        ("H2C", n, "GFA00", True) for n in ("0.2", "0.4", "0.6", "0.8")
+    ]
+    spools = FilamentSpoolStore(pg_pool)
+    presets = spools.presets(made.id)
+    assert presets is not None
+    found = preset_for(presets, "H2C", "0.4")
+    assert found is not None and found.slicer_filament == "GFA00"
+
+    patched = native.update(made.id, NativeSpoolPatch(preset="GFA01"))
+    assert patched is not None and patched.preset == "GFA01"
+    assert {r[2] for r in _rows(pg_pool, made.id)} == {"GFA01"}
+    cleared = native.update(made.id, NativeSpoolPatch(preset=None))
+    assert cleared is not None and cleared.preset is None
+    assert _rows(pg_pool, made.id) == []
+
+
+def test_a_native_write_keeps_a_persons_own_row(pg_pool: PgPool) -> None:
+    native = NativeSpoolStore(pg_pool)
+    made = native.create(NativeSpoolCreate(material="PLA", preset="GFA00"))
+    spools = FilamentSpoolStore(pg_pool)
+    spools.set_presets(made.id, [_own("0.6", "MINE")], actor="ann")
+    native.update(made.id, NativeSpoolPatch(preset="GFA01"))
+    rows = _rows(pg_pool, made.id)
+    assert ("H2C", "0.6", "MINE", False) in rows
+    assert ("H2C", "0.4", "GFA01", True) in rows
+    native.update(made.id, NativeSpoolPatch(preset=None))
+    assert _rows(pg_pool, made.id) == [("H2C", "0.6", "MINE", False)]
+
+
+def test_a_preset_key_refuses_the_wildcard() -> None:
+    for model, nozzle in (("*", "0.4"), ("H2C", " * ")):
+        with pytest.raises(ValidationError):
+            SpoolPresetCreate(printer_model=model, nozzle_diameter=nozzle, slicer_filament="X")

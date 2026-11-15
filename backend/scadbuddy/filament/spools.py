@@ -375,7 +375,9 @@ class FilamentSpoolStore:
         binding (reason ``archived``, a ``tag_unbound`` event), as the native archive does
         (`spools/native.py`); restoring binds nothing back. A patch that would leave neither
         a type nor a material is `SpoolTypelessError`, and the temperature ranges are
-        checked on the effective values after it."""
+        checked on the effective values after it. A spool's first type drops its
+        ``migrated`` presets (`presets.drop_migrated`), in the same event as
+        ``changes.presets``."""
         sent = [n for n in _WRITABLE if n in patch.model_fields_set]
         try:
             with self._pool.connection() as conn, conn.transaction():
@@ -410,6 +412,10 @@ class FilamentSpoolStore:
                         [*(after[c] for c in columns), spool_id],
                     )
                     self._check(conn, spool_id)
+                    if current["type_id"] is None and merged["type_id"] is not None:
+                        dropped = p.drop_migrated(conn, spool_id)
+                        if dropped is not None:
+                            changes["presets"] = dropped
                     ledger.record(conn, spool_id, "edited", actor=actor, data={"changes": changes})
                 if patch.archived is not None:
                     self._archive(conn, current, patch.archived, actor)

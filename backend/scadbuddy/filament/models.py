@@ -16,6 +16,7 @@ from typing import Annotated, Any, ClassVar, Literal
 from uuid import UUID
 
 from pydantic import (
+    AfterValidator,
     AwareDatetime,
     BaseModel,
     ConfigDict,
@@ -27,6 +28,17 @@ from pydantic import (
 from scadbuddy.filament.colour import Rgba
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)]
+
+
+def _not_any(value: str) -> str:
+    if value == "*":
+        raise ValueError("name one printer model and nozzle diameter, not *")
+    return value
+
+
+#: A preset's printer model or nozzle diameter: one, never ``*`` for any (#6262; the
+#: 0706Z migration's CHECK refuses it too).
+PresetKey = Annotated[Name, AfterValidator(_not_any)]
 SortOrder = Annotated[int, Field(ge=-1_000_000, le=1_000_000)]
 Idx = Annotated[int, Field(ge=0, le=1000)]
 CaliIdx = Annotated[int, Field(ge=-1, le=1_000_000)]
@@ -445,8 +457,8 @@ class SpoolType(_Row):
 
 
 class TypePresetCreate(_In):
-    printer_model: Name
-    nozzle_diameter: Name
+    printer_model: PresetKey
+    nozzle_diameter: PresetKey
     slicer_filament: Name
     slicer_filament_name: Text | None = None
 

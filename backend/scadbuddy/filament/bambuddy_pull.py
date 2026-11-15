@@ -63,6 +63,7 @@ from scadbuddy.filament import ledger
 from scadbuddy.filament import models as m
 from scadbuddy.filament.colour import normalise_rgba
 from scadbuddy.filament.component import Filament
+from scadbuddy.filament.presets import drop_migrated
 from scadbuddy.filament.spools import FilamentSpoolStore, TagKeysClashError
 from scadbuddy.library.settings_store import StoredSettings
 from scadbuddy.spools.models import clean_tag_uid, clean_tray_uuid
@@ -306,7 +307,8 @@ def _link(
     actor: str,
 ) -> bool:
     """Link the SB spool and keep what it has; a spool with no type takes the one BB's
-    values match, and one with no weight BB's. True when it still needs a type."""
+    values match (dropping its ``migrated`` presets, `presets.drop_migrated`), and one
+    with no weight BB's. True when it still needs a type."""
     current = conn.execute(
         "SELECT type_id, grams_left, weight_locked FROM filament_spools WHERE id = %s FOR UPDATE",
         (spool_id,),
@@ -323,6 +325,9 @@ def _link(
                 (type_id, spool_id),
             )
             changes["type_id"] = [None, type_id]
+            dropped = drop_migrated(conn, spool_id)
+            if dropped is not None:
+                changes["presets"] = dropped
     reading = after["remaining_g"]
     if current["grams_left"] is not None or current["weight_locked"]:
         reading = None

@@ -1,18 +1,22 @@
 """A spool's slicer presets and K values over its type's (#6262, spec §5.3): the spool's
 own row for a key replaces the type's row of that key, and a key only the spool has is
 kept. A key is a printer model and nozzle diameter for a preset, and a printer, extruder
-and nozzle diameter for a K value.
+and nozzle diameter for a K value. A preset row for any printer or nozzle (``*``) is
+refused: the 0706Z migration made each one a ``migrated`` row per model and nozzle, as the
+native API's write (`spools/native.py`) does.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, get_args
 from uuid import UUID
 
 from psycopg import Connection
 from psycopg.rows import DictRow
 
+from scadbuddy.bambuddy.models import NozzleSize
+from scadbuddy.bambuddy.resolver import PRINTER_MODEL
 from scadbuddy.filament import models as m
 
 Conn = Connection[DictRow]
@@ -21,6 +25,33 @@ _PRESET_COLUMNS = ", ".join(m.SpoolPreset.model_fields)
 _K_COLUMNS = ", ".join(m.SpoolKValue.model_fields)
 _TYPE_PRESET_COLUMNS = ", ".join(m.TypePreset.model_fields)
 _TYPE_K_COLUMNS = ", ".join(m.TypeKValue.model_fields)
+
+#: The nozzle diameters a row for any nozzle becomes: the resolver's sizes.
+NOZZLES: tuple[str, ...] = get_args(NozzleSize)
+#: The printer models a row for any printer becomes, as the 0706Z migration picks them:
+#: the resolver's model and each registry printer's, trimmed and upper-cased.
+_MODELS = (
+    "SELECT %s AS model UNION SELECT upper(btrim(model)) FROM printers"
+    " WHERE nullif(btrim(model), '') IS NOT NULL"
+)
+
+
+def any_printer_keys(conn: Conn) -> list[tuple[str, str]]:
+    """The keys a preset for any printer and nozzle is kept under: each model of
+    `_MODELS` with each of `NOZZLES`, by model and nozzle."""
+    rows = conn.execute(f"SELECT model FROM ({_MODELS}) k ORDER BY model", (PRINTER_MODEL,))
+    return [(row["model"], nozzle) for row in rows.fetchall() for nozzle in NOZZLES]
+
+
+def drop_migrated(conn: Conn, spool_id: UUID) -> list[list[dict[str, Any]]] | None:
+    """Delete the spool's ``migrated`` preset rows, so its type's presets show: what a
+    spool that needed a type does when it is first given one (#6262 F27). The spool's own
+    rows ``[before, after]``, for its ``edited`` event; ``None`` when it had none."""
+    before = own_presets(conn, spool_id)
+    gone = conn.execute(
+        "DELETE FROM filament_spool_presets WHERE spool_id = %s AND migrated", (spool_id,)
+    ).rowcount
+    return [before, own_presets(conn, spool_id)] if gone else None
 
 
 def own_presets(conn: Conn, spool_id: UUID) -> list[dict[str, Any]]:

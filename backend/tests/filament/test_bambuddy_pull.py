@@ -162,6 +162,32 @@ def test_a_bb_spool_whose_tag_sb_holds_is_linked_not_duplicated(pg_pool: PgPool)
     assert (spool.id, spool.grams_left, spool.note) == (held.id, 500, "mine")
 
 
+def test_a_linked_spool_given_its_first_type_drops_its_migrated_presets(
+    pg_pool: PgPool,
+) -> None:
+    f = _filament(pg_pool)
+    kind = f.types.create(
+        SpoolTypeCreate(
+            code="GFA00-RED", material_id=_pla(pg_pool), rgba="#FF0000", label_weight_g=1000
+        )
+    )
+    held = f.spools.create(SpoolCreate(material_id=_pla(pg_pool)), actor="ann")
+    f.spools.bind_tag(held.id, tray_uuid=TRAY, kind="bambu_mifare", actor="ann")
+    with pg_pool.connection() as conn:
+        conn.execute(
+            "INSERT INTO filament_spool_presets (spool_id, printer_model, nozzle_diameter,"
+            " slicer_filament, migrated) VALUES (%s, 'H2C', '0.4', 'P1', true)",
+            (held.id,),
+        )
+    pull(f, [bb(material_number="gfa00-red")], now=NOW)
+    spool = f.spools.get(held.id)
+    assert spool is not None and spool.type_id == kind.id
+    assert f.spools.presets(held.id) == []
+    (synced,) = [e for e in f.spools.events(held.id) if e.kind == "synced_from_bb"]
+    before, after = synced.data["changes"]["presets"]
+    assert ([r["slicer_filament"] for r in before], after) == (["P1"], [])
+
+
 def test_a_bb_spool_whose_record_link_names_an_sb_spool_is_linked(pg_pool: PgPool) -> None:
     """A native spool migrated onto its physical spool's id, which the BB record is
     linked to (`spool_record_links`), is that BB spool, tag or not."""
