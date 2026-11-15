@@ -63,11 +63,11 @@ Every process without a database secret reaches its rows through
 `/api/v1/internal/crud/<caller>/…`, served by the API on its own port
 (`SCADBUDDY_CRUD_PORT`, default 8082, `scadbuddy/core/settings.py:365`;
 `scadbuddy/crud/listener.py:30-46`). Each router is `crud_router(caller)`, guarded by
-`require_crud(caller)` in every auth mode (`scadbuddy/crud/guard.py:144-153`, `:44-73`).
+`require_crud(caller)` in every auth mode (`scadbuddy/crud/guard.py:144-152`, `:44-73`).
 The callers are agent, print, projects, render, storefront and intake
 (`scadbuddy/auth/service_auth.py:25`); their scopes are in
 `scadbuddy/auth/service_credentials.py:99-106`. `GET …/<caller>/areas` lists what each
-caller may use (`scadbuddy/api/crud_areas.py:73-140`); a worker waits for its areas
+caller may use (`scadbuddy/api/crud_areas.py:73-139`); a worker waits for its areas
 before it polls (for example `scadbuddy/worker.py:1102`). Retries are deduplicated by the
 `crud_requests` ledger (`scadbuddy/crud/idempotency.py`).
 
@@ -94,7 +94,7 @@ The stored setting `store_backend` (seeded from the environment, default `local`
 ### Keys and content addressing
 
 `ContentStore` (`scadbuddy/store/content.py`) maps a logical key to a `BlobRef` (sha256,
-kind, backend, backend id, size; `scadbuddy/store/content_models.py:47-52`), indexed in
+kind, backend, backend id, size; `scadbuddy/store/content_models.py:52-57`), indexed in
 `store_blobs`. The kinds are `piece`, `snapshot`, `asset`, `font`, `slice`, `library`,
 `workspace` and `media` (`content_models.py:12`). A blob stays alive while a `blob_refs`
 row holds it (`scadbuddy/store/refs.py:22-30`); unreferenced blobs of the swept kinds are
