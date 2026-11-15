@@ -91,13 +91,13 @@ test.describe('native hot path (real stack)', () => {
     await progress
     await expect(dialog.getByTestId('slice-time')).toHaveText(/\d/, { timeout: 300_000 })
 
-    // The tagged tray holds the recorder's spool 2, linked by RFID from the refresh the
-    // seed ran: Bambuddy's record over it, read from Postgres, not from Bambuddy. With no
-    // Bambuddy there is no record.
+    // The tagged tray holds the SB spool the seed's refresh pulled from the recorder's
+    // spool 2 and bound to its RFID tag (#6262): its `#N` and name, read from Postgres,
+    // not from Bambuddy. With no Bambuddy nothing was pulled, so the tray holds none.
     if (mode === 'recorder') {
-      await expect(second).toContainText('Bambuddy: Bambu Lab Hot Pink')
+      await expect(second).toContainText(/Spool #\d+: .*Hot Pink/)
     } else {
-      await expect(second).not.toContainText('Bambuddy:')
+      await expect(second).not.toContainText('Spool #')
     }
 
     await dialog.getByRole('button', { name: 'Print', exact: true }).click()

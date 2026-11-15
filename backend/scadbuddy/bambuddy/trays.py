@@ -13,13 +13,14 @@ weight tracked. Bambuddy's scheduler maps a queue item by type and colour, so th
 print draws from that tray.
 
 On a native run (#3818 tier A, plan 2026-10-18 D1) there is no inventory to pick from:
-every filled tray is a choice of its own (:func:`loaded_trays`), with the spool overlay's
-provider records of the spool in it, and :func:`seen_trays` is what that overlay reads.
+every filled tray is a choice of its own (:func:`loaded_trays`), with the SB spool it
+holds (#6262, `filament/inventory.py` `FilamentInventory.trays`, which reads
+:func:`seen_trays`).
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Sequence
 from typing import Any
 
 from scadbuddy.bambuddy.extruders import extruder_of, side_of, two_nozzles
@@ -29,19 +30,14 @@ from scadbuddy.bambuddy.filaments import (
     SpoolOption,
     UnknownTray,
     colour_distance,
+    colours_match,
     family,
     normalise_colour,
 )
 from scadbuddy.bambuddy.models import AmsTray, PrinterStatus
 from scadbuddy.filament.colour import normalise_rgba
-from scadbuddy.spools.models import (
-    Overlay,
-    SeenTray,
-    ShelfSpool,
-    SpoolSnapshot,
-    clean_tag_uid,
-    clean_tray_uuid,
-)
+from scadbuddy.filament.models import Spool, TrayView
+from scadbuddy.spools.models import SeenTray, clean_tag_uid, clean_tray_uuid
 
 #: A tray's ``state`` is a bitfield, not an enum (ha-bambulab ``pybambu/const.py:321-328``
 #: at ``0e027ff1``, ``AMSTrayStateFlags``): SPOOL 0x01, METADATA 0x02, MOTION 0x04,
@@ -293,7 +289,8 @@ def _sorted_trays(status: PrinterStatus) -> list[tuple[int, AmsTray]]:
 
 
 def seen_trays(status: PrinterStatus) -> list[SeenTray]:
-    """Every filled tray as the spool overlay reads it (`SpoolStore.overlay`): its RFID
+    """Every filled tray as the SB tray resolution (`FilamentInventory.trays`) and, until
+    #6262 Task 12 drops it, the spool overlay (`SpoolStore.overlay`) read it: its RFID
     keys (cleaned there, so zeros are no key), material, colour and ``tray_info_idx``;
     its fingerprint is `spools.models.tray_fingerprint`, never its state. ``rgba`` keeps
     the alpha the report gives (`tray_rgba`) for the SB tray fingerprint."""
@@ -327,94 +324,104 @@ def loaded_trays(
     status: PrinterStatus,
     printer_id: int,
     printer_name: str | None,
-    overlay: Overlay | None = None,
+    held: TrayView | None = None,
 ) -> list[SpoolOption]:
     """The native run's filament choices (#3818 tier A, plan 2026-10-18 D1): every filled
-    tray as itself, under its :func:`tray_spool_id`, with what the overlay knows of the
-    spool in it. ``slicer_filament`` is the tray's ``tray_info_idx`` (the BBL preset's
-    ``filament_id``, `resolver._by_filament_id`); the weight, brand and label weight are
-    the first provider record's that has them, in the overlay's (priority) order."""
-    by_tray = {(tray.ams_id, tray.tray_id): tray for tray in (overlay.trays if overlay else [])}
+    tray as itself, under its :func:`tray_spool_id`, with the SB spool ``held`` says it
+    holds (#6262, `FilamentInventory.trays`). ``slicer_filament`` is the tray's
+    ``tray_info_idx`` (the BBL preset's ``filament_id``, `resolver._by_filament_id`); the
+    brand, colour name, grams left, label weight and ``rgba`` are the held spool's
+    effective values (:func:`_from_spool`), else the tray's own ``rgba`` and nothing
+    else. The material and ``colour`` stay the tray's: what the AMS feeds."""
+    by_tray = {(tray.ams_id, tray.tray_id): tray.spool for tray in (held.trays if held else [])}
     options: list[SpoolOption] = []
     for ams_id, tray in _sorted_trays(status):
         spool = by_tray.get((ams_id, tray.id))
-        records = spool.records if spool is not None else {}
         extruder = extruder_of(ams_id, tray.id, status)
-        options.append(
-            SpoolOption(
-                spool_id=tray_spool_id(ams_id, tray.id),
-                material=(tray.tray_type or "").strip(),
-                colour=normalise_colour(tray.tray_color),
-                brand=_first(records, "brand"),
-                color_name=_first(records, "name"),
-                slicer_filament=(tray.tray_info_idx or "").strip() or None,
-                remaining_g=_first(records, "remaining_g"),
-                label_weight_g=_first(records, "label_weight_g"),
-                loaded=LoadedAt(
-                    printer_id=printer_id,
-                    printer_name=printer_name,
-                    ams_id=ams_id,
-                    tray_id=tray.id,
-                ),
-                extruder=extruder,
-                side=side_of(extruder),
-                tray_only=True,
-                label=_native_label(ams_id, tray.id, status),
-                colour_word=colour_word(tray.tray_color),
-                remain_percent=tray.remain if tray.remain >= 0 else None,
-                physical_spool_id=spool.physical_spool_id if spool is not None else None,
-                records=records,
-            )
+        option = SpoolOption(
+            spool_id=tray_spool_id(ams_id, tray.id),
+            material=(tray.tray_type or "").strip(),
+            colour=normalise_colour(tray.tray_color),
+            rgba=tray_rgba(tray.tray_color),
+            slicer_filament=(tray.tray_info_idx or "").strip() or None,
+            loaded=LoadedAt(
+                printer_id=printer_id,
+                printer_name=printer_name,
+                ams_id=ams_id,
+                tray_id=tray.id,
+            ),
+            extruder=extruder,
+            side=side_of(extruder),
+            tray_only=True,
+            label=_native_label(ams_id, tray.id, status),
+            colour_word=colour_word(tray.tray_color),
+            remain_percent=tray.remain if tray.remain >= 0 else None,
         )
+        options.append(option if spool is None else option.model_copy(update=_from_spool(spool)))
     return options
 
 
-def shelf_options(shelf: Sequence[ShelfSpool]) -> list[SpoolOption]:
-    """The overlay's shelf (`Overlay.shelf`) as picker rows, numbered from 1 in this
-    answer only: for an untagged tray's question to name, never a print choice. The link
-    a person makes names the row's ``physical_spool_id``, else one of its ``records``
+def _from_spool(spool: Spool) -> dict[str, Any]:
+    """What a picker row says of SB spool ``spool``: its effective values (its own over
+    its type's) and the names behind them (`Spool.names`), with the ledger's grams."""
+    effective = spool.effective
+    return {
+        "sb_spool_id": spool.id,
+        "sb_number": spool.number,
+        "brand": spool.names.brand,
+        "color_name": effective.colour_name,
+        "remaining_g": spool.grams_left,
+        "label_weight_g": effective.label_weight_g,
+        "rgba": effective.rgba,
+        "needs_type": spool.type_id is None,
+    }
+
+
+def shelf_options(shelf: Sequence[Spool]) -> list[SpoolOption]:
+    """The SB spools no tray holds (`TrayView.shelf`) as picker rows, each under its SB
+    number (``spool_id`` = ``sb_number``): for an untagged tray's question to name, never
+    a print choice. The link a person makes names the row's ``sb_spool_id``
     (``PUT /printers/{id}/trays/{ams}/{tray}/spool``)."""
     return [
         SpoolOption(
-            spool_id=index,
-            material=_first(spool.records, "material") or "",
-            colour=normalise_colour(_first(spool.records, "colour")),
-            brand=_first(spool.records, "brand"),
-            color_name=_first(spool.records, "name"),
-            remaining_g=_first(spool.records, "remaining_g"),
-            label_weight_g=_first(spool.records, "label_weight_g"),
-            physical_spool_id=spool.physical_spool_id,
-            records=spool.records,
-        )
-        for index, spool in enumerate(shelf, start=1)
+            spool_id=spool.number,
+            material=spool.names.material or "",
+            colour=normalise_colour(spool.effective.rgba),
+        ).model_copy(update=_from_spool(spool))
+        for spool in shelf
     ]
 
 
 def tray_questions(
-    status: PrinterStatus, overlay: Overlay | None
+    status: PrinterStatus, held: TrayView | None
 ) -> tuple[list[UnknownTray], list[SpoolOption]]:
-    """A native run's questions (#4504): each filled untagged tray the overlay finds no
-    spool for, with the shelf's records it may hold (:func:`close_spools`), and the shelf
-    rows those questions name. A tray with no close record is not asked about: it is a
-    choice of its own already, and there is nothing to link it to."""
-    if overlay is None:
+    """A native run's questions (#4504): each filled, untagged tray that holds no SB spool
+    (``held``, #6262), with the shelf's spools of its material family whose colour
+    `colours_match` the tray's, alpha included (most filament first, empty last), and the
+    shelf rows those questions name. A tray with no such spool is not asked about: it is
+    a choice of its own already, and there is nothing to link it to."""
+    if held is None:
         return [], []
-    shelf = shelf_options(overlay.shelf)
-    held = {
-        (tray.ams_id, tray.tray_id)
-        for tray in overlay.trays
-        if tray.physical_spool_id is not None or tray.records
-    }
+    shelf = shelf_options(held.shelf)
+    holding = {(tray.ams_id, tray.tray_id) for tray in held.trays if tray.spool is not None}
     questions: list[UnknownTray] = []
     offered: set[int] = set()
     for seen in seen_trays(status):
-        if seen.tray_uuid or seen.tag_uid or (seen.ams_id, seen.tray_id) in held:
+        if seen.tray_uuid or seen.tag_uid or (seen.ams_id, seen.tray_id) in holding:
             continue
         # A tray reporting no material says nothing to match on: an empty material
-        # would match a shelf record with none (#4511).
+        # would match a shelf spool with none (#4511).
         if not (material := seen.material or ""):
             continue
-        candidates = close_spools(shelf, material, seen.colour)
+        candidates = sorted(
+            (
+                spool
+                for spool in shelf
+                if family(spool.material) == family(material)
+                and colours_match(seen.rgba or seen.colour, spool.colour, spool_rgba=spool.rgba)
+            ),
+            key=lambda spool: (not spool.remaining_g, -(spool.remaining_g or 0), spool.spool_id),
+        )
         if not candidates:
             continue
         offered.update(spool.spool_id for spool in candidates)
@@ -432,10 +439,3 @@ def tray_questions(
             )
         )
     return questions, [spool for spool in shelf if spool.spool_id in offered]
-
-
-def _first(records: Mapping[str, SpoolSnapshot], field: str) -> Any:
-    return next(
-        (value for record in records.values() if (value := getattr(record, field)) is not None),
-        None,
-    )

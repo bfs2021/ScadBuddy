@@ -306,8 +306,6 @@ export type NewBatchFile = Schemas['NewBatchFile']
 /** #2951 — Queue all stopped to answer in time: go on from `next_position`. */
 export type BatchQueueProgress = Schemas['BatchQueueProgress']
 export type TrayAssigned = Schemas['TrayAssigned']
-/** #3818 — a provider's record of a spool, as the overlay keeps it (Task 6c). */
-export type SpoolSnapshot = Schemas['SpoolSnapshot']
 /** #3818, #6262 — the native manual link's body: the SB spool (`spool_id`). */
 export type TraySpoolLink = Schemas['TraySpoolLink']
 /** #6261 — a ScadBuddy spool (`GET /filament/spools/{id}`). */

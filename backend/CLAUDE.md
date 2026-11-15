@@ -413,8 +413,11 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   with `path` `bambuddy` of a quote sliced over the LAN slices again (orders spec §5.4). A
   native run passes `client=None` (`bambuddy/client.py` `maybe_client`), reads printer
   state from the LAN report (`printers/reports.py`), and its filaments are the loaded
-  trays plus the physical-spool overlay of cached provider records (`spools/`, refreshed
-  off the path): Bambuddy's inventory and ScadBuddy's own (`spools/native.py` over the
+  trays, each with the SB spool it holds (#6262: `FilamentInventory.trays`, found by its
+  tag or a person's tray link; its presets by `sb_number`, `filament/presets.py`). The
+  print worker's plan has no SB view until #6262 Task 6, so its LAN start books no use
+  meanwhile. The spool providers' overlay (`spools/`, refreshed off the path) still
+  caches Bambuddy's inventory and ScadBuddy's own (`spools/native.py` over the
   `filament_*` tables since #6261, provider `native` in `spools/spool_providers.py`,
   routes `api/native_spools.py`, #4643; each write re-caches it at once; a LAN start
   books its slots' grams as `print_started` estimates in `filament_spool_events`, and the

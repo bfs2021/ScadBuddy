@@ -9,7 +9,7 @@ import { choicesView, queuedResult } from '../mocks/choices'
 import * as fixtures from '../mocks/fixtures'
 import { setSilkPreview, silkPreview } from '../mocks/features/filamentProfiles'
 import { printersState } from '../mocks/features/printers'
-import { HOT_PRINTER, NO_BAMBUDDY, UNLINKED_RECORD, hotFilaments, setHotPath } from '../mocks/features/hotPath'
+import { HOT_PRINTER, NO_BAMBUDDY, SHELF_NUMBER, hotFilaments, setHotPath } from '../mocks/features/hotPath'
 import { MULTI_PLATE_FILE } from '../mocks/features/library'
 import { startedFresh } from '../mocks/features/printPreview'
 import { H2C_FILE, H2C_FILENAME } from '../mocks/h2c'
@@ -5387,14 +5387,14 @@ describe('PrintPicker · the hot path without Bambuddy', () => {
     }
   })
 
-  it("names a tray question's records by the answer's provider labels (#4516)", async () => {
+  it("names a tray question's candidate by its SB spool number (#6262)", async () => {
     setHotPath(true)
     server.use(
       http.get('/api/v1/print/outputs/:id/choices', () =>
         HttpResponse.json({
           ...choicesView,
           printer_id: HOT_PRINTER.bambuddy_printer_id,
-          filaments: { ...hotFilaments(), provider_labels: { bambuddy: 'Bambuddy (garage)' } },
+          filaments: hotFilaments(),
           model_choices: { printer_id: null, filament_plan: [] },
           lan_printers: [HOT_PRINTER.id],
         }),
@@ -5403,14 +5403,14 @@ describe('PrintPicker · the hot path without Bambuddy', () => {
     renderPicker()
     await loaded()
     const question = await screen.findByTestId('tray-question-0-1')
-    expect(within(question).getByText(/Bambuddy \(garage\)'s record/)).toBeInTheDocument()
+    expect(within(question).getByText(new RegExp(`spool #${SHELF_NUMBER}`))).toBeInTheDocument()
   })
 
   it('offers a shelf row one tray claimed to no other tray, until the re-read lands', async () => {
     setHotPath(true)
     const answer = hotFilaments()
     const untagged = answer.trays![0]!
-    // Two untagged trays, both asked about the one Bambuddy record on the shelf.
+    // Two untagged trays, both asked about the one SB spool on the shelf.
     const twoTrays = {
       ...answer,
       trays: [untagged, { ...untagged, tray_id: 2, label: 'AMS-A slot 3', spool_id: -3, fingerprint: 'PLA|FF1493' }],
@@ -5434,7 +5434,7 @@ describe('PrintPicker · the hot path without Bambuddy', () => {
     await loaded()
     const first = await screen.findByTestId('tray-question-0-1')
     expect(screen.getByTestId('tray-question-0-2')).toBeInTheDocument()
-    expect(twoTrays.shelf?.map((spool) => spool.spool_id)).toEqual([UNLINKED_RECORD])
+    expect(twoTrays.shelf?.map((spool) => spool.spool_id)).toEqual([SHELF_NUMBER])
     const asked = choices.urls.length
     await user.click(within(first).getByRole('button', { name: 'Yes, that one' }))
     // The link is made and the re-read is out: neither tray is asked about the record now.

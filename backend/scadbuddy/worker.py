@@ -1345,9 +1345,9 @@ def build_print_deps(settings: Settings, crud: CrudClient | None = None) -> Prin
 
         return await lan_first(lan, subject.run_subject, bambuddy)
 
-    # A native run's plan lays the providers' records over its trays (#4551): the same
-    # providers the API discovers, over this worker's settings. Its follow takes what a
-    # native print used off ScadBuddy's own spools (#4643).
+    # The providers the API discovers, over this worker's settings: a native print's start
+    # re-caches their records after its uses (#4643, #6261). The plan no longer reads them
+    # (#6262 Task 5); it reads the SB spools through CRUD routes from #6262 Task 6.
     # The spools, ScadBuddy's own among them, through the API (#5298 Task 31): no pool.
     spools = Spools(
         store=RemoteSpoolStore(crud),
@@ -1413,7 +1413,6 @@ def build_print_deps(settings: Settings, crud: CrudClient | None = None) -> Prin
             native=native,
             printers=printers,
             reports=reports,
-            spools=spools,
         )
     )
     # A LAN print's sliced blob, through the API's internal route (plan 2026-10-16 Task 9)

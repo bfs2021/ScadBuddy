@@ -717,6 +717,30 @@ class Spool(_Row):
     low_stock: bool = False
 
 
+# -- the trays (`filament/inventory.py`) ----------------------------------------------
+
+#: How a tray's spool was found: its tag's binding, or a person's link.
+TrayFoundBy = Literal["tag", "link"]
+
+
+class TrayHolder(BaseModel):
+    """One reported tray and the SB spool in it, with how it was found."""
+
+    ams_id: int
+    tray_id: int
+    spool: Spool | None
+    found_by: TrayFoundBy | None
+
+
+class TrayView(BaseModel):
+    """A printer's reported trays, and the unarchived spools no printer holds. Here, not
+    in `filament/inventory.py`, so the print dialog's modules (`bambuddy/trays.py`) read
+    it without importing the inventory, which imports them (#6262 Task 5)."""
+
+    trays: list[TrayHolder]
+    shelf: list[Spool]
+
+
 # -- tags, bindings, the ledger -------------------------------------------------------
 
 TagKind = Literal["bambu_mifare", "ntag_openspool", "ntag_opentag", "other"]

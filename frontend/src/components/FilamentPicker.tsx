@@ -7,7 +7,6 @@ import {
   filterSpools,
   fromTrays,
   loadedLabel,
-  providerLabel,
   slotNeed,
   checkPlan,
   spoolLabel,
@@ -196,24 +195,20 @@ export function WarningList({ warnings, testId }: { warnings: FilamentWarning[];
 }
 
 /**
- * #3818 — what each spool provider's record says of the spool in a tray, labelled by
- * provider: "Bambuddy: Bambu Lab Blue · 812 g". The overlay's own order (priority) is kept.
+ * #6262 — the ScadBuddy spool a tray holds, by its number, with its brand, colour name
+ * and grams: "Spool #12: Bambu Lab Blue · 812 g". A spool with no type yet says so.
  */
-function TrayRecords({ spool, labels }: { spool: SpoolOption; labels?: Readonly<Record<string, string>> }) {
-  const records = Object.entries(spool.records ?? {})
-  if (records.length === 0) return null
+function TraySpool({ spool }: { spool: SpoolOption }) {
+  if (spool.sb_number === null || spool.sb_number === undefined) return null
+  const name = [spool.brand, spool.color_name].filter(Boolean).join(' ') || spool.material
   return (
-    <ul className="basis-full space-y-0.5 pl-6 text-[11px] text-muted-foreground" data-testid={`records-${spool.spool_id}`}>
-      {records.map(([provider, record]) => (
-        <li key={provider}>
-          <span className="text-foreground">{providerLabel(provider, labels)}:</span>{' '}
-          {[record.brand, record.name].filter(Boolean).join(' ') || record.material || 'a spool'}
-          {record.remaining_g !== null && record.remaining_g !== undefined && (
-            <span className="sb-num"> · {grams(record.remaining_g)}</span>
-          )}
-        </li>
-      ))}
-    </ul>
+    <p className="basis-full pl-6 text-[11px] text-muted-foreground" data-testid={`sb-spool-${spool.spool_id}`}>
+      <span className="text-foreground">Spool #{spool.sb_number}:</span> {name}
+      {spool.remaining_g !== null && spool.remaining_g !== undefined && (
+        <span className="sb-num"> · {grams(spool.remaining_g)}</span>
+      )}
+      {spool.needs_type && <span> · no type yet</span>}
+    </p>
   )
 }
 
@@ -256,7 +251,7 @@ export function FilamentPicker({
 
   /**
    * #3818 — a native run's choices are the printer's loaded trays (plan 2026-10-18 D1):
-   * every one a choice of its own, with the providers' records over it. A shelf record
+   * every one a choice of its own, naming the SB spool it holds (#6262). A shelf spool
    * (loaded nowhere) is only for linking, in the tray question, never a print choice.
    */
   const trays = fromTrays(options)
@@ -267,7 +262,6 @@ export function FilamentPicker({
         offeredTrays?.has(spool.spool_id) ||
         plan.some((choice) => choice.spool_id === spool.spool_id),
   )
-  const notes = trays ? (options.overlay_notes ?? []) : []
   const slots = options.slots ?? []
   const suggested = options.suggested ?? []
   const choices = facets(spools)
@@ -377,14 +371,6 @@ export function FilamentPicker({
             </Label>
           </div>
         </div>
-      )}
-
-      {notes.length > 0 && (
-        <ul className="space-y-0.5 text-xs text-muted-foreground" data-testid="overlay-notes">
-          {notes.map((note) => (
-            <li key={note}>{note}</li>
-          ))}
-        </ul>
       )}
 
       <div className="space-y-3">
@@ -503,7 +489,7 @@ export function FilamentPicker({
                           {showSides && spool.side && <SideBadge side={spool.side} testId={`side-${spool.spool_id}`} />}
                           <span className="sb-num shrink-0 text-[11px] text-muted-foreground">
                             {trays
-                              ? // The AMS's own estimate; the grams are each record's, below.
+                              ? // The AMS's own estimate; the grams are the SB spool's, below.
                                 spool.remain_percent === null || spool.remain_percent === undefined
                                 ? '—'
                                 : `${spool.remain_percent}%`
@@ -512,7 +498,7 @@ export function FilamentPicker({
                                 : grams(spool.remaining_g)}
                           </span>
                         </span>
-                        {trays && <TrayRecords spool={spool} labels={options.provider_labels} />}
+                        {trays && <TraySpool spool={spool} />}
                       </label>
                     )
                   })}

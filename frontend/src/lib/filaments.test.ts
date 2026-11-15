@@ -7,9 +7,9 @@ import {
   facets,
   filterSpools,
   fromTrays,
-  providerLabel,
   trayChoiceLabel,
   loadedLabel,
+  sameOpacity,
   seedPlan,
   slicedPlateSlots,
   slotNeed,
@@ -357,6 +357,33 @@ describe('seedPlan', () => {
   it('ignores a remembered slot this plate does not have', () => {
     expect(seedPlan(options, [{ slot_id: 3, spool_id: 3 }])).toEqual(options.suggested)
   })
+
+  it('falls back to the auto-match for a remembered translucent spool on an opaque slot (#6262)', () => {
+    const clear: FilamentOptions = {
+      ...options,
+      spools: [spool({ spool_id: 1 }), spool({ spool_id: 2 }), spool({ spool_id: 3, rgba: '#FF149380' })],
+    }
+    expect(seedPlan(clear, [{ slot_id: 2, spool_id: 3 }])).toEqual(options.suggested)
+  })
+})
+
+/** The backend's vectors (`tests/filament/test_colour.py` `SAME_OPACITY`), kept alike. */
+const SAME_OPACITY: [string | null, string | null, boolean][] = [
+  ['#FFFFFF', '#FFFFFF80', false],
+  ['#FFFFFF', null, true],
+  [null, null, true],
+  ['#FFFFFFFF', '#FFFFFF', true],
+  ['#FFFFFF80', '#00000010', true],
+  [null, '#FFFFFF80', false],
+  ['#FFFFFF80', null, false],
+  ['#ffffff80', '#FFFFFFFE', true],
+]
+
+describe('sameOpacity', () => {
+  it.each(SAME_OPACITY)('%s and %s: %s', (left, right, same) => {
+    expect(sameOpacity(left, right)).toBe(same)
+    expect(sameOpacity(right, left)).toBe(same)
+  })
 })
 
 describe('carriedPlan', () => {
@@ -417,7 +444,7 @@ describe('slicedPlateSlots (#2702 review)', () => {
   })
 })
 
-describe('trayChoiceLabel and providerLabel', () => {
+describe('trayChoiceLabel', () => {
   it('says what is in a tray and where', () => {
     expect(
       trayChoiceLabel({ spool_id: -1, material: 'PLA', colour: '#0047BB', colour_word: 'blue', label: 'AMS-A slot 1' }),
@@ -425,16 +452,5 @@ describe('trayChoiceLabel and providerLabel', () => {
     expect(
       trayChoiceLabel({ spool_id: -1, material: 'PETG', colour: null, loaded: { printer_id: 0, ams_id: 1, tray_id: 2 } }),
     ).toMatch(/^PETG in AMS-B/)
-  })
-
-  it('names the providers', () => {
-    expect(providerLabel('bambuddy')).toBe('Bambuddy')
-    expect(providerLabel('spoolman')).toBe('Spoolman')
-    expect(providerLabel('open_spool')).toBe('Open Spool')
-  })
-
-  it("prefers the provider's own label from the answer (#4516)", () => {
-    expect(providerLabel('open_spool', { open_spool: 'OpenSpool' })).toBe('OpenSpool')
-    expect(providerLabel('open_spool', { bambuddy: 'Bambuddy' })).toBe('Open Spool')
   })
 })

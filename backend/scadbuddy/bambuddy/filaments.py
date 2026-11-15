@@ -41,8 +41,7 @@ import asyncio
 import logging
 import math
 import re
-from collections.abc import Callable, Mapping, Sequence
-from datetime import UTC, datetime
+from collections.abc import Callable, Sequence
 from typing import Literal, Protocol
 from uuid import UUID
 
@@ -62,8 +61,9 @@ from scadbuddy.bambuddy.models import (
     SpoolAssignment,
 )
 from scadbuddy.core.problems import ApiError
+from scadbuddy.filament.colour import same_opacity
+from scadbuddy.filament.models import TrayView
 from scadbuddy.print_library.reads import LibraryReads, reads_for, served_reads
-from scadbuddy.spools.models import Overlay, SpoolSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -178,10 +178,18 @@ class SpoolOption(BaseModel):
     #: What the AMS says is left, in percent: an RFID spool's ``remain``; ``None`` for an
     #: untagged one, which reports -1.
     remain_percent: int | None = None
-    #: The physical spool in the tray, and each spool provider's record of it, from the
-    #: overlay (`spools.store.SpoolStore.overlay`, plan 2026-10-18 D1); a native run only.
-    physical_spool_id: UUID | None = None
-    records: dict[str, SpoolSnapshot] = Field(default_factory=dict)
+    #: ScadBuddy's own spool (#6262, `filament/inventory.py`): on a native run's tray
+    #: choice the SB spool the tray holds, on a shelf row the spool itself; ``None`` when
+    #: none is known. ``sb_number`` is its ``#N``, what its presets are read by (F1).
+    sb_spool_id: UUID | None = None
+    sb_number: int | None = None
+    #: The colour with its alpha, ``#RRGGBBAA``: the held SB spool's own, else the tray's
+    #: reported ``tray_color``. ``colour`` stays ``#RRGGBB``, which the render splits by;
+    #: this is what tells a translucent spool from an opaque one (`same_opacity`).
+    rgba: str | None = None
+    #: The SB spool has no type yet (#6261): its values are its own until it gets one.
+    #: ``None`` where no SB spool is known; optional, as ``tray_only`` is.
+    needs_type: bool | None = None
 
 
 class UnknownTray(BaseModel):
@@ -275,23 +283,15 @@ class FilamentOptions(BaseModel):
     #: native run (#4504) every tray is in ``spools`` already, and the candidates are
     #: rows of ``shelf``.
     trays: list[UnknownTray] = Field(default_factory=list)
-    #: A native run's spools no tray holds (#4504, `trays.shelf_options`): what its
-    #: ``trays`` questions' ``candidates`` name, each with its providers' ``records``.
-    #: Never a print choice, so never in ``spools``; empty on the Bambuddy path. Their
-    #: ``spool_id`` is positional, numbered from 1 in this one answer only: a client
-    #: links a row by its ``physical_spool_id``, else one of its ``records``
-    #: (``PUT /printers/{id}/trays/{ams}/{tray}/spool``), and never stores the id.
+    #: A native run's SB spools no tray holds (#4504, #6262, `trays.shelf_options`): what
+    #: its ``trays`` questions' ``candidates`` name. Never a print choice, so never in
+    #: ``spools``; empty on the Bambuddy path. Each row's ``spool_id`` is the SB spool's
+    #: number (``sb_number``); a client links a row by its ``sb_spool_id``
+    #: (``PUT /printers/{id}/trays/{ams}/{tray}/spool``).
     shelf: list[SpoolOption] = Field(default_factory=list)
     #: Where ``spools`` came from: Bambuddy's inventory, or (a native run, #3818) the
-    #: printer's loaded trays with the spool providers' records over them.
+    #: printer's loaded trays with the SB spool each holds (#6262).
     source: Literal["inventory", "trays"] = "inventory"
-    #: One sentence per spool provider whose records are stale or missing, on a native
-    #: run: those records are left out and the trays shown alone.
-    overlay_notes: list[str] = Field(default_factory=list)
-    #: A native run's spool providers by key, as a person reads them
-    #: (`SpoolProvider.label`): what names a ``records`` entry (#4516). Empty on the
-    #: Bambuddy path.
-    provider_labels: dict[str, str] = Field(default_factory=dict)
 
 
 class QueueFilaments(BaseModel):
@@ -407,10 +407,17 @@ def ciede2000(first: Lab, second: Lab) -> float:
     return math.sqrt(lightness**2 + chroma**2 + hue**2 + r_t * chroma * hue)
 
 
-def colours_match(slot_colour: str | None, spool_colour: str | None) -> bool:
+def colours_match(
+    slot_colour: str | None, spool_colour: str | None, *, spool_rgba: str | None = None
+) -> bool:
     """Whether a spool's colour is close enough to a slot's for a remembered choice of
     it to be kept: within ``COLOUR_MATCH_DISTANCE``, the cut-off the auto-match uses,
-    or with no colour on either side to tell them apart (#933)."""
+    or with no colour on either side to tell them apart (#933). Never when one is
+    translucent and the other opaque (`same_opacity` on the slot's colour and the
+    spool's ``spool_rgba``, plan #6262 Decision 12): a slot's colour is opaque unless it
+    carries an alpha byte."""
+    if not same_opacity(slot_colour, spool_rgba):
+        return False
     distance = colour_distance(slot_colour, spool_colour)
     return distance is None or distance <= COLOUR_MATCH_DISTANCE
 
@@ -515,32 +522,27 @@ def _options(
     printer_id: int | None,
     printer_name: str | None,
     source: Literal["inventory", "trays"] = "inventory",
-    notes: list[str] | None = None,
     trays: list[UnknownTray] | None = None,
     shelf: list[SpoolOption] | None = None,
-    labels: Mapping[str, str] | None = None,
 ) -> FilamentOptions:
     """The dialog's answer over ``options``, already in display order: each slot's
     colour matches, the opening selection and its warnings. ``trays`` and ``shelf`` are
-    a native run's questions and the rows they name (`trays.tray_questions`), and
-    ``labels`` its providers' names."""
+    a native run's questions and the rows they name (`trays.tray_questions`)."""
     suggested = suggest(requirements, options, printer_id=printer_id)
     built = FilamentOptions(
         library_file_id=library_file_id,
         printer_id=printer_id,
         printer_name=printer_name,
         source=source,
-        overlay_notes=notes or [],
         trays=trays or [],
         shelf=shelf or [],
-        provider_labels=dict(labels or {}),
         slots=[
             slot.model_copy(
                 update={
                     "colour_matches": [
                         option.spool_id
                         for option in options
-                        if colours_match(slot.colour, option.colour)
+                        if colours_match(slot.colour, option.colour, spool_rgba=option.rgba)
                     ]
                 }
             )
@@ -686,6 +688,10 @@ def _match_score(slot: SlotNeed, option: SpoolOption, *, printer_id: int | None)
     looks deliberate.
     """
     if slot.material and option.material.upper() != slot.material.upper():
+        return None
+    if not same_opacity(slot.colour, option.rgba):
+        # A translucent spool for an opaque slot, or the reverse, is never a colour
+        # match (spec §5.1, plan #6262 Decision 12), however close the RGB.
         return None
     distance = colour_distance(slot.colour, option.colour)
     if distance is None and normalise_colour(slot.colour) is not None:
@@ -1002,9 +1008,7 @@ async def gather_plate_options(
     known: Callable[[int | None], FilamentRequirements] | None = None,
     native: LibraryReads | None = None,
     trays_from: PrinterStatus | None = None,
-    overlay: Overlay | None = None,
-    provider_labels: Mapping[str, str] | None = None,
-    now: datetime | None = None,
+    held: TrayView | None = None,
 ) -> list[FilamentOptions]:
     """:func:`gather_options` for several plates of one file, in ``plate_ids`` order.
 
@@ -1020,9 +1024,9 @@ async def gather_plate_options(
 
     ``trays_from`` (a native run, #3818 tier A, plan 2026-10-18 D1) replaces the inventory,
     the printer and its inventory-remain with the printer's loaded trays from its LAN
-    report, ``overlay`` (`SpoolStore.overlay`, a Postgres read) laid over them; no client
-    is needed then, and none is read. ``provider_labels`` name the providers in the
-    overlay's notes, and ``now`` is when the overlay was read."""
+    report, with ``held`` (#6262, `filament/inventory.py` `FilamentInventory.trays`, a
+    Postgres read) naming the SB spool in each and the shelf; no client is needed then,
+    and none is read. Without ``held`` the trays are shown alone."""
     if trays_from is not None:
         return await _tray_plate_options(
             client,
@@ -1034,9 +1038,7 @@ async def gather_plate_options(
             known=known,
             native=native,
             status=trays_from,
-            overlay=overlay,
-            labels=provider_labels or {},
-            now=now,
+            held=held,
         )
     if client is None:
         raise TypeError("the inventory is Bambuddy's: reading it needs a client")
@@ -1089,9 +1091,7 @@ async def _tray_plate_options(
     known: Callable[[int | None], FilamentRequirements] | None,
     native: LibraryReads | None,
     status: PrinterStatus,
-    overlay: Overlay | None,
-    labels: Mapping[str, str],
-    now: datetime | None,
+    held: TrayView | None,
 ) -> list[FilamentOptions]:
     # Here, not at the top: `trays` builds its choices from this module's models.
     from scadbuddy.bambuddy.trays import loaded_trays, tray_questions
@@ -1109,11 +1109,9 @@ async def _tray_plate_options(
     # The report's own id: the Bambuddy printer's when the row links one, else 0
     # (`printers.status.status_from_report`); every tray is loaded "here".
     here = printer_id if printer_id is not None else status.id
-    options = loaded_trays(status, here, status.name, overlay)
-    notes = overlay_notes(overlay, labels, now=now) if overlay is not None else []
-    # Shelf ids are positional: they agree across the plates only because every plate
-    # shares this one overlay and so this one numbering.
-    questions, shelf = tray_questions(status, overlay)
+    options = loaded_trays(status, here, status.name, held)
+    # Shelf ids are SB spool numbers, the same on every plate of one answer.
+    questions, shelf = tray_questions(status, held)
     return [
         _options(
             library_file_id=library_file_id,
@@ -1122,31 +1120,11 @@ async def _tray_plate_options(
             printer_id=here,
             printer_name=status.name,
             source="trays",
-            notes=notes,
             trays=[question.model_copy(deep=True) for question in questions],
             shelf=[spool.model_copy(deep=True) for spool in shelf],
-            labels=labels,
         )
         for requirements in per_plate
     ]
-
-
-def overlay_notes(
-    overlay: Overlay, labels: Mapping[str, str], *, now: datetime | None = None
-) -> list[str]:
-    """One sentence per provider the overlay left out: when it last answered, or that it
-    never has. A time today is ``14:02 UTC``; an older one carries its date."""
-    notes: list[str] = []
-    for provider, refreshed in overlay.stale.items():
-        label = labels.get(provider, provider)
-        if refreshed is None:
-            notes.append(f"No spool records from {label} yet; showing the trays only.")
-            continue
-        when = refreshed.astimezone(UTC)
-        same_day = now is not None and now.astimezone(UTC).date() == when.date()
-        stamp = when.strftime("%H:%M UTC" if same_day else "%Y-%m-%d %H:%M UTC")
-        notes.append(f"{label}'s spool records are from {stamp}; showing the trays only.")
-    return notes
 
 
 async def _requirements(

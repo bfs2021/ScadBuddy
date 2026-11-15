@@ -141,20 +141,16 @@ class SpoolUse(BaseModel):
 
 
 def spool_uses(spools: Mapping[int, SpoolOption], grams: Mapping[int, float]) -> list[SpoolUse]:
-    """Each slot's use of the native spool in its tray, by slot: the overlay's native
-    record of the slot's chosen tray (`SpoolOption.records`, found there by RFID or a
-    person's tray link), and the grams the sliced plate gives the slot
-    (`slicing.slice_info.plate_grams`). A slot with no native record, or that prints
-    nothing, uses none."""
+    """Each slot's use of the SB spool in its tray, by slot: the slot's chosen tray's
+    ``sb_spool_id`` (#6262, `trays.loaded_trays`: found by its tag or a person's tray
+    link), and the grams the sliced plate gives the slot
+    (`slicing.slice_info.plate_grams`). A slot whose tray holds no SB spool, or that
+    prints nothing, uses none."""
     uses: list[SpoolUse] = []
     for slot_id in sorted(spools):
-        record = spools[slot_id].records.get("native")
+        spool_id = spools[slot_id].sb_spool_id
         used = grams.get(slot_id, 0.0)
-        if record is None or used <= 0:
-            continue
-        try:
-            spool_id = UUID(record.record_id)
-        except ValueError:
+        if spool_id is None or used <= 0:
             continue
         uses.append(SpoolUse(slot_id=slot_id, spool_id=spool_id, grams=used))
     return uses

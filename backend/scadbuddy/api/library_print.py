@@ -123,6 +123,7 @@ from scadbuddy.bambuddy.uploads import BambuddyUploadStore
 from scadbuddy.core.paths import DataPaths
 from scadbuddy.core.problems import ApiError
 from scadbuddy.core.tracing import span
+from scadbuddy.filament.component import FilamentDep
 from scadbuddy.library.library_file_moves import (
     LibraryCopyResult,
     LibraryMoveResult,
@@ -169,7 +170,6 @@ from scadbuddy.slicing.preview import (
     read_native_preview,
     read_native_toolpath,
 )
-from scadbuddy.spools.component import SpoolsDep
 from scadbuddy.store.download_cache import DownloadCache, Fill, TooLargeError, is_sha256
 from scadbuddy.workflows.component import FollowsDep
 from scadbuddy.workflows.print_models import SourceSpec
@@ -1204,7 +1204,7 @@ async def get_library_choices(
     downloads: DownloadsDep,
     library: PrintLibraryDep,
     printers: PrintersDep,
-    spools: SpoolsDep,
+    filament: FilamentDep,
     slicing: SlicingDep,
     printer_id: Annotated[int | None, Query()] = None,
     printer: PrinterQuery = None,
@@ -1232,7 +1232,7 @@ async def get_library_choices(
             remembered=remembered,
             profiles=slicing.profiles,
             registry=printers,
-            spools=spools,
+            inventory=filament.inventory,
             rack=rack,
         )
         return await with_lan_printers(native_view, settings, printers)
@@ -1294,7 +1294,7 @@ async def get_library_filaments(
     downloads: DownloadsDep,
     library: PrintLibraryDep,
     printers: PrintersDep,
-    spools: SpoolsDep,
+    filament: FilamentDep,
     printer_id: Annotated[int | None, Query()] = None,
     printer: PrinterQuery = None,
     plate_id: Annotated[int, Query(ge=1)] = 1,
@@ -1304,7 +1304,7 @@ async def get_library_filaments(
     ] = None,
 ) -> FilamentOptions:
     """As ``/print/outputs/{id}/filaments``: on a native run (``printer``, D2) the
-    printer's trays with the providers' records over them (D1), and no Bambuddy call."""
+    printer's trays with the SB spool in each (D1, #6262), and no Bambuddy call."""
     settings = store.load()
     native = await library.serving_native()
     route = await opening_route(settings, printers, printer=printer, printer_id=printer_id)
@@ -1315,7 +1315,7 @@ async def get_library_filaments(
         return await native_filaments(
             source,
             route,
-            spools,
+            filament.inventory,
             plate_id=plate_id,
             all_plates=all_plates,
             plate_ids=plate_ids,
@@ -1647,6 +1647,7 @@ async def post_library_check(
     library: PrintLibraryDep,
     printers: PrintersDep,
     slicing: SlicingDep,
+    filament: FilamentDep,
     process_values: Annotated[bool, Query(description=PROCESS_VALUES_QUERY)] = False,
 ) -> PrintCheck:
     """As ``/print/outputs/{id}/check``, on the file as it stands in Bambuddy (#755, #760);
@@ -1696,4 +1697,6 @@ async def post_library_check(
             ),
             profiles=slicing.profiles,
             process_values=process_values,
+            sb_trays=filament.inventory,
+            sb_presets=filament.presets,
         )

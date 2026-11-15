@@ -59,19 +59,15 @@ export function howFull(spool: SpoolOption): string | null {
 }
 
 /**
- * #3818, #6262 Task 4 — what the native link names for a candidate: its SB spool
- * (`{spool_id}`). Until the native options carry `sb_spool_id` (#6262 Task 5), that is the
- * candidate's physical spool, whose id the SB spool migrated from it keeps
- * (`20261114T1302Z_filament_from_native.sql`). `null` for a candidate with none.
+ * #3818, #6262 — what the native link names for a candidate: its SB spool
+ * (`{spool_id}`, the shelf row's `sb_spool_id`). `null` for a candidate with none.
  */
 export function linkOf(spool: SpoolOption): TraySpoolLink | null {
-  return spool.physical_spool_id ? { spool_id: spool.physical_spool_id } : null
+  return spool.sb_spool_id ? { spool_id: spool.sb_spool_id } : null
 }
 
 /**
- * #3818 — a link's identity, the same across reads: the SB spool. Never the shelf row's
- * `spool_id`, which is only its place in one answer and may name another spool after a
- * re-read.
+ * #3818 — a link's identity, the same across reads: the SB spool's id.
  */
 export function linkKey(link: TraySpoolLink | null): string | null {
   return link ? `spool:${link.spool_id}` : null

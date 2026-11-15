@@ -6,8 +6,8 @@ answer, and only the routes that are Bambuddy's by nature say Settings has none.
 The app runs on the hot path's backends (D2: the S3 store, the native library and the
 native slicer, the fake slicer in the Rust worker's place); its one printer is a
 registry row linked over the LAN to the fake printer (`tests/support/fake_lan.py`),
-whose watch keeps its report fresh, and set to print natively. The spool providers'
-overlay is written once before the window opens, as its refresh would (outside AC1).
+whose watch keeps its report fresh, and set to print natively. The SB spool in its
+tagged tray is written once before the window opens (outside AC1, #6262).
 Inside `forbid_bambuddy`, the dialog's reads, the background slice, the run and the
 follow each answer; a call to Bambuddy fails the test, naming it."""
 
@@ -26,13 +26,13 @@ import trimesh
 from fastapi.testclient import TestClient
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from scadbuddy.bambuddy import print_run
 from scadbuddy.bambuddy.catalogue import stop_refreshes
-from scadbuddy.bambuddy.filaments import gather_plate_options
 from scadbuddy.bambuddy.print_run import run_route
 from scadbuddy.bambuddy.trays import tray_spool_id
 from scadbuddy.core.paths import DataPaths
 from scadbuddy.core.settings import Settings
+from scadbuddy.filament.component import FILAMENT, Filament
+from scadbuddy.filament.models import Material, Spool, SpoolCreate, SpoolEventAdd
 from scadbuddy.library.settings_store import S3Settings
 from scadbuddy.main import create_app
 from scadbuddy.print_library.ids import is_native_id
@@ -40,9 +40,6 @@ from scadbuddy.printers.component import PRINTERS, Printers
 from scadbuddy.printers.models import LanLink, PrinterCreate, PrinterPatch
 from scadbuddy.render.bambu3mf import PlateParts, write_plates_3mf
 from scadbuddy.render.split import ColourPart
-from scadbuddy.spools.component import SPOOLS, Spools
-from scadbuddy.spools.models import Overlay, SpoolSnapshot
-from scadbuddy.workflows import print_activities
 from tests.api.conftest import follow_operation, set_fake_env
 from tests.api.test_customers import create as create_customer
 from tests.api.test_library_native import _one_colour, _upload
@@ -156,11 +153,6 @@ def _printers(client: TestClient) -> Printers:
     return printers
 
 
-def _spools(client: TestClient) -> Spools:
-    spools: Spools = _state(client).components.get(SPOOLS)
-    return spools
-
-
 def _call(client: TestClient, fn: Any, *args: Any, **kwargs: Any) -> Any:
     assert client.portal is not None
 
@@ -197,23 +189,23 @@ def lan_row(
     return row.id
 
 
-def overlay(client: TestClient, *, at: datetime | None = None, remaining_g: float = 640.0) -> None:
-    """Bambuddy's record of the tagged spool, as the refresh writes it (outside AC1)."""
-    snapshot = SpoolSnapshot(
-        record_id="16",
-        material="PLA",
-        colour="#F5547C",
-        brand="Bambu",
-        remaining_g=remaining_g,
-        tray_uuid=TAGGED_UUID,
+def held_spool(client: TestClient, *, remaining_g: float = 640.0) -> Spool:
+    """SB spool #N in the tagged tray: pink PLA, weighed, its tag bound (#6262), as a
+    person or the Bambuddy pull leaves it (outside AC1)."""
+    filament: Filament = _state(client).components.get(FILAMENT)
+    pla = next(
+        row.id
+        for row in filament.catalog.list("materials")
+        if isinstance(row, Material) and row.name == "PLA"
     )
-    _call(
-        client,
-        _spools(client).store.replace_records,
-        "bambuddy",
-        [snapshot],
-        at or datetime.now(UTC),
+    spool = filament.spools.create(
+        SpoolCreate(material_id=pla, rgba="#F5547CFF", colour_name="Hot Pink"), actor="test"
     )
+    filament.spools.add_event(
+        spool.id, SpoolEventAdd(kind="weighed", grams=remaining_g), actor="test"
+    )
+    filament.spools.bind_tag(spool.id, tray_uuid=TAGGED_UUID, kind="bambu_mifare", actor="test")
+    return spool
 
 
 def run_body(row: str, filaments: dict[str, Any]) -> dict[str, Any]:
@@ -302,7 +294,7 @@ def test_a_native_run_makes_no_bambuddy_call(
     """A row Bambuddy does not reach prints natively too: it was refused before Task 9
     (`_not_on_bambuddy`)."""
     row = lan_row(native_app, fake_lan, bambuddy_printer_id=bambuddy_printer_id)
-    overlay(native_app)
+    spool = held_spool(native_app)
 
     with forbid_bambuddy(spans, BASE):
         output, choices, filaments, run = _dialog_and_run(native_app, model, row)
@@ -319,7 +311,9 @@ def test_a_native_run_makes_no_bambuddy_call(
     assert choices["printer_id"] == bambuddy_printer_id
     assert filaments["source"] == "trays"
     tagged = next(spool for spool in filaments["spools"] if spool["spool_id"] == TAGGED)
-    assert tagged["records"]["bambuddy"]["record_id"] == "16"
+    # The tagged tray names the SB spool it holds, read from ScadBuddy alone (#6262).
+    assert (tagged["sb_spool_id"], tagged["sb_number"]) == (str(spool.id), spool.number)
+    assert (tagged["remaining_g"], tagged["color_name"]) == (640.0, "Hot Pink")
     assert is_native_id(run["result"]["library_file_id"])
     assert run["result"]["path"] == "native"
     # The chosen trays reach the printer (AC4). No ``ams_mapping2``: the measured start
@@ -339,7 +333,7 @@ def test_a_native_run_of_two_copies_prints_both_and_asks_bambuddy_nothing(
     """#4541: refused before; the run starts the second copy once the printer reports
     the first finished, and the print settles once both have."""
     row = lan_row(native_app, fake_lan, bambuddy_printer_id=1)
-    overlay(native_app)
+    held_spool(native_app)
     with forbid_bambuddy(spans, BASE):
         output, _, _, run = _dialog_and_run(native_app, model, row, copies=2)
         assert run["status"] == "succeeded", run
@@ -376,7 +370,7 @@ def test_one_plate_of_several_slices_with_only_its_own_slots(
     slot of the file instead: nothing read the output's own slots in their process, and
     the native library's copy answers none, so every colour of the file counted as used."""
     row = lan_row(native_app, fake_lan)
-    overlay(native_app)
+    held_spool(native_app)
     output = make_output(native_app, model)
     _a_colour_a_plate(paths, output)
     body = {
@@ -409,74 +403,6 @@ def test_one_plate_of_several_slices_with_only_its_own_slots(
         run = accept_and_wait(native_app, output, body)
 
     assert run["status"] == "succeeded", run
-
-
-def test_a_native_runs_plan_lays_the_overlay_over_its_trays(
-    native_app: TestClient,
-    model: str,
-    spans: InMemorySpanExporter,
-    fake_lan: FakeLan,
-    slicer: FakeSlicer,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """#4551: the run's plan reads its trays with the spool overlay the dialog lays over
-    them, so its low-filament warnings judge the provider's grams (`filaments.check`),
-    and it still asks Bambuddy nothing. The fake model's slots weigh nothing, so what is
-    checked is the overlay each plate's trays are gathered with."""
-    planning = False
-    gathered: list[Overlay | None] = []
-    plan = print_run.plan_run
-    gather = gather_plate_options
-
-    async def plan_spy(*args: Any, **kwargs: Any) -> Any:
-        nonlocal planning
-        planning = True
-        try:
-            return await plan(*args, **kwargs)
-        finally:
-            planning = False
-
-    async def gather_spy(*args: Any, **kwargs: Any) -> Any:
-        if planning:
-            gathered.append(kwargs.get("overlay"))
-        return await gather(*args, **kwargs)
-
-    monkeypatch.setattr(print_activities, "plan_run", plan_spy)
-    monkeypatch.setattr(print_run, "gather_plate_options", gather_spy)
-    row = lan_row(native_app, fake_lan)
-    overlay(native_app, remaining_g=0.5)
-
-    with forbid_bambuddy(spans, BASE):
-        _, _, filaments, run = _dialog_and_run(native_app, model, row)
-
-    tagged = next(spool for spool in filaments["spools"] if spool["spool_id"] == TAGGED)
-    assert tagged["remaining_g"] == 0.5
-    assert run["status"] == "succeeded", run
-    (laid,) = gathered
-    assert laid is not None
-    records = [record for tray in laid.trays for record in tray.records.values()]
-    assert [(r.record_id, r.remaining_g) for r in records] == [("16", 0.5)]
-
-
-def test_a_stale_overlay_still_prints(
-    native_app: TestClient,
-    model: str,
-    spans: InMemorySpanExporter,
-    fake_lan: FakeLan,
-    slicer: FakeSlicer,
-) -> None:
-    """AC4b: an overlay older than `SPOOL_OVERLAY_STALE` is trays only, with a note."""
-    row = lan_row(native_app, fake_lan)
-    overlay(native_app, at=datetime.now(UTC) - timedelta(minutes=31))
-
-    with forbid_bambuddy(spans, BASE):
-        _, _, filaments, run = _dialog_and_run(native_app, model, row)
-
-    assert filaments["source"] == "trays"
-    assert filaments["overlay_notes"], filaments
-    assert all(not spool.get("records") for spool in filaments["spools"])
-    assert run["status"] == "succeeded", run
-    assert is_native_id(run["result"]["library_file_id"])
 
 
 def test_a_stale_report_runs_the_bambuddy_path(
@@ -556,9 +482,9 @@ def test_the_dialogs_analysis_on_the_native_row_asks_bambuddy_nothing(
 ) -> None:
     """The dialog's analyzers are on AC1's path (#4629): with ``bambuddy_url`` set and
     Bambuddy answering nothing, a run for the native row reads its printer from the
-    registry, its trays from the LAN report and its spools from the overlay."""
+    registry, its trays from the LAN report and its spools from ScadBuddy's own (#6262)."""
     row = lan_row(native_app, fake_lan)
-    overlay(native_app)
+    held_spool(native_app)
     output = make_output(native_app, model)
     filaments = native_app.get(f"/api/v1/print/outputs/{output}/filaments", params={"printer": row})
     assert filaments.status_code == 200, filaments.text
@@ -586,7 +512,7 @@ def test_a_quote_for_the_native_row_asks_bambuddy_nothing(
     for a printer a run reaches over the LAN its background slices build no Bambuddy
     client, with ``bambuddy_url`` set."""
     row = lan_row(native_app, fake_lan)
-    overlay(native_app)
+    held_spool(native_app)
     output = make_output(native_app, model)
     filaments = native_app.get(f"/api/v1/print/outputs/{output}/filaments", params={"printer": row})
     assert filaments.status_code == 200, filaments.text
@@ -663,7 +589,7 @@ def test_the_native_analysis_names_a_plan_spool_the_trays_do_not_hold(
 ) -> None:
     """#4634 review: a plan slot whose spool is in no tray is named, not dropped."""
     row = lan_row(native_app, fake_lan)
-    overlay(native_app)
+    held_spool(native_app)
     output = make_output(native_app, model)
     filaments = native_app.get(f"/api/v1/print/outputs/{output}/filaments", params={"printer": row})
     assert filaments.status_code == 200, filaments.text
@@ -750,7 +676,7 @@ def test_a_native_run_without_bambuddy(
     A client built anywhere on the way is `client_for`'s 409, which fails the read or
     the run. A row that also links a Bambuddy printer is native all the same."""
     row = lan_row(native_app, fake_lan, bambuddy_printer_id=bambuddy_printer_id)
-    overlay(native_app)
+    held_spool(native_app)
 
     with forbid_bambuddy(spans, BASE):
         output, choices, filaments, run = _dialog_and_run(native_app, model, row)
@@ -789,8 +715,6 @@ def test_the_dialog_reads_answer_without_bambuddy(
     filaments = native_app.get(f"/api/v1/print/outputs/{output}/filaments")
     assert filaments.status_code == 200, filaments.text
     assert filaments.json()["source"] == "trays"
-    # No Bambuddy, so no note that its spool records are missing (#4601).
-    assert filaments.json()["overlay_notes"] == []
     # The check judges the body alone; one naming no printer has nothing to judge.
     checked = native_app.post(
         f"/api/v1/print/outputs/{output}/check",

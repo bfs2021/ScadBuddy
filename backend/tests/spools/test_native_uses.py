@@ -15,7 +15,6 @@ from scadbuddy.bambuddy.filaments import SpoolOption
 from scadbuddy.bambuddy.progress import CopyProgress, PrintProgress
 from scadbuddy.bambuddy.stages import Stage
 from scadbuddy.spools.component import Spools
-from scadbuddy.spools.models import SpoolSnapshot
 from scadbuddy.spools.native import (
     NativeSpoolCreate,
     NativeSpoolPatch,
@@ -30,28 +29,24 @@ from tests.conftest import PgPool
 RUN = "run-4643"
 
 
-def _option(spool_id: int, native: UUID | None) -> SpoolOption:
-    records = {} if native is None else {"native": SpoolSnapshot(record_id=str(native))}
-    records["bambuddy"] = SpoolSnapshot(record_id="16")
-    return SpoolOption(spool_id=spool_id, material="PLA", tray_only=True, records=records)
+def _option(spool_id: int, held: UUID | None) -> SpoolOption:
+    """A tray holding SB spool ``held`` (#6262 Task 5), or none."""
+    return SpoolOption(spool_id=spool_id, material="PLA", tray_only=True, sb_spool_id=held)
 
 
-def test_a_slot_uses_the_native_record_in_its_tray() -> None:
+def test_a_slot_uses_the_sb_spool_in_its_tray() -> None:
     red, blue = uuid.uuid4(), uuid.uuid4()
     uses = spool_uses(
         {1: _option(-1, red), 2: _option(-2, None), 3: _option(-3, blue), 4: _option(-4, red)},
         {1: 12.5, 2: 3.0, 3: 0.0, 4: 1.5},
     )
-    # Slot 2's tray has no native record, slot 3 printed nothing; slot 4 shares slot 1's
+    # Slot 2's tray holds no SB spool, slot 3 printed nothing; slot 4 shares slot 1's
     # spool, and each slot is its own use.
     assert uses == [
         SpoolUse(slot_id=1, spool_id=red, grams=12.5),
         SpoolUse(slot_id=4, spool_id=red, grams=1.5),
     ]
     assert spool_uses({1: _option(-1, red)}, {}) == []
-    not_native = _option(-1, None)
-    not_native.records["native"] = SpoolSnapshot(record_id="not-a-uuid")
-    assert spool_uses({1: not_native}, {1: 1.0}) == []
 
 
 pg = pytest.mark.requires_postgres

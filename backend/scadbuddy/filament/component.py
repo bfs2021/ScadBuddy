@@ -12,6 +12,7 @@ from scadbuddy.core.components import Component, Components, Core, Key
 from scadbuddy.filament.catalog import CatalogStore
 from scadbuddy.filament.inventory import FilamentInventory
 from scadbuddy.filament.locations import LocationStore
+from scadbuddy.filament.presets import PoolSpoolPresets
 from scadbuddy.filament.spools import FilamentSpoolStore
 from scadbuddy.filament.types import SpoolTypeStore
 
@@ -23,6 +24,8 @@ class Filament:
     spools: FilamentSpoolStore
     locations: LocationStore
     inventory: FilamentInventory
+    #: What a print's plan reads of SB spools' presets (#6262 F1, `resolve_plates`).
+    presets: PoolSpoolPresets
 
 
 FILAMENT: Key[Filament] = Key("filament")
@@ -36,6 +39,7 @@ def _build(core: Core, components: Components) -> Filament:
         spools=FilamentSpoolStore(pool),
         locations=LocationStore(pool),
         inventory=FilamentInventory(pool),
+        presets=PoolSpoolPresets(pool),
     )
 
 

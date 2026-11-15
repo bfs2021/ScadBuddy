@@ -16,27 +16,39 @@ The shelf is every unarchived spool that no printer's latest report resolves as 
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
-from typing import Literal
 from uuid import UUID
 
 from psycopg import Connection
 from psycopg.rows import DictRow
 from psycopg_pool import ConnectionPool
-from pydantic import BaseModel
 
+from scadbuddy.bambuddy.models import PrinterStatus
 from scadbuddy.bambuddy.trays import seen_trays, tray_label
 from scadbuddy.filament import models as m
 from scadbuddy.filament.colour import normalise_rgba
 from scadbuddy.filament.locations import LocationStore
+from scadbuddy.filament.models import TrayFoundBy, TrayHolder, TrayView
 from scadbuddy.filament.spools import FilamentSpoolStore
+from scadbuddy.printers.models import PrinterRow
 from scadbuddy.printers.reports import PrinterReportStore, report_status
 from scadbuddy.printers.store import PrinterStore
 from scadbuddy.spools.models import SeenTray, clean_tag_uid, clean_tray_uuid
 
+__all__ = [
+    "FilamentInventory",
+    "TrayHolder",
+    "TrayNotFilledError",
+    "TrayTagClashError",
+    "TrayView",
+    "route_trays",
+    "tray_fingerprint",
+]
+
 Conn = Connection[DictRow]
-FoundBy = Literal["tag", "link"]
+FoundBy = TrayFoundBy
 #: Each tray place's spools with a fingerprint, newest placement first.
 _Placed = Mapping[tuple[UUID, int, int], list[tuple[UUID, str]]]
 
@@ -62,22 +74,6 @@ def tray_fingerprint(material: str | None, colour: str | None) -> str:
     tray's ``state``, which changes as the AMS feeds."""
     part = normalise_rgba(colour) if colour else ""
     return f"{(material or '').strip().upper()}|{part}"
-
-
-class TrayHolder(BaseModel):
-    """One reported tray and the SB spool in it, with how it was found."""
-
-    ams_id: int
-    tray_id: int
-    spool: m.Spool | None
-    found_by: FoundBy | None
-
-
-class TrayView(BaseModel):
-    """A printer's reported trays, and the unarchived spools no printer holds."""
-
-    trays: list[TrayHolder]
-    shelf: list[m.Spool]
 
 
 class _Keys:
@@ -292,3 +288,14 @@ def _tray_lock(conn: Conn, printer_id: UUID, ams_id: int, tray_id: int) -> None:
         "SELECT pg_advisory_xact_lock(hashtext(%s))",
         (f"filament_tray:{printer_id}:{ams_id}:{tray_id}",),
     )
+
+
+async def route_trays(
+    inventory: FilamentInventory | None, row: PrinterRow | None, status: PrinterStatus | None
+) -> TrayView | None:
+    """The SB spool in each tray ``status`` (registry printer ``row``'s, as its LAN report
+    reads) shows, and the shelf: a Postgres read, in a thread. ``None`` without all three,
+    and the dialog then shows the trays alone."""
+    if inventory is None or row is None or status is None:
+        return None
+    return await asyncio.to_thread(inventory.trays, UUID(row.id), seen_trays(status))

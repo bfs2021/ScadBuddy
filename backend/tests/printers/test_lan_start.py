@@ -31,7 +31,6 @@ from scadbuddy.printers.print_activities import LanActivities, LanDeps
 from scadbuddy.printers.progress import from_lan_report
 from scadbuddy.printers.store import PrinterStore
 from scadbuddy.spools.component import Spools
-from scadbuddy.spools.models import SpoolSnapshot
 from scadbuddy.spools.native import NativeSpoolCreate, NativeSpoolStore
 from scadbuddy.spools.spool_providers import NativeProvider
 from scadbuddy.spools.store import SpoolStore
@@ -209,16 +208,13 @@ async def test_a_retry_that_finds_its_print_running_is_that_start(
 
 
 async def test_a_start_saves_what_it_uses_of_the_native_spools_once(pg_pool: PgPool) -> None:
-    """#4643: the slot's tray holds a native spool the overlay knows; the start saves its
-    grams against it, and an attempt that finds its print running saves nothing new."""
+    """#4643, #6262: the slot's tray holds an SB spool; the start saves its grams against
+    it, and an attempt that finds its print running saves nothing new."""
     native = NativeSpoolStore(pg_pool)
     spool = native.create(NativeSpoolCreate(material="PLA", remaining_g=500))
     spools = Spools(store=SpoolStore(pg_pool), providers=[NativeProvider(native)])
     option = SpoolOption(
-        spool_id=tray_spool_id(0, 1),
-        material="PLA",
-        tray_only=True,
-        records={"native": SpoolSnapshot(record_id=str(spool.id))},
+        spool_id=tray_spool_id(0, 1), material="PLA", tray_only=True, sb_spool_id=spool.id
     )
     printers = PrinterStore(pg_pool, KEK)
     row = printers.create(PrinterCreate(serial=SERIAL, name="H2C"))

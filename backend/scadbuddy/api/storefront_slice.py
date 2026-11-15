@@ -6,7 +6,6 @@ import time."""
 
 import asyncio
 from collections.abc import Collection
-from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Query, status
@@ -18,13 +17,13 @@ from scadbuddy.bambuddy.filaments import normalise_colour
 from scadbuddy.bambuddy.print_run import dialog_route
 from scadbuddy.bambuddy.trays import loaded_trays
 from scadbuddy.core.problems import ApiError
+from scadbuddy.filament.component import FilamentDep
+from scadbuddy.filament.inventory import FilamentInventory, route_trays
 from scadbuddy.library.settings_store import StoredSettings
 from scadbuddy.orders.component import OrdersDep
 from scadbuddy.orders.storefront.slice_profile import StorefrontSliceProfile
 from scadbuddy.orders.storefront.wire import is_support
 from scadbuddy.printers.component import Printers, PrintersDep
-from scadbuddy.spools.component import Spools, SpoolsDep
-from scadbuddy.spools.overlay import status_overlay
 
 router = APIRouter(prefix="/storefront/slice-profile", tags=["storefront"])
 
@@ -62,11 +61,11 @@ def _label(*parts: str | None) -> str:
 
 
 async def offered_spools(
-    settings: StoredSettings, printers: Printers, spools: Spools, printer: str
+    settings: StoredSettings, printers: Printers, inventory: FilamentInventory, printer: str
 ) -> list[ProfileSpool] | None:
     """The spools the print dialog offers on registry printer ``printer``, as its route
-    reads them: the loaded trays on a native route, else Bambuddy's inventory. ``None``
-    when the registry has no such printer."""
+    reads them: the loaded trays (with the SB spool in each, #6262) on a native route,
+    else Bambuddy's inventory. ``None`` when the registry has no such printer."""
     row = await asyncio.to_thread(printers.store.get, printer)
     if row is None:
         return None
@@ -74,8 +73,8 @@ async def offered_spools(
         settings, printers.store, printers.reports, printer=row.id, printer_id=None
     )
     if route is not None and route.row is not None and route.status is not None:
-        overlay = await status_overlay(spools, route.row, route.status, now=datetime.now(UTC))
-        trays = loaded_trays(route.status, route.printer_id or 0, route.row.name, overlay)
+        held = await route_trays(inventory, route.row, route.status)
+        trays = loaded_trays(route.status, route.printer_id or 0, route.row.name, held)
         return [
             ProfileSpool(
                 spool_id=tray.spool_id,
@@ -117,11 +116,14 @@ def profile_errors(
 
 
 async def check_profile(
-    profile: StorefrontSliceProfile, settings: StoredSettings, printers: Printers, spools: Spools
+    profile: StorefrontSliceProfile,
+    settings: StoredSettings,
+    printers: Printers,
+    inventory: FilamentInventory,
 ) -> None:
     """422 unless the profile's printer is in the registry and the print dialog offers
     each of its spools there (#6153)."""
-    offered = await offered_spools(settings, printers, spools, profile.printer)
+    offered = await offered_spools(settings, printers, inventory, profile.printer)
     errors = profile_errors(profile, None if offered is None else {s.spool_id for s in offered})
     if errors:
         raise ApiError(
@@ -140,7 +142,7 @@ async def get_options(
     orders: OrdersDep,
     store: SettingsStoreDep,
     printers: PrintersDep,
-    spools: SpoolsDep,
+    filament: FilamentDep,
     printer: Annotated[str | None, Query(max_length=64)] = None,
 ) -> ProfileOptions:
     """Each material of the price book's filaments not archived, with whether it is a
@@ -148,11 +150,11 @@ async def get_options(
     ``printer`` (none without one; 422 for a printer the registry does not hold)."""
     filaments = await asyncio.to_thread(orders.store.filaments)
     materials: dict[str, str] = {}
-    for filament in filaments:
-        materials.setdefault(filament.material.casefold(), filament.material)
+    for book in filaments:
+        materials.setdefault(book.material.casefold(), book.material)
     offered: list[ProfileSpool] = []
     if printer is not None:
-        found = await offered_spools(store.load(), printers, spools, printer)
+        found = await offered_spools(store.load(), printers, filament.inventory, printer)
         if found is None:
             raise ApiError(status.HTTP_422_UNPROCESSABLE_CONTENT, f"no printer {printer}")
         offered = found

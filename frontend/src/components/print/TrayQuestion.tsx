@@ -3,7 +3,6 @@ import { ApiError, api } from '../../api/client'
 import type { SpoolOption, TraySpoolLink, UnknownTray } from '../../api/types'
 import { bambuddyBase, useLoadBambuddyLinks } from '../../lib/bambuddyLinks'
 import { openExternal } from '../../lib/embed'
-import { providerLabel } from '../../lib/filaments'
 import { howFull, linkKey, linkOf } from '../../lib/trays'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -14,13 +13,6 @@ import { Swatch } from './Swatch'
 
 function candidateName(spool: SpoolOption): string {
   return [spool.brand, spool.color_name].filter(Boolean).join(' ') || `${spool.material} spool`
-}
-
-/** "Bambuddy's record", or "ScadBuddy's and Bambuddy's records", for the candidate's line. */
-function providersOf(spool: SpoolOption, labels?: Readonly<Record<string, string>>): string {
-  const names = Object.keys(spool.records ?? {}).map((provider) => providerLabel(provider, labels))
-  if (names.length === 0) return ''
-  return `${names.join(' and ')}${names.length === 1 ? "'s record" : "'s records"}`
 }
 
 /**
@@ -41,8 +33,6 @@ type Props = Target & {
    */
   onAssigned: (link?: TraySpoolLink) => void
   onDecline: () => void
-  /** The providers' own names (`FilamentOptions.provider_labels`, #4516). */
-  providerLabels?: Readonly<Record<string, string>>
 }
 
 /**
@@ -51,16 +41,15 @@ type Props = Target & {
  * scope); "No / not sure" records nothing, offers the tray itself as a choice and is not
  * asked again until the tray changes.
  */
-export function TrayQuestion({ tray, spools, onAssigned, onDecline, providerLabels, ...target }: Props) {
+export function TrayQuestion({ tray, spools, onAssigned, onDecline, ...target }: Props) {
   const native = target.native
   useLoadBambuddyLinks()
   const candidates = (tray.candidates ?? [])
     .map((id) => spools.find((spool) => spool.spool_id === id))
     .filter((spool): spool is SpoolOption => spool !== undefined && (!native || linkOf(spool) !== null))
   /**
-   * What a candidate is picked by: natively its link's identity (`linkKey`), since a
-   * shelf row's `spool_id` is positional and a re-read may move it to another spool;
-   * on the Bambuddy path the spool's own id.
+   * What a candidate is picked by: natively its link's identity (`linkKey`), the SB
+   * spool's id; on the Bambuddy path the spool's own id.
    */
   // Every candidate has a link natively (filtered above); the index only keeps keys apart.
   const keyOf = (spool: SpoolOption) =>
@@ -100,22 +89,16 @@ export function TrayQuestion({ tray, spools, onAssigned, onDecline, providerLabe
     }
   }
 
-  const spoolRow = (spool: (typeof candidates)[number]) => {
-    const providers = native ? providersOf(spool, providerLabels) : ''
-    return (
+  // A native candidate is an SB spool, named by its number (#6262); Bambuddy's by its id.
+  const spoolRow = (spool: (typeof candidates)[number]) => (
     <>
       <Swatch colour={spool.colour} size="sm" />
       <span>{candidateName(spool)}</span>
       {howFull(spool) && <span className="text-muted-foreground">{howFull(spool)}</span>}
       {spool.storage_location && <span className="text-muted-foreground">· kept in {spool.storage_location}</span>}
-      {native ? (
-        providers && <span className="text-muted-foreground">· {providers}</span>
-      ) : (
-        <span className="text-muted-foreground">· spool #{spool.spool_id}</span>
-      )}
+      <span className="text-muted-foreground">· spool #{native ? spool.sb_number : spool.spool_id}</span>
     </>
-    )
-  }
+  )
 
   return (
     <Card

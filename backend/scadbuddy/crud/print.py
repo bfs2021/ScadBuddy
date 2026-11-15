@@ -52,9 +52,9 @@ API's (the rack usage route).
 `RemoteSpoolStore`, `RemoteNativeSpools`, `RemoteHeldPresets` and `RemoteNativeSlices`
 are `spools/store.py` `SpoolStore`, `spools/native.py` `NativeSpoolStore`,
 `slicing/held_presets.py` `HeldPresetStore` and `slicing/store.py` `NativeSliceStore`
-(Q28-Q30, #5298 Task 31) for the methods the print worker calls: a native run's overlay
-and the native provider's recache after a print (``overlay``, ``replace_records``,
-``failed``), the shelf, a LAN start's uses and their settle (``list``, ``any``,
+(Q28-Q30, #5298 Task 31) for the methods the print worker calls: the native provider's
+recache after a print (``replace_records``, ``failed``; ``overlay`` has had no caller
+since #6262), the shelf, a LAN start's uses and their settle (``list``, ``any``,
 ``record_uses``, ``settle_uses``), the kept presets a native run reads (``rows``,
 ``documents``) and a native slice's ``start``. None holds a pool, and none is called in
 the printer watch. Each SQL write is one transaction, under the spools' advisory lock,
@@ -1380,9 +1380,10 @@ SPOOLS_API_ONLY = ("seen", "refreshes", "link", "unlink", "replace_records_in", 
 
 class RemoteSpoolStore(SpoolStore):
     """`spools/store.py` `SpoolStore` (Q28) over ``…/print/spools`` (area ``spools``).
-    Async, as the SQL store is. No pool. The print worker calls it for a native run's
-    overlay (`spools/overlay.py`) and the native provider's recache after a print took
-    its grams (`spools/spool_providers.py` `recache`). Every SQL write is one transaction
+    Async, as the SQL store is. No pool. The print worker calls it for the native
+    provider's recache after a print took its grams (`spools/spool_providers.py`
+    `recache`); a native run's plan no longer reads the overlay (#6262), so ``overlay``
+    has no caller until Task 12 drops it. Every SQL write is one transaction
     under the store's advisory lock, so each is one route, run whole on the API (plan
     D6)."""
 

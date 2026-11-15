@@ -74,25 +74,19 @@ describe('TrayQuestion on the native path', () => {
   const printer = '00000000-0000-4000-8000-0000000000c2'
   const SB = '7a2c1f0e-0000-4000-8000-000000000009'
   const placed = { id: SB, number: 9 } as FilamentSpool
-  const record: SpoolOption = {
-    ...black,
-    storage_location: null,
-    physical_spool_id: SB,
-    records: { bambuddy: { record_id: '27', brand: 'Inland', name: 'Black', remaining_g: 515 } },
-  }
+  const record: SpoolOption = { ...black, storage_location: null, sb_spool_id: SB, sb_number: 16 }
 
-  it("names a candidate's records by their provider's own label (#4516)", () => {
+  it('names a candidate by its SB spool number (#6262)', () => {
     render(
       <TrayQuestion
         native={{ printer }}
         tray={{ ...tray, candidates: [16] }}
-        spools={[record]}
-        providerLabels={{ bambuddy: 'Bambuddy (garage)' }}
+        spools={[{ ...record, sb_number: 7 }]}
         onAssigned={vi.fn()}
         onDecline={vi.fn()}
       />,
     )
-    expect(screen.getByText(/Bambuddy \(garage\)'s record/)).toBeInTheDocument()
+    expect(screen.getByText(/spool #7/)).toBeInTheDocument()
   })
 
   it('posts {spool_id: <uuid>} to PUT …/trays/{ams}/{tray}/spool and re-reads', async () => {
@@ -109,7 +103,7 @@ describe('TrayQuestion on the native path', () => {
       />,
     )
     expect(screen.getByText('AMS-D slot 4 has black PLA, but no spool record is linked to it.')).toBeInTheDocument()
-    expect(screen.getByText(/Bambuddy's record/)).toBeInTheDocument()
+    expect(screen.getByText(/spool #16/)).toBeInTheDocument()
     expect(screen.queryByText(/Bambuddy's inventory/)).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Yes, that one' }))
     await waitFor(() => expect(onAssigned).toHaveBeenCalledWith({ spool_id: SB }))
@@ -120,22 +114,22 @@ describe('TrayQuestion on the native path', () => {
   it('says so, and reports nothing linked, when the picked spool lost its SB spool', async () => {
     const link = vi.spyOn(api, 'linkTraySpool')
     const onAssigned = vi.fn()
-    const other = { ...record, spool_id: 18, physical_spool_id: '7a2c1f0e-0000-4000-8000-000000000010' }
+    const other = { ...record, spool_id: 18, sb_spool_id: '7a2c1f0e-0000-4000-8000-000000000010' }
     const props = { native: { printer }, tray, onAssigned, onDecline: vi.fn() }
     const { rerender } = render(<TrayQuestion {...props} spools={[record, other]} />)
     // A re-read drops the picked candidate's spool; the pick stays on it.
-    rerender(<TrayQuestion {...props} spools={[{ ...record, physical_spool_id: null }, other]} />)
+    rerender(<TrayQuestion {...props} spools={[{ ...record, sb_spool_id: null }, other]} />)
     fireEvent.click(screen.getByRole('button', { name: /^Yes/ }))
     expect(await screen.findByRole('alert')).toHaveTextContent('ScadBuddy has no record of that spool to link.')
     expect(link).not.toHaveBeenCalled()
     expect(onAssigned).not.toHaveBeenCalled()
   })
 
-  // #4511 item 4 — a shelf row's `spool_id` is its place in one answer, not the spool.
+  // #4511 item 4 — a link is keyed on the SB spool, never the row's `spool_id`.
   it('keys a link on the SB spool, never the positional shelf id, across a re-read', async () => {
     const grey = '7a2c1f0e-0000-4000-8000-000000000010'
     const first = { ...record, spool_id: 16 }
-    const second = { ...record, spool_id: 18, color_name: 'Grey', physical_spool_id: grey }
+    const second = { ...record, spool_id: 18, color_name: 'Grey', sb_spool_id: grey }
     expect(linkOf(first)).toEqual(linkOf({ ...first, spool_id: 41 }))
     expect(linkKey(linkOf(first))).toBe(`spool:${SB}`)
 
@@ -156,12 +150,12 @@ describe('TrayQuestion on the native path', () => {
     expect(link).toHaveBeenCalledWith(printer, 3, 3, { spool_id: SB })
   })
 
-  it('offers no candidate with no SB spool, such as a bare provider record', () => {
+  it('offers no candidate with no SB spool', () => {
     render(
       <TrayQuestion
         native={{ printer }}
         tray={{ ...tray, candidates: [16] }}
-        spools={[{ ...record, physical_spool_id: null }]}
+        spools={[{ ...record, sb_spool_id: null }]}
         onAssigned={vi.fn()}
         onDecline={vi.fn()}
       />,

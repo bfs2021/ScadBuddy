@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Awaitable, Mapping
+from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -60,9 +60,9 @@ from scadbuddy.rack.usage import RackUsage, record_seen
 from scadbuddy.render.plate import bed_types_for
 from scadbuddy.slicing.catalogue import catalogue_for
 from scadbuddy.slicing.profiles import Profiles
-from scadbuddy.spools.models import Overlay
 
 if TYPE_CHECKING:
+    from scadbuddy.filament.models import TrayView
     from scadbuddy.printers.component import Printers
 
 logger = logging.getLogger(__name__)
@@ -341,15 +341,15 @@ async def native_choices_for(
     remembered: ModelPrintChoices | None,
     profiles: Profiles | None,
     rows: list[PrinterRow],
-    overlay: Overlay | None,
-    provider_labels: Mapping[str, str],
+    held: TrayView | None,
     rack: RackUsage | None = None,
 ) -> ChoicesView:
     """:func:`choices_for` on a native run (#3818 tier A, plan 2026-10-18 D2-D5), with no
     Bambuddy call: the printers are the registry's ``rows`` that link one, the status is
     ``route``'s from the printer's LAN report (D4), the presets the image's (D5) and the
-    filaments the loaded trays with ``overlay`` over them (D1). No plate is preselected
-    from Bambuddy's archives: the remembered one is, as when those are unreadable."""
+    filaments the loaded trays with the SB spool ``held`` names in each (D1, #6262). No
+    plate is preselected from Bambuddy's archives: the remembered one is, as when those
+    are unreadable."""
     if profiles is None:
         raise ApiError(http.HTTP_503_SERVICE_UNAVAILABLE, NATIVE_SLICER_UNAVAILABLE)
     assert route.row is not None and route.status is not None, "a native route is a report's"
@@ -360,8 +360,7 @@ async def native_choices_for(
         source,
         printer_id=route.printer_id,
         trays_from=status,
-        overlay=overlay,
-        provider_labels=provider_labels,
+        held=held,
     )
     await record_seen(rack, route.row.id, status)
     printers = [

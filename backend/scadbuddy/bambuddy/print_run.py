@@ -95,7 +95,6 @@ from scadbuddy.bambuddy.models import (
     PrinterStatus,
     RackAlgorithm,
     Spool,
-    SpoolFilamentPreset,
 )
 from scadbuddy.bambuddy.nozzle_plan import NozzlePlan, PlanInput, plan_for, plan_inputs
 from scadbuddy.bambuddy.options import (
@@ -163,6 +162,7 @@ from scadbuddy.bambuddy.trays import (
 )
 from scadbuddy.bambuddy.uploads import BambuddyUploadStore
 from scadbuddy.core.problems import ApiError
+from scadbuddy.filament.models import EffectivePreset, TrayView
 from scadbuddy.library.catalogue import PrintSequence
 from scadbuddy.library.outputs import OutputMeta, OutputStore
 from scadbuddy.library.settings_store import StoredSettings
@@ -208,9 +208,11 @@ from scadbuddy.render.bambu3mf import (
 from scadbuddy.slicing.catalogue import catalogue_for
 from scadbuddy.slicing.profiles import ProfileError, ProfileImageError, Profiles
 from scadbuddy.slicing.values import values_for
-from scadbuddy.spools.models import Overlay
 
 if TYPE_CHECKING:
+    # `filament.presets` and `filament.inventory` read Postgres; the types only here.
+    from scadbuddy.filament.inventory import FilamentInventory
+    from scadbuddy.filament.presets import SpoolPresetSource
     from scadbuddy.printers.reports import PrinterReportStore
     from scadbuddy.printers.store import PrinterStore
 
@@ -552,8 +554,7 @@ async def filament_options(
     plate_ids: Sequence[int] | None = None,
     status: asyncio.Future[PrinterStatus | None] | None = None,
     trays_from: PrinterStatus | None = None,
-    overlay: Overlay | None = None,
-    provider_labels: Mapping[str, str] | None = None,
+    held: TrayView | None = None,
 ) -> FilamentOptions:
     """The filament step's whole payload for one output (#87).
 
@@ -577,9 +578,9 @@ async def filament_options(
     right, since the read is the request's (#2630).
 
     ``trays_from`` is a native run's printer status from its LAN report (#3818 tier A,
-    plan 2026-10-18 D1, D4): the choices are its loaded trays with ``overlay`` (the spool
-    providers' records, a Postgres read) laid over them, and nothing is read of Bambuddy:
-    ``client`` is ``None`` then (D3).
+    plan 2026-10-18 D1, D4): the choices are its loaded trays with the SB spool ``held``
+    names in each (#6262, `FilamentInventory.trays`, a Postgres read), and nothing is
+    read of Bambuddy: ``client`` is ``None`` then (D3).
     """
     if trays_from is not None:
         return await _tray_options(
@@ -588,8 +589,7 @@ async def filament_options(
             printer_id=printer_id,
             asked=asked_plates(plate_id, all_plates, plate_ids),
             status=trays_from,
-            overlay=overlay,
-            labels=provider_labels,
+            held=held,
         )
     client = bambuddy_client(client)
     reading: asyncio.Future[PrinterStatus | None] | None
@@ -648,8 +648,7 @@ async def _tray_options(
     printer_id: int | None,
     asked: Sequence[int] | None,
     status: PrinterStatus,
-    overlay: Overlay | None,
-    labels: Mapping[str, str] | None,
+    held: TrayView | None,
 ) -> FilamentOptions:
     """:func:`filament_options` on a native run: the plates' slots from the file itself
     (or the native library's copy), the trays from ``status``."""
@@ -663,9 +662,7 @@ async def _tray_options(
         own_colours=file.own_colours,
         known=await known_slots(source),
         trays_from=status,
-        overlay=overlay,
-        provider_labels=labels,
-        now=datetime.now(UTC),
+        held=held,
     )
     options = read[0] if len(read) == 1 else every_plate(read)
     options.nozzles = status.nozzles
@@ -1040,44 +1037,93 @@ async def resolve_plates(
     plan: FilamentPlan,
     choices: PrintChoices,
     catalogue: Catalogue,
+    *,
+    presets: SpoolPresetSource | None = None,
 ) -> tuple[list[Resolved], list[str]]:
     """Each plate resolved for ``plan``, and every slot refusal among them in the run's
     own words: what :func:`plan_run` refuses with, and what :func:`check_print` reports
     (#1050). A spool the inventory lacks resolves as no spool chosen, so its presets
     are not read: Bambuddy would answer for a spool it does not have with an error.
-    A native run's options are trays only (#3818 D1), so no spool presets are read and
-    ``client`` may be ``None``: a remembered Bambuddy spool there is a slot with no
-    choice."""
-    inventory = {spool.spool_id for options in per_plate for spool in options.spools}
-    # Read once for every plate: the plan's spools are the same on every plate.
-    # A tray chosen for itself (#2164) has no spool, so no presets of its own.
-    spool_ids = [
-        spool_id
-        for spool_id in sorted({slot.spool_id for slot in plan.slots} & inventory)
-        if spool_id > 0
+
+    Each chosen SB spool's presets (a tray's SB spool included, #6262 F1, F10) are its
+    effective ones (`filament.presets.effective_presets`), read from ``presets``. One with
+    no row for the H2C and the chosen nozzle that is linked to a Bambuddy spool takes
+    Bambuddy's rows for that spool, read only with a ``client``: a native run has none
+    and reads nothing of Bambuddy. A Bambuddy-path inventory row (no SB number until
+    #6262 Task 7) has Bambuddy's rows, under its own id (`resolver.preset_key`)."""
+    # Here, not at the top: see the `TYPE_CHECKING` import.
+    from scadbuddy.filament.presets import preset_for
+
+    wanted = {slot.spool_id for slot in plan.slots}
+    chosen = [
+        spool
+        for spool in {
+            spool.spool_id: spool
+            for options in per_plate
+            for spool in options.spools
+            if spool.spool_id in wanted
+        }.values()
     ]
-    # Concurrently (#4196); settled in spool order, so a failure is the one the serial reads raised.
+    # Read once for every plate: the plan's spools are the same on every plate.
+    numbers = sorted({spool.sb_number for spool in chosen if spool.sb_number is not None})
+    spool_presets: dict[int, list[EffectivePreset]] = {}
+    links: dict[int, int] = {}
+    if presets is not None and numbers:
+        spool_presets = {
+            number: list(rows) for number, rows in (await presets.presets(numbers)).items()
+        }
+        size = choices.nozzles[0].size
+        lacking = [
+            number
+            for number in numbers
+            if preset_for(spool_presets.get(number, []), PRINTER_MODEL, size) is None
+        ]
+        if client is not None and lacking:
+            links = await presets.bb_spools(lacking)
+    # Each key's Bambuddy spool: a linked SB spool's, and a Bambuddy-path row's own id.
+    # A tray chosen for itself (#2164) with no SB spool has no presets of its own.
+    bambuddy = sorted(
+        [*links.items()]
+        + [
+            (spool.spool_id, spool.spool_id)
+            for spool in chosen
+            if spool.sb_number is None and spool.spool_id > 0
+        ]
+    )
+    # Concurrently (#4196); settled in key order, so a failure is the one the serial reads raised.
     # A body's plan is not capped, only matched to the inventory, so this call caps one
     # plan's fan-out at SPOOL_PRESET_READS reads at a time. Not a bound on Bambuddy's
     # load, which every API replica and the print worker share (#4213).
     gate = asyncio.Semaphore(SPOOL_PRESET_READS)
 
-    async def presets(spool_id: int) -> list[SpoolFilamentPreset]:
+    async def bambuddy_presets(spool_id: int) -> list[EffectivePreset]:
         if client is None:
-            # Only an inventory spool has presets of its own, and only Bambuddy's
+            # Only an inventory spool has Bambuddy presets of its own, and only Bambuddy's
             # inventory has spools: a client-less (native) run has trays alone.
             raise TypeError(
                 f"spool {spool_id}'s presets are Bambuddy's: reading them needs a client"
             )
         async with gate:
-            return await client.spool_filament_presets(spool_id)
+            rows = await client.spool_filament_presets(spool_id)
+        # As SB rows the resolver reads (F1), never the spool's own (``overridden``): a
+        # row for no model or nozzle names no key, so it never matched.
+        return [
+            EffectivePreset(
+                printer_model=row.printer_model,
+                nozzle_diameter=row.nozzle_diameter,
+                slicer_filament=row.slicer_filament,
+                slicer_filament_name=row.slicer_filament_name,
+                overridden=False,
+            )
+            for row in rows
+            if row.printer_model is not None and row.nozzle_diameter is not None
+        ]
 
     read = await asyncio.gather(
-        *(presets(spool_id) for spool_id in spool_ids), return_exceptions=True
+        *(bambuddy_presets(bb_id) for _, bb_id in bambuddy), return_exceptions=True
     )
-    spool_presets = {
-        spool_id: settled(result) for spool_id, result in zip(spool_ids, read, strict=True)
-    }
+    for (key, _), result in zip(bambuddy, read, strict=True):
+        spool_presets[key] = [*spool_presets.get(key, []), *settled(result)]
     every: list[Resolved] = []
     errors: list[str] = []
     for plate_id, options in zip(plate_ids, per_plate, strict=True):
@@ -1102,13 +1148,17 @@ async def _slot_errors(
     *,
     inventory: Inventory | None = None,
     native: bool = False,
+    held: TrayView | None = None,
+    presets: SpoolPresetSource | None = None,
 ) -> list[str]:
     """The run's slot refusals for ``request``, judged before anything is uploaded for it
     (#1050): read from a copy Bambuddy already has, which has the same slots as the one
     the run prints, as :func:`filament_options` reads them. An output's slots and a
     library file's are read from the file itself (#2720, #2550); with neither and no copy
     there is nothing to read without an upload, and the run still judges the slots
-    after its own. ``inventory`` is the check's own read, when it made one (#2722)."""
+    after its own. ``inventory`` is the check's own read, when it made one (#2722).
+    ``held`` names a native run's SB spool in each tray and ``presets`` reads their
+    presets (#6262), as the dialog and the run read them."""
     if source.is_sliced or prepared.catalogue is None:
         # Nothing resolves a preset for a sliced file (#2671); Bambuddy maps its slots.
         return []
@@ -1127,6 +1177,7 @@ async def _slot_errors(
         native=source.native,
         # A native run's choices are its report's trays (D1), as the run resolves them.
         trays_from=prepared.printer_status if native else None,
+        held=held if native else None,
     )
     if not native:
         per_plate = [
@@ -1140,6 +1191,7 @@ async def _slot_errors(
         request.filament_plan,
         request.choices,
         prepared.catalogue,
+        presets=presets,
     )
     return errors
 
@@ -1156,6 +1208,8 @@ async def check_print(
     catalogue: ReadCatalogue | None = None,
     profiles: Profiles | None = None,
     process_values: bool = False,
+    sb_trays: FilamentInventory | None = None,
+    sb_presets: SpoolPresetSource | None = None,
 ) -> PrintCheck:
     """What the run would refuse for ``request``, with nothing uploaded, sliced or queued.
 
@@ -1197,7 +1251,10 @@ async def check_print(
 
     ``process_values`` asks for the process's values of the part settings too
     (``PrintCheck.process_part_settings``, #5627): only a dialog showing its "Settings
-    for this colour" asks, since the read can be one more Bambuddy call."""
+    for this colour" asks, since the read can be one more Bambuddy call.
+
+    ``sb_trays`` and ``sb_presets`` read ScadBuddy's own spools (#6262): the SB spool in
+    each tray of a native run, and the chosen spools' presets, as the dialog reads them."""
     named = request.printer is not None and printers is not None
     if (
         not named
@@ -1230,6 +1287,8 @@ async def check_print(
             rack=rack,
             profiles=profiles,
             process_values=process_values,
+            sb_trays=sb_trays,
+            sb_presets=sb_presets,
         )
     client = bambuddy_client(client)
     # The 3MF's download and the inventory wait on nothing `prepare_run` reads, so they
@@ -1327,7 +1386,9 @@ async def check_print(
     else:
         errors = []
     # The run's 422 after its upload (#1050): every slot refusal, joined as it joins them.
-    slot_errors = await _slot_errors(client, source, request, prepared, inventory=inventory)
+    slot_errors = await _slot_errors(
+        client, source, request, prepared, inventory=inventory, presets=sb_presets
+    )
     if slot_errors:
         errors.append(" ".join(slot_errors))
     # The one mounted-nozzle advisory kept (#723, #797): a warning, never a refusal. Not
@@ -1412,9 +1473,12 @@ async def _native_check(
     rack: RackUsage | None,
     profiles: Profiles | None,
     process_values: bool = False,
+    sb_trays: FilamentInventory | None = None,
+    sb_presets: SpoolPresetSource | None = None,
 ) -> PrintCheck:
     """:func:`check_print` on a native run: its refusals and advisories, judged on the
-    report's status, the trays and the image's presets, with no Bambuddy client."""
+    report's status, the trays with the SB spool in each and the image's presets, with
+    no Bambuddy client."""
     if profiles is None:
         raise ApiError(status.HTTP_503_SERVICE_UNAVAILABLE, NATIVE_SLICER_UNAVAILABLE)
     if request.project_id is not None:
@@ -1475,7 +1539,18 @@ async def _native_check(
         rack_notes = [note for note in rack_notes if note.kind != "rack-manual-partial"]
     else:
         errors = []
-    slot_errors = await _slot_errors(None, source, request, prepared, native=True)
+    # Here, not at the top: see the `TYPE_CHECKING` import.
+    from scadbuddy.filament.inventory import route_trays
+
+    slot_errors = await _slot_errors(
+        None,
+        source,
+        request,
+        prepared,
+        native=True,
+        held=await route_trays(sb_trays, route.row, route.status),
+        presets=sb_presets,
+    )
     if slot_errors:
         errors.append(" ".join(slot_errors))
     rack_picked = rack_view is not None and rack_view.position is not None
@@ -1927,12 +2002,15 @@ async def check_for_output(
     native: NativeCopies | None = None,
     process_values: bool = False,
     part_settings: PartSettingsMap | None = None,
+    sb_trays: FilamentInventory | None = None,
+    sb_presets: SpoolPresetSource | None = None,
 ) -> PrintCheck:
     """:func:`check_print` for an output ScadBuddy rendered, with its template's
     ``print_settings`` as the run reads them, so a template that prints by object is
     checked by object (#2976). ``native`` is the native library a native run's folder is
     checked in (D6). ``part_settings`` are the template's per slot (#5626), which the
-    slots' defaults hold (``PrintCheck.slot_part_settings``)."""
+    slots' defaults hold (``PrintCheck.slot_part_settings``). ``sb_trays`` and
+    ``sb_presets`` are :func:`check_print`'s."""
     return await check_print(
         client,
         OutputSource(
@@ -1952,6 +2030,8 @@ async def check_for_output(
         catalogue=catalogue,
         profiles=profiles,
         process_values=process_values,
+        sb_trays=sb_trays,
+        sb_presets=sb_presets,
     )
 
 
@@ -1970,11 +2050,14 @@ async def check_for_library(
     catalogue: ReadCatalogue | None = None,
     profiles: Profiles | None = None,
     process_values: bool = False,
+    sb_trays: FilamentInventory | None = None,
+    sb_presets: SpoolPresetSource | None = None,
 ) -> PrintCheck:
     """:func:`check_print` for a file already in the library; with ``filaments``, its
     slots read from the file itself (#2550): from their cache, else from the download
     the check's layout reads anyway (#4495); ``files`` reads a native one (#3827).
-    ``profiles`` are a native run's presets (D5), as :func:`check_for_output`'s."""
+    ``profiles`` are a native run's presets (D5), and ``sb_trays`` and ``sb_presets``
+    ScadBuddy's own spools, as :func:`check_for_output`'s."""
     return await check_print(
         client,
         await LibrarySource.load(
@@ -1993,6 +2076,8 @@ async def check_for_library(
         catalogue=catalogue,
         profiles=profiles,
         process_values=process_values,
+        sb_trays=sb_trays,
+        sb_presets=sb_presets,
     )
 
 
@@ -3046,8 +3131,8 @@ async def plan_run(
     reuse_slices: bool = True,
     native: NativeSliceStarter | None = None,
     title: str | None = None,
-    overlay: Overlay | None = None,
-    provider_labels: Mapping[str, str] | None = None,
+    held: TrayView | None = None,
+    presets: SpoolPresetSource | None = None,
 ) -> PlannedRun:
     """Upload, then resolve every plate, before anything is sliced (spec §4).
 
@@ -3077,8 +3162,10 @@ async def plan_run(
     nothing of Bambuddy, and ``client`` is ``None`` (D3): the presets are the image's
     (D5), the choices the report's trays (D1), and the copy goes into the native library
     (D6), in the request's folder or the ``title``'s template folder, never a project.
-    ``overlay`` is the spool providers' records over those trays (D1, a Postgres read),
-    as the dialog lays them, so a low-filament warning judges a provider's grams (#4551).
+    ``held`` is the SB spool in each of those trays (#6262, `FilamentInventory.trays`), as
+    the dialog shows them, so a low-filament warning judges the spool's grams (#4551) and
+    a start books against it; ``presets`` reads the chosen SB spools' presets
+    (:func:`resolve_plates`). Without them a native run plans on the trays alone.
     """
     if source.is_sliced:
         return await _plan_sliced(bambuddy_client(client), source, settings, request, prepared)
@@ -3217,18 +3304,16 @@ async def plan_run(
         # model's, not the run's recoloured copy's, as the dialog showed them. Intended.
         known=await known_slots(source),
         native=source.native,
-        # A native run's choices are the report's trays (D1), with the overlay the
-        # dialog laid over them (#4551): it adds only weights and names, not presets
-        # (`trays.loaded_trays`), so the weights the low-filament warnings judge.
+        # A native run's choices are the report's trays (D1), with the SB spool the
+        # dialog showed in each (#4551, #6262): its weights for the low-filament warnings,
+        # its number for its presets (`resolve_plates`) and its id for the start's uses.
         trays_from=printer_status if native_run else None,
-        overlay=overlay if native_run else None,
-        provider_labels=provider_labels if native_run else None,
-        now=datetime.now(UTC) if native_run and overlay is not None else None,
+        held=held if native_run else None,
     )
     if not native_run:
         per_plate = [with_trays(options, printer_status, printer_id) for options in per_plate]
     every, errors = await resolve_plates(
-        client, plate_ids, per_plate, request.filament_plan, choices, catalogue
+        client, plate_ids, per_plate, request.filament_plan, choices, catalogue, presets=presets
     )
     for plate_id, options, resolved in zip(plate_ids, per_plate, every, strict=True):
         if resolved.errors:

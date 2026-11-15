@@ -152,6 +152,9 @@ from scadbuddy.core.problems import (
     PROBLEM_MEDIA_TYPE,
     ApiError,
 )
+from scadbuddy.filament.component import FilamentDep
+from scadbuddy.filament.inventory import FilamentInventory, route_trays
+from scadbuddy.filament.models import TrayView
 from scadbuddy.library.outputs import require_output
 from scadbuddy.library.presets import TEMPLATE_ID_PREFIX
 from scadbuddy.library.settings_store import (
@@ -181,10 +184,6 @@ from scadbuddy.slicing.preview import (
     read_native_toolpath,
 )
 from scadbuddy.slicing.profiles import Profiles
-from scadbuddy.spools.component import Spools, SpoolsDep
-from scadbuddy.spools.models import Overlay
-from scadbuddy.spools.overlay import labels as spool_labels
-from scadbuddy.spools.overlay import status_overlay
 from scadbuddy.workflows.commands import (
     COMMAND_ANSWER_DEADLINE,
     CONNECT_MARGIN_SECONDS,
@@ -1424,6 +1423,7 @@ async def post_check(
     printers: PrintersDep,
     slicing: SlicingDep,
     library: PrintLibraryDep,
+    filament: FilamentDep,
     process_values: Annotated[bool, Query(description=PROCESS_VALUES_QUERY)] = False,
 ) -> PrintCheck:
     """The run's own pre-upload refusals for the body the run would take (#755, #760), so
@@ -1482,6 +1482,9 @@ async def post_check(
             native=await library.serving_native(),
             process_values=process_values,
             part_settings=part_settings,
+            # ScadBuddy's own spools (#6262): the SB spool in each tray and its presets.
+            sb_trays=filament.inventory,
+            sb_presets=filament.presets,
         )
     if refusal is not None:
         check.errors.insert(0, refusal)
@@ -1641,7 +1644,7 @@ async def get_filaments(
     uploads: UploadsDep,
     store: SettingsStoreDep,
     printers: PrintersDep,
-    spools: SpoolsDep,
+    filament: FilamentDep,
     printer_id: Annotated[int | None, Query()] = None,
     printer: PrinterQuery = None,
     plate_id: Annotated[int, Query(ge=1)] = 1,
@@ -1670,12 +1673,12 @@ async def get_filaments(
     settings = store.load()
     route = await opening_route(settings, printers, printer=printer, printer_id=printer_id)
     if route is not None:
-        # A native run's filaments (#3818 tier A, D1): the trays, with the providers'
-        # records over them, and no Bambuddy call.
+        # A native run's filaments (#3818 tier A, D1): the trays, with the SB spool in
+        # each (#6262), and no Bambuddy call.
         return await native_filaments(
             OutputSource(store=outputs, meta=meta, uploads=uploads, settings=settings),
             route,
-            spools,
+            filament.inventory,
             plate_id=plate_id,
             all_plates=all_plates,
             plate_ids=plate_ids,
@@ -1707,7 +1710,7 @@ async def get_choices(
     rack: RackUsageDep,
     paths: PathsDep,
     printers: PrintersDep,
-    spools: SpoolsDep,
+    filament: FilamentDep,
     slicing: SlicingDep,
     printer_id: Annotated[int | None, Query()] = None,
     printer: PrinterQuery = None,
@@ -1730,7 +1733,7 @@ async def get_choices(
             remembered=remembered,
             profiles=slicing.profiles,
             registry=printers,
-            spools=spools,
+            inventory=filament.inventory,
             rack=rack,
         )
         return await with_lan_printers(native_view, settings, printers)
@@ -1750,18 +1753,16 @@ async def get_choices(
     return await with_lan_printers(view, settings, printers)
 
 
-async def _overlay_of(spools: Spools, route: RunRoute) -> tuple[Overlay, dict[str, str]]:
-    """The spool providers' records over ``route``'s trays, a Postgres read (D1), and
-    the providers' names for its notes."""
+async def _held_in(inventory: FilamentInventory, route: RunRoute) -> TrayView | None:
+    """The SB spool in each of ``route``'s trays and the shelf, a Postgres read (#6262)."""
     assert route.row is not None and route.status is not None, "a native route is a report's"
-    overlay = await status_overlay(spools, route.row, route.status, now=datetime.now(UTC))
-    return overlay, spool_labels(spools)
+    return await route_trays(inventory, route.row, route.status)
 
 
 async def native_filaments(
     source: PrintSource,
     route: RunRoute,
-    spools: Spools,
+    inventory: FilamentInventory,
     *,
     plate_id: int,
     all_plates: bool,
@@ -1769,7 +1770,6 @@ async def native_filaments(
 ) -> FilamentOptions:
     """The filament step on a native run (#3818 tier A, D1): no Bambuddy call."""
     assert route.status is not None
-    overlay, labels = await _overlay_of(spools, route)
     return await filament_options(
         None,
         source,
@@ -1778,8 +1778,7 @@ async def native_filaments(
         all_plates=all_plates,
         plate_ids=plate_ids,
         trays_from=route.status,
-        overlay=overlay,
-        provider_labels=labels,
+        held=await _held_in(inventory, route),
     )
 
 
@@ -1791,12 +1790,11 @@ async def native_choices(
     remembered: ModelPrintChoices | None,
     profiles: Profiles | None,
     registry: Printers,
-    spools: Spools,
+    inventory: FilamentInventory,
     rack: RackUsage | None,
 ) -> ChoicesView:
     """The dialog's choices on a native run (D2-D5): the registry, the report, the
-    image's presets and the trays; no Bambuddy call."""
-    overlay, labels = await _overlay_of(spools, route)
+    image's presets and the trays with the SB spool in each; no Bambuddy call."""
     return await native_choices_for(
         source,
         settings,
@@ -1804,8 +1802,7 @@ async def native_choices(
         remembered=remembered,
         profiles=profiles,
         rows=await asyncio.to_thread(registry.store.list),
-        overlay=overlay,
-        provider_labels=labels,
+        held=await _held_in(inventory, route),
         rack=rack,
     )
 

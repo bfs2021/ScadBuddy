@@ -15,6 +15,8 @@ from fastapi.testclient import TestClient
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from scadbuddy.api.deps import STATE_ATTR, AppState
+from scadbuddy.bambuddy.filaments import FilamentOptions, gather_plate_options
+from scadbuddy.bambuddy.models import FilamentRequirements
 from scadbuddy.bambuddy.trays import seen_trays
 from scadbuddy.filament.component import FILAMENT, Filament
 from scadbuddy.filament.models import Material, SpoolCreate
@@ -156,6 +158,76 @@ def _held(client: TestClient, printer_id: str, tray_id: int = 1) -> UUID | None:
     view = _filament(client).inventory.trays(UUID(printer_id), seen)
     holder = next(t for t in view.trays if (t.ams_id, t.tray_id) == (0, tray_id))
     return None if holder.spool is None else holder.spool.id
+
+
+def _filaments(client: TestClient, printer_id: str) -> FilamentOptions:
+    """The native dialog's filament answer for ``printer_id``: its report's trays with
+    the SB spools each holds, as the filaments route reads them (#6262 Task 5)."""
+    row = _printers(client).store.require(printer_id)
+    report = _printers(client).reports.get(printer_id)
+    assert report is not None
+    status = report_status(row, report, now=datetime.now(UTC))
+    held = _filament(client).inventory.trays(UUID(printer_id), seen_trays(status))
+
+    async def read() -> FilamentOptions:
+        (options,) = await gather_plate_options(
+            None,
+            library_file_id=None,
+            plate_ids=[1],
+            known=lambda plate: FilamentRequirements(filaments=[]),
+            trays_from=status,
+            held=held,
+        )
+        return options
+
+    options: FilamentOptions = client.portal.call(read)  # type: ignore[union-attr]
+    return options
+
+
+def _white_spool(client: TestClient, grams: float) -> UUID:
+    filament = _filament(client)
+    material = next(
+        r.id
+        for r in filament.catalog.list("materials")
+        if isinstance(r, Material) and r.name == "PLA"
+    )
+    body = SpoolCreate(material_id=material, rgba="#FFFFFF", grams_left=grams)
+    return filament.spools.create(body, actor="ann").id
+
+
+def test_an_untagged_trays_question_links_through_the_route(
+    client: TestClient, lan_printer: str, spans: InMemorySpanExporter
+) -> None:
+    """#4504, #6262 Task 5: each untagged white tray is asked about with the white SB
+    spools no tray holds, under their numbers. The answer the dialog sends (`linkOf`: the
+    candidate's ``sb_spool_id``) is one the route takes; answered, the tray holds the spool
+    and is not asked about again, and the other tray is offered only the other spool."""
+    full, half = _white_spool(client, 515.0), _white_spool(client, 200.0)
+    # A second untagged white tray, asked about with the same spools until one is linked.
+    report = _report()
+    report["ams"]["ams"][0]["tray"][2] = {**report["ams"]["ams"][0]["tray"][1], "id": "2"}
+    _printers(client).reports.put(lan_printer, report, datetime.now(UTC))
+    with forbid_bambuddy(spans, "https://bambuddy.test"):
+        options = _filaments(client, lan_printer)
+        question, second = options.trays
+        assert (question.ams_id, question.tray_id, second.tray_id) == (0, 1, 2)
+        assert second.candidates == question.candidates
+        by_number = {entry.spool_id: entry for entry in options.shelf}
+        assert [by_number[c].sb_spool_id for c in question.candidates] == [full, half]
+        assert all(by_number[c].sb_number == c for c in question.candidates)
+        entry = by_number[question.candidates[0]]
+        linked = client.put(
+            _path(lan_printer, question.ams_id, question.tray_id),
+            json={"spool_id": str(entry.sb_spool_id)},
+        )
+        assert linked.status_code == 200, linked.text
+        after = _filaments(client, lan_printer)
+    (left,) = after.trays
+    assert (left.ams_id, left.tray_id) == (0, 2)
+    named = {spool.spool_id: spool for spool in after.shelf}
+    assert [named[c].sb_spool_id for c in left.candidates] == [half]
+    tray = next(spool for spool in after.spools if spool.spool_id == question.spool_id)
+    assert (tray.sb_spool_id, tray.remaining_g) == (full, 515.0)
 
 
 def test_tray_spool_links_routes(

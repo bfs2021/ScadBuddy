@@ -61,14 +61,10 @@ async def test_a_native_route_offers_its_loaded_trays(monkeypatch: pytest.Monkey
     async def a_route(*_: Any, **__: Any) -> Any:
         return route
 
-    async def no_overlay(*_: Any, **__: Any) -> dict[str, Any]:
-        return {}
-
     tray = SimpleNamespace(
         spool_id=-3, material="PETG", colour="#00FF00", label="Bambu", color_name="Green"
     )
     monkeypatch.setattr(storefront_slice, "dialog_route", a_route)
-    monkeypatch.setattr(storefront_slice, "status_overlay", no_overlay)
     monkeypatch.setattr(storefront_slice, "loaded_trays", lambda *_: [tray])
 
     class Store:

@@ -8,12 +8,14 @@ native API's write (`spools/native.py`) does.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Any, get_args
+import asyncio
+from collections.abc import Callable, Sequence
+from typing import Any, Protocol, get_args
 from uuid import UUID
 
 from psycopg import Connection
 from psycopg.rows import DictRow
+from psycopg_pool import ConnectionPool
 
 from scadbuddy.bambuddy.models import NozzleSize
 from scadbuddy.bambuddy.resolver import PRINTER_MODEL
@@ -140,3 +142,51 @@ def preset_for(
         if preset.printer_model == printer_model and preset.nozzle_diameter == nozzle_diameter:
             return preset
     return None
+
+
+def presets_by_number(conn: Conn, numbers: Sequence[int]) -> dict[int, list[m.EffectivePreset]]:
+    """`effective_presets` of each SB spool among ``numbers``, by its number; a number no
+    spool has is left out."""
+    rows = conn.execute(
+        "SELECT id, number FROM filament_spools WHERE number = ANY(%s)", (list(numbers),)
+    ).fetchall()
+    return {row["number"]: effective_presets(conn, row["id"]) for row in rows}
+
+
+def bb_spools_by_number(conn: Conn, numbers: Sequence[int]) -> dict[int, int]:
+    """The Bambuddy spool each SB spool among ``numbers`` is linked to
+    (`filament_bb_links`), by its number; an unlinked one is left out."""
+    rows = conn.execute(
+        "SELECT s.number, l.bb_spool_id FROM filament_spools s"
+        " JOIN filament_bb_links l ON l.spool_id = s.id WHERE s.number = ANY(%s)",
+        (list(numbers),),
+    ).fetchall()
+    return {row["number"]: row["bb_spool_id"] for row in rows}
+
+
+class SpoolPresetSource(Protocol):
+    """What a print's plan reads of SB spools' presets, by spool number (#6262 F1,
+    `bambuddy/print_run.py` `resolve_plates`): the API's from Postgres
+    (:class:`PoolSpoolPresets`); the print worker's over its CRUD routes (Task 6)."""
+
+    async def presets(self, numbers: Sequence[int]) -> dict[int, list[m.EffectivePreset]]: ...
+
+    async def bb_spools(self, numbers: Sequence[int]) -> dict[int, int]: ...
+
+
+class PoolSpoolPresets:
+    """:class:`SpoolPresetSource` over a pool whose connections autocommit and return dict
+    rows (the settings store's): each read in a thread."""
+
+    def __init__(self, pool: ConnectionPool[Conn]) -> None:
+        self._pool = pool
+
+    async def presets(self, numbers: Sequence[int]) -> dict[int, list[m.EffectivePreset]]:
+        return await asyncio.to_thread(self._read, presets_by_number, numbers)
+
+    async def bb_spools(self, numbers: Sequence[int]) -> dict[int, int]:
+        return await asyncio.to_thread(self._read, bb_spools_by_number, numbers)
+
+    def _read[T](self, read: Callable[[Conn, Sequence[int]], T], numbers: Sequence[int]) -> T:
+        with self._pool.connection() as conn:
+            return read(conn, numbers)
