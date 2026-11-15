@@ -339,7 +339,21 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   pairing request's advisory lock, the accept's `FOR UPDATE` with the code hash compared in
   constant time, a push subscription under its endpoint row's lock. A tab image's bytes are
   the request's and the answer's body, checked against its sha256 name. Tests
-  `tests/api/test_crud_agent_stores.py`, `test_crud_agent_notify.py`.
+  `tests/api/test_crud_agent_stores.py`, `test_crud_agent_notify.py`. The plugin stores
+  (#5299 step 5): `api/crud_agent_access.py` (areas `access` and `plugin-sessions`: the tool
+  access, each write with its warm-evict NOTIFY in one transaction; the tool listings, a
+  connection test's stored only while its lease holds, under the plugin's or the package's
+  row lock; the leases `…/agent/leases/{key}`, `agent_data/leases.py` over the API's own
+  table `agent_leases`, as `bambuddy/copy_leases.py`, whose acquire also tries the old
+  session advisory lock so an SQL-path agent pod's test makes it `busy`; the upstream MCP
+  sessions), `api/crud_agent_plugins.py` (area `plugins`: the remote plugins and their
+  OAuth sign-ins, sealed and opened with the KEK under the agent's AAD,
+  `agent_data/plugins.py`, which also re-wraps them in the rotation; a token refresh is
+  stored only while the lease `plugin-oauth:<plugin>` holds) and `api/crud_agent_packages.py`
+  (area `plugin-packages`: each write with `agent_data/packages.py` `prune_stale_rows`, the
+  agent's `pruneStaleRows`). `agent_data/access.py` holds the access writes they share.
+  Tests `tests/api/test_crud_agent_access.py`, `test_crud_agent_plugins.py`,
+  `test_crud_agent_packages.py`.
 - `backend/scadbuddy/flow_triggers/` — runs started on a schedule or an event (#2484,
   spec 2026-10-11 §12): `store.py` (`flow_triggers`, their standing grants and fires),
   `fire.py` (the `flow_trigger_fire` activity on the `library` queue), `events.py` (the
@@ -943,6 +957,10 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   short statements on the API's role go on the shared `scadbuddy-rows` pool
   (`rows/component.py` `ROWS`). `tests/test_pg_pools.py` sums an API process's pools
   and fails on any new or bigger one; change it, and README "Running it", on purpose.
+  The agent's lease acquire (`api/crud_agent_access.py`) runs on the settings store's pool.
+  During a roll, a `plugin-oauth:` acquire whose grant row an SQL-path agent pod holds keeps
+  one of its connections for up to the request's `wait_s` (at most `MAX_WAIT`, 25 s). At
+  most `MAX_ROW_WAITS` (2) acquires of a process wait so; the rest poll without waiting.
 - A dict read from a `jsonb` column (e.g. `storefront_listings.params`) has no key order:
   Postgres stores the keys shortest first. Never show or answer its keys in that order;
   order them by the template schema's parameters (#6302).
