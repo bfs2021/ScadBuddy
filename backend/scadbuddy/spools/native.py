@@ -176,12 +176,14 @@ UNKNOWN = "Unknown"
 #: preset under every key a preset for any printer becomes (`filament/presets.py`
 #: `any_printer_keys`), marked ``migrated`` as the 0706Z migration marks them.
 _SHOWN_KEY = (PRINTER_MODEL, "0.4")
+#: `_READ`'s parameters but the spool's id.
+_READ_ARGS = {"unknown": UNKNOWN, "model": _SHOWN_KEY[0], "nozzle": _SHOWN_KEY[1]}
 #: A native spool read off the filament tables: its effective brand, material, colour,
 #: name and label weight (the spool's own, else its type's; `filament/types.py`
 #: `effective`), its ledger's grams left, its `_SHOWN_KEY` preset and the tag it shows (the open
 #: binding's, or, archived, the one its archive closed). ``Unknown``, the material a spool
 #: that names none is given, reads as none, as the native record had it.
-_READ = f"""
+_READ = """
 SELECT s.id, CASE WHEN upper(mat.name) <> upper(%(unknown)s) THEN mat.name END AS material,
        left(coalesce(s.rgba, t.rgba), 7) AS colour,
        br.name AS brand, coalesce(s.colour_name, t.colour_name) AS name,
@@ -190,7 +192,7 @@ SELECT s.id, CASE WHEN upper(mat.name) <> upper(%(unknown)s) THEN mat.name END A
        CASE WHEN tag.shown THEN tag.tray_uuid END AS tray_uuid,
        CASE WHEN tag.shown THEN tag.tag_uid END AS tag_uid,
        (SELECT p.slicer_filament FROM filament_spool_presets p WHERE p.spool_id = s.id
-        AND p.printer_model = '{_SHOWN_KEY[0]}' AND p.nozzle_diameter = '{_SHOWN_KEY[1]}')
+        AND p.printer_model = %(model)s AND p.nozzle_diameter = %(nozzle)s)
        AS preset,
        s.note, s.archived_at, s.created_at, s.updated_at
 FROM filament_spools s
@@ -426,7 +428,7 @@ class NativeSpoolStore:
         where = "" if include_archived else " WHERE s.archived_at IS NULL"
         with self._pool.connection() as conn:
             rows = conn.execute(
-                f"{_READ}{where} ORDER BY s.created_at, s.id", {"unknown": UNKNOWN}
+                f"{_READ}{where} ORDER BY s.created_at, s.id", _READ_ARGS
             ).fetchall()
         return [NativeSpool.model_validate(row) for row in rows]
 
@@ -660,7 +662,7 @@ class NativeSpoolStore:
     @staticmethod
     def _read(conn: Conn, spool_id: UUID) -> NativeSpool | None:
         row = conn.execute(
-            f"{_READ} WHERE s.id = %(id)s", {"unknown": UNKNOWN, "id": spool_id}
+            f"{_READ} WHERE s.id = %(id)s", {**_READ_ARGS, "id": spool_id}
         ).fetchone()
         return None if row is None else NativeSpool.model_validate(row)
 

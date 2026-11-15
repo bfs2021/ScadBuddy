@@ -435,25 +435,36 @@ class FilamentSpoolStore:
         """Replace the spool's own presets with ``rows`` (``[]`` resets it to its type's);
         ``None`` for no such spool. One ``edited`` event holds the spool's own rows
         before and after, as ``changes.presets``. Two rows of one key are
-        `TypeRowsDuplicateError`."""
+        `TypeRowsDuplicateError`. A row sent back as a ``migrated`` row was (the same key
+        and values) stays ``migrated``, so the spool's first type still drops it
+        (`presets.drop_migrated`); a new or changed row is the person's."""
         table = "filament_spool_presets"
         try:
             with self._pool.connection() as conn, conn.transaction():
                 if self._lock(conn, spool_id) is None:
                     return None
                 before = p.own_presets(conn, spool_id)
+                migrated = {
+                    tuple(r.values())
+                    for r in conn.execute(
+                        f"SELECT printer_model, nozzle_diameter, slicer_filament,"
+                        f" slicer_filament_name FROM {table} WHERE spool_id = %s AND migrated",
+                        (spool_id,),
+                    ).fetchall()
+                }
                 conn.execute(f"DELETE FROM {table} WHERE spool_id = %s", (spool_id,))
                 for row in rows:
+                    values = (
+                        row.printer_model,
+                        row.nozzle_diameter,
+                        row.slicer_filament,
+                        row.slicer_filament_name,
+                    )
                     conn.execute(
                         f"INSERT INTO {table} (spool_id, printer_model, nozzle_diameter,"
-                        " slicer_filament, slicer_filament_name) VALUES (%s, %s, %s, %s, %s)",
-                        (
-                            spool_id,
-                            row.printer_model,
-                            row.nozzle_diameter,
-                            row.slicer_filament,
-                            row.slicer_filament_name,
-                        ),
+                        " slicer_filament, slicer_filament_name, migrated)"
+                        " VALUES (%s, %s, %s, %s, %s, %s)",
+                        (spool_id, *values, values in migrated),
                     )
                 after = p.own_presets(conn, spool_id)
                 self._edited(conn, spool_id, "presets", before, after, actor)

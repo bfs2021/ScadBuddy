@@ -234,6 +234,34 @@ def test_a_first_type_drops_the_migrated_presets(pg_pool: PgPool) -> None:
     assert [r["slicer_filament"] for r in after] == ["MINE"]
 
 
+def test_a_whole_list_save_keeps_the_migrated_rows(pg_pool: PgPool) -> None:
+    types, spools, type_id, _ = _type_with_spool(pg_pool)
+    types.set_presets(type_id, [_type_preset(type_id, "0.6", "T6")])
+    kind = types.get(type_id)
+    assert kind is not None
+    needs = spools.create(SpoolCreate(material_id=kind.material_id), actor="ann")
+    _migrated(pg_pool, needs.id, "P1")
+    # What the page sends back: the four rows it showed, the 0.6 one changed, and 0.2's
+    # name filled in; the unchanged 0.4 and 0.8 rows stay migrated.
+    sent = [_own(n, "P1") for n in ("0.4", "0.8")]
+    sent.append(_own("0.6", "MINE"))
+    sent.append(_own("0.2", "P1").model_copy(update={"slicer_filament_name": "named"}))
+    spools.set_presets(needs.id, sent, actor="ann")
+    assert [(r[1], r[3]) for r in _rows(pg_pool, needs.id)] == [
+        ("0.2", False),
+        ("0.4", True),
+        ("0.6", False),
+        ("0.8", True),
+    ]
+    spools.update(needs.id, SpoolPatch(type_id=type_id), actor="ann")
+    presets = spools.presets(needs.id)
+    assert presets is not None
+    assert [(p.nozzle_diameter, p.slicer_filament, p.overridden) for p in presets] == [
+        ("0.2", "P1", True),
+        ("0.6", "MINE", True),
+    ]
+
+
 def test_a_later_type_keeps_the_presets(pg_pool: PgPool) -> None:
     types, spools, type_id, spool_id = _type_with_spool(pg_pool)
     _migrated(pg_pool, spool_id, "P1")
