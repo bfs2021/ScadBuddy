@@ -52,6 +52,7 @@ from scadbuddy.bambuddy.uploads import BambuddyUploadStore
 from scadbuddy.bambuddy.virtual_printers import virtual_printer_kinds
 from scadbuddy.core.problems import ApiError
 from scadbuddy.crud.client import CrudRefusedError, CrudUnavailableError
+from scadbuddy.filament.models import SbSpools
 from scadbuddy.library.settings_store import SettingsReader
 from scadbuddy.operations.kinds import KindsBuild, OperationKind, waiting_on_bambuddy
 from scadbuddy.print_library.component import PRINT_LIBRARY
@@ -375,6 +376,9 @@ def bambuddy_kinds_over(
         slice, so its rerun can slice again."""
         settings = await asyncio.to_thread(settings_store.load)
         body = PrintRunRequest.model_validate(request["request"])
+        # The SB spool in each tray and their presets (#6262), read by the route: this
+        # may run on the print worker, which holds no database. An older request has none.
+        sb = SbSpools.model_validate(request["sb"]) if request.get("sb") else None
         # The run's own decision (plan 2026-10-18 D2): a native run's slice builds no
         # Bambuddy client (D3).
         route = await slice_route(
@@ -442,6 +446,7 @@ def bambuddy_kinds_over(
                     native_reads=own,
                     route=route,
                     title=title,
+                    sb=sb,
                     # The dialog's Reslice (#4433): no finished slice answers it.
                     fresh=bool(request.get("fresh")),
                 )

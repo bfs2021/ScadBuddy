@@ -26,13 +26,20 @@ import trimesh
 from fastapi.testclient import TestClient
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from scadbuddy.bambuddy import preview, print_run
 from scadbuddy.bambuddy.catalogue import stop_refreshes
 from scadbuddy.bambuddy.print_run import run_route
 from scadbuddy.bambuddy.trays import tray_spool_id
 from scadbuddy.core.paths import DataPaths
 from scadbuddy.core.settings import Settings
 from scadbuddy.filament.component import FILAMENT, Filament
-from scadbuddy.filament.models import Material, Spool, SpoolCreate, SpoolEventAdd
+from scadbuddy.filament.models import (
+    Material,
+    Spool,
+    SpoolCreate,
+    SpoolEventAdd,
+    SpoolPresetCreate,
+)
 from scadbuddy.library.settings_store import S3Settings
 from scadbuddy.main import create_app
 from scadbuddy.print_library.ids import is_native_id
@@ -355,6 +362,50 @@ def _a_colour_a_plate(paths: DataPaths, output: str) -> None:
     ]
     plates = [PlateParts((parts[0],), (1,)), PlateParts((parts[1],), (2,))]
     write_plates_3mf(plates, colours, output_3mf, thumbnails=None)
+
+
+def test_the_preview_slices_with_the_held_spools_own_preset(
+    native_app: TestClient,
+    model: str,
+    fake_lan: FakeLan,
+    slicer: FakeSlicer,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#6262: the background slice resolves as `/check` judges, with the SB spool in each
+    tray and its presets. The tagged tray's spool names its own H2C 0.4 preset, over the
+    tray's ``tray_info_idx``; the preview's plan slices with that one, so a run of the
+    same choices queues this slice rather than slicing again."""
+    row = lan_row(native_app, fake_lan)
+    spool = held_spool(native_app)
+    filament: Filament = _state(native_app).components.get(FILAMENT)
+    own = SpoolPresetCreate(
+        printer_model="H2C", nozzle_diameter="0.4", slicer_filament="Generic PLA @BBL H2C"
+    )
+    assert filament.spools.set_presets(spool.id, [own], actor="test") is not None
+    planned: list[Any] = []
+    plan = print_run.plan_run
+
+    async def plan_spy(*args: Any, **kwargs: Any) -> Any:
+        result = await plan(*args, **kwargs)
+        planned.append(result)
+        return result
+
+    monkeypatch.setattr(preview, "plan_run", plan_spy)
+    output = make_output(native_app, model)
+    filaments = native_app.get(f"/api/v1/print/outputs/{output}/filaments", params={"printer": row})
+    assert filaments.status_code == 200, filaments.text
+    body = run_body(row, filaments.json())
+
+    started = native_app.post(
+        f"/api/v1/print/outputs/{output}/preview-slice", json=body, headers=press()
+    )
+    assert started.status_code == 202, started.text
+    op = follow_operation(native_app, started.json(), timeout=60, poll=0.1)
+    assert op["status"] == "succeeded", op
+
+    (run,) = planned
+    presets = [ref.id for ref in run.plates[0].plan.filament_presets]
+    assert presets[0] == "Generic PLA @BBL H2C", presets
 
 
 def test_one_plate_of_several_slices_with_only_its_own_slots(

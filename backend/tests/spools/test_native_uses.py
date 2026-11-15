@@ -1,6 +1,7 @@
 """A native print's filament taken off ScadBuddy's own spools (#4643 part 2): each LAN
-start's grams per slot, saved as it starts against the native record the overlay put in
-the slot's tray, and taken off once, when the run's print settles with that start done."""
+start's grams per slot, saved as it starts against the SB spool the slot's tray holds
+(``sb_spool_id``, #6262), and taken off once, when the run's print settles with that
+start done."""
 
 from __future__ import annotations
 

@@ -2268,8 +2268,8 @@ checked per run from the settings as they are then (`printers/hot_path.py`
 calls Bambuddy are the housekeeping sweeps and the spool providers' refresh (the
 `scadbuddy-spool-providers-<queue>` Schedule, `spool_overlay_refresh_seconds` (restart),
 300 s by default), on their own traces, and any run whose printer's path is `bambuddy`. The
-dialog's filament step reads the loaded trays from the LAN report and lays the cached
-spool records over them; an overlay older than 30 minutes shows trays only, with a note.
+dialog's filament step reads the loaded trays from the LAN report, each with the
+ScadBuddy spool it holds (found by its RFID tag or a person's tray link, #6262).
 The same refresh keeps a copy of Bambuddy's local presets (its OrcaSlicer imports,
 #4645), which the dialog offers and the native slicer slices from; one imported or
 edited in Bambuddy is there after the next refresh. Bambu Cloud user presets are not

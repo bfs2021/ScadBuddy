@@ -48,6 +48,7 @@ from scadbuddy.bambuddy.print_run import (
 from scadbuddy.bambuddy.print_source import PrintSource, bambuddy_client
 from scadbuddy.bambuddy.uploads import BambuddyUploadStore, PreviewSlice
 from scadbuddy.core.problems import ApiError
+from scadbuddy.filament.models import SbSpools
 from scadbuddy.library.settings_store import StoredSettings
 from scadbuddy.operations.kinds import await_to_end
 from scadbuddy.print_library.reads import LibraryReads, reads_for
@@ -113,13 +114,15 @@ async def _planned(
     *,
     route: RunRoute | None = None,
     title: str | None = None,
+    sb: SbSpools | None = None,
 ) -> PlannedRun:
     """The run's own layout, upload and presets for ``request``, never into a project.
 
     On a native ``route`` (plan 2026-10-18 D2) it is the native run's plan, with no
     Bambuddy call (``client`` is ``None``, D3): its copy goes where the run's would with
     no folder chosen, the ``title``'s template folder, so a run of the same choices
-    queues this slice (#2169)."""
+    queues this slice (#2169). ``sb`` is the SB spool in each tray and their presets
+    (#6262), read by the route that started this slice, as `/check` reads them."""
     if source.is_sliced:
         raise ApiError(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -161,6 +164,8 @@ async def _planned(
         reuse_slices=False,
         native=native,
         title=title,
+        held=sb.held if lan and sb is not None else None,
+        presets=sb if lan else None,
     )
     if not planned.plates:
         raise ApiError(status.HTTP_422_UNPROCESSABLE_CONTENT, "There is no plate to slice.")
@@ -252,6 +257,7 @@ async def start_preview(
     route: RunRoute | None = None,
     title: str | None = None,
     fresh: bool = False,
+    sb: SbSpools | None = None,
 ) -> PreviewStarted:
     """Lay out, upload and slice what ``request`` would print, as the run does, and
     record the slice for ``subject``; the first plate when every plate prints.
@@ -261,7 +267,9 @@ async def start_preview(
     change, and a copy filed in a project's folder is that project's record, never
     removed (#317), so trying spools would fill the project. A print into the project
     then slices its own copy."""
-    planned = await _planned(client, source, settings, request, native, route=route, title=title)
+    planned = await _planned(
+        client, source, settings, request, native, route=route, title=title, sb=sb
+    )
     return await _start_plate(
         client,
         settings,
@@ -291,6 +299,7 @@ async def start_preview_plates(
     native_reads: LibraryReads | None = None,
     route: RunRoute | None = None,
     title: str | None = None,
+    sb: SbSpools | None = None,
 ) -> list[PreviewStarted]:
     """:func:`start_preview` for every plate the source lays out (#4250 Ruling 2): a
     quote is the whole output's price, so ``request``'s ``plate_id``, ``plate_ids`` and
@@ -299,7 +308,9 @@ async def start_preview_plates(
     plate, in plate order. A plate that fails to start leaves the earlier plates'
     records to the preview sweeps, as the dialog leaves its own."""
     every = request.model_copy(update={"all_plates": True, "plate_ids": None, "plate_id": 1})
-    planned = await _planned(client, source, settings, every, native, route=route, title=title)
+    planned = await _planned(
+        client, source, settings, every, native, route=route, title=title, sb=sb
+    )
     return [
         await _start_plate(
             client,

@@ -3,7 +3,7 @@ import { expect, test, type Page } from '@playwright/test'
 /**
  * #3818 (plan 2026-10-18 Task 11, AC3 and AC6) — the hot path with no Bambuddy, msw-mocked
  * (`src/mocks/features/hotPath.ts`): render, the print dialog's native slice with its
- * progress, the trays with Bambuddy's records over them, a print to a LAN-linked H2C and
+ * progress, the trays with the SB spools they hold (#6262), a print to a LAN-linked H2C and
  * its card on the Prints page. The mock answers every Bambuddy-only route 409, so any 409
  * is a component still asking Bambuddy.
  */

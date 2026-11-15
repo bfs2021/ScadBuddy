@@ -30,12 +30,11 @@ from scadbuddy.bambuddy.filaments import (
     SpoolOption,
     UnknownTray,
     colour_distance,
-    colours_match,
     family,
     normalise_colour,
 )
 from scadbuddy.bambuddy.models import AmsTray, PrinterStatus
-from scadbuddy.filament.colour import normalise_rgba
+from scadbuddy.filament.colour import normalise_rgba, same_opacity
 from scadbuddy.filament.models import Spool, TrayView
 from scadbuddy.spools.models import SeenTray, clean_tag_uid, clean_tray_uuid
 
@@ -396,10 +395,11 @@ def tray_questions(
     status: PrinterStatus, held: TrayView | None
 ) -> tuple[list[UnknownTray], list[SpoolOption]]:
     """A native run's questions (#4504): each filled, untagged tray that holds no SB spool
-    (``held``, #6262), with the shelf's spools of its material family whose colour
-    `colours_match` the tray's, alpha included (most filament first, empty last), and the
-    shelf rows those questions name. A tray with no such spool is not asked about: it is
-    a choice of its own already, and there is nothing to link it to."""
+    (``held``, #6262), with the shelf's spools it may hold (:func:`close_spools`: its
+    material family, a colour within :data:`CLOSE_COLOUR`, most filament first, empty
+    last) whose opacity is the tray's (`same_opacity`), and the shelf rows those
+    questions name. A tray with no such spool is not asked about: it is a choice of its
+    own already, and there is nothing to link it to."""
     if held is None:
         return [], []
     shelf = shelf_options(held.shelf)
@@ -413,15 +413,11 @@ def tray_questions(
         # would match a shelf spool with none (#4511).
         if not (material := seen.material or ""):
             continue
-        candidates = sorted(
-            (
-                spool
-                for spool in shelf
-                if family(spool.material) == family(material)
-                and colours_match(seen.rgba or seen.colour, spool.colour, spool_rgba=spool.rgba)
-            ),
-            key=lambda spool: (not spool.remaining_g, -(spool.remaining_g or 0), spool.spool_id),
-        )
+        candidates = [
+            spool
+            for spool in close_spools(shelf, material, seen.colour)
+            if same_opacity(seen.rgba, spool.rgba)
+        ]
         if not candidates:
             continue
         offered.update(spool.spool_id for spool in candidates)

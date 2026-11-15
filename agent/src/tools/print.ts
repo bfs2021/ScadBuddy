@@ -674,7 +674,7 @@ export const printTools: Tool[] = [
         .optional()
         .describe(
           "A registry printer's `id` (list_printers): on a printer a run reaches over the LAN the spools are " +
-            "its loaded trays, each a negative `spool_id`, with the spool providers' records over them.",
+            "its loaded trays, each a negative `spool_id`, with the ScadBuddy spool it holds (`sb_spool_id`, `sb_number`).",
         ),
       plate_id: z.number().int().min(1).optional(),
       all_plates: z.boolean().optional(),

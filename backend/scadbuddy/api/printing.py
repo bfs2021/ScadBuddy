@@ -152,8 +152,8 @@ from scadbuddy.core.problems import (
     PROBLEM_MEDIA_TYPE,
     ApiError,
 )
-from scadbuddy.filament.component import FilamentDep
-from scadbuddy.filament.inventory import FilamentInventory, route_trays
+from scadbuddy.filament.component import Filament, FilamentDep
+from scadbuddy.filament.inventory import FilamentInventory, route_sb_spools, route_trays
 from scadbuddy.filament.models import TrayView
 from scadbuddy.library.outputs import require_output
 from scadbuddy.library.presets import TEMPLATE_ID_PREFIX
@@ -1503,14 +1503,19 @@ async def post_preview_slice(
     response: Response,
     outputs: OutputsDep,
     ops: OperationsDep,
+    store: SettingsStoreDep,
+    printers: PrintersDep,
+    filament: FilamentDep,
     idempotency_key: IdempotencyKey = None,
     fresh: FreshQuery = False,
 ) -> PreviewStarted | JSONResponse:
     """#2169: what the dialog's choices would print, sliced through the run's own path
     and never queued. Follow ``GET /print/preview-slices/{job_id}``. A run of the same
     choices queues this slice rather than slicing again. ``fresh`` (the dialog's
-    Reslice, #4433) slices again even when a finished slice of the same choices exists."""
+    Reslice, #4433) slices again even when a finished slice of the same choices exists.
+    On a native route it resolves with the SB spool in each tray, as `/check` does."""
     require_output(outputs, output_id)
+    sb = await preview_sb_spools(store.load(), printers, filament, body)
     result = await run_operation(
         ops,
         response,
@@ -1520,6 +1525,7 @@ async def post_preview_slice(
             "output_id": output_id,
             "request": body.model_dump(mode="json"),
             **({"fresh": True} if fresh else {}),
+            **sb,
         },
         idempotency_key=idempotency_key,
     )
@@ -1757,6 +1763,25 @@ async def _held_in(inventory: FilamentInventory, route: RunRoute) -> TrayView | 
     """The SB spool in each of ``route``'s trays and the shelf, a Postgres read (#6262)."""
     assert route.row is not None and route.status is not None, "a native route is a report's"
     return await route_trays(inventory, route.row, route.status)
+
+
+async def preview_sb_spools(
+    settings: StoredSettings, printers: Printers, filament: Filament, body: PrintRunRequest
+) -> dict[str, Any]:
+    """The background slice's ``sb`` (#6262): on a native route, the SB spool in each tray
+    and their presets, read here because the slice may run on the print worker, which
+    holds no database (`bambuddy/operations.py` `preview_run`). So it resolves as `/check`
+    judges. Empty off a native route."""
+    route = await dialog_route(
+        settings,
+        printers.store,
+        printers.reports,
+        printer=body.printer,
+        printer_id=body.printer_id,
+        asked=body.path,
+    )
+    sb = await route_sb_spools(filament.inventory, filament.presets, route)
+    return {} if sb is None else {"sb": sb.model_dump(mode="json")}
 
 
 async def native_filaments(

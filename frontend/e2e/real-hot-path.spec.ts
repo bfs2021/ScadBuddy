@@ -16,8 +16,8 @@ import { expect, test, type APIRequestContext } from '@playwright/test'
  *   E2E_PRINTER_URL    the fake printer's control port (`GET /__received`)
  *   E2E_RECORDER_URL   the recorder (`GET /__recorded`), in recorder mode
  *
- * With a URL set the native dialog's analyzers read the registry, the report and the
- * overlay, and the Prints page reads Bambuddy's queue and history only after its "Show
+ * With a URL set the native dialog's analyzers read the registry, the report and
+ * ScadBuddy's own spools (#6262), and the Prints page reads Bambuddy's queue and history only after its "Show
  * Bambuddy's queue and print history" button (#4629, #3745), so the recorder pass sees
  * no call at all.
  *

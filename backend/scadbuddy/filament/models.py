@@ -10,6 +10,7 @@ are typed so. Every colour is an `Rgba`: ``#rrggbb`` is stored as ``#RRGGBBFF``.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Annotated, Any, ClassVar, Literal
@@ -739,6 +740,25 @@ class TrayView(BaseModel):
 
     trays: list[TrayHolder]
     shelf: list[Spool]
+
+
+class SbSpools(BaseModel):
+    """What a native run's plan reads of ScadBuddy's own spools, read on the API and
+    carried where no database is (#6262): the dialog's background slice runs on the print
+    worker (`bambuddy/operations.py` `preview_run`), so its route reads these first and
+    sends them in the operation's request. ``spool_presets`` are the held spools' own, by
+    SB number. It is a `filament/presets.py` `SpoolPresetSource` itself; a native plan
+    has no Bambuddy client, so it names no Bambuddy spool."""
+
+    held: TrayView | None = None
+    spool_presets: dict[int, list[EffectivePreset]] = Field(default_factory=dict)
+
+    async def presets(self, numbers: Sequence[int]) -> dict[int, list[EffectivePreset]]:
+        rows = self.spool_presets
+        return {number: rows[number] for number in numbers if number in rows}
+
+    async def bb_spools(self, numbers: Sequence[int]) -> dict[int, int]:
+        return {}
 
 
 # -- tags, bindings, the ledger -------------------------------------------------------

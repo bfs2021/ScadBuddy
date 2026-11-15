@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from psycopg import Connection
@@ -30,12 +31,16 @@ from scadbuddy.bambuddy.trays import seen_trays, tray_label
 from scadbuddy.filament import models as m
 from scadbuddy.filament.colour import normalise_rgba
 from scadbuddy.filament.locations import LocationStore
-from scadbuddy.filament.models import TrayFoundBy, TrayHolder, TrayView
+from scadbuddy.filament.models import SbSpools, TrayFoundBy, TrayHolder, TrayView
 from scadbuddy.filament.spools import FilamentSpoolStore
 from scadbuddy.printers.models import PrinterRow
 from scadbuddy.printers.reports import PrinterReportStore, report_status
 from scadbuddy.printers.store import PrinterStore
 from scadbuddy.spools.models import SeenTray, clean_tag_uid, clean_tray_uuid
+
+if TYPE_CHECKING:
+    from scadbuddy.bambuddy.print_run import RunRoute
+    from scadbuddy.filament.presets import SpoolPresetSource
 
 __all__ = [
     "FilamentInventory",
@@ -43,6 +48,7 @@ __all__ = [
     "TrayNotFilledError",
     "TrayTagClashError",
     "TrayView",
+    "route_sb_spools",
     "route_trays",
     "tray_fingerprint",
 ]
@@ -299,3 +305,22 @@ async def route_trays(
     if inventory is None or row is None or status is None:
         return None
     return await asyncio.to_thread(inventory.trays, UUID(row.id), seen_trays(status))
+
+
+async def route_sb_spools(
+    inventory: FilamentInventory, source: SpoolPresetSource, route: RunRoute | None
+) -> SbSpools | None:
+    """What a native ``route``'s plan reads of SB spools, for a plan made where no
+    database is (the dialog's background slice, #6262): the SB spool in each tray and
+    their own presets. No shelf: a plan's choices are the trays. ``None`` off a native
+    route, or with no report to read the trays from."""
+    if route is None or not route.native:
+        return None
+    held = await route_trays(inventory, route.row, route.status)
+    if held is None:
+        return None
+    numbers = sorted({tray.spool.number for tray in held.trays if tray.spool is not None})
+    return SbSpools(
+        held=held.model_copy(update={"shelf": []}),
+        spool_presets=await source.presets(numbers) if numbers else {},
+    )

@@ -127,7 +127,7 @@ _NO_VALUES = dict.fromkeys(
 def _sb(
     number: int,
     *,
-    rgba: str = "#000000FF",
+    rgba: str | None = "#000000FF",
     material: str | None = "PLA",
     grams: float | None = 640.0,
     name: str | None = None,
@@ -434,6 +434,24 @@ async def test_a_translucent_spool_is_not_offered_for_an_opaque_tray() -> None:
     options = await _gather(h2c_status(), _view(_holding(0, 1), shelf=shelf), "#FFFFFF")
     (question,) = options.trays
     assert question.candidates == [32]
+
+
+async def test_a_tray_question_takes_the_close_cut() -> None:
+    """Review ruling (#6262): the question's cut is `close_spools`' (CIEDE2000 within
+    ``CLOSE_COLOUR``), wider than the auto-match's, since a colour set on the printer by
+    hand is rough. A grey 18 away from the white tray is asked about."""
+    grey = _sb(33, rgba="#B0B0B0FF")
+    options = await _gather(h2c_status(), _view(_holding(0, 1), shelf=(grey,)), "#FFFFFF")
+    (question,) = options.trays
+    assert question.candidates == [33]
+
+
+async def test_a_colourless_shelf_spool_is_not_asked_about() -> None:
+    """Both colours are needed to be close: a shelf spool with none names no tray."""
+    options = await _gather(
+        h2c_status(), _view(_holding(0, 1), shelf=(_sb(34, rgba=None),)), "#FFFFFF"
+    )
+    assert options.trays == [] and options.shelf == []
 
 
 async def test_a_linked_or_tagged_tray_is_not_asked_about() -> None:

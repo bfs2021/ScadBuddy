@@ -3,8 +3,8 @@ import { ok } from './call.js'
 import { defineTool, json, ToolError, type Tool } from './registry.js'
 
 // ScadBuddy's own spool inventory (#4643, tier B of #3818): the records of the native
-// spool provider (backend `spools/native.py`), which the print dialog's tray overlay shows as provider
-// "native" beside Bambuddy's. Write tier: nothing leaves ScadBuddy.
+// spool provider (backend `spools/native.py`, over the `filament_*` tables since #6261). The print
+// dialog's trays read these spools directly (#6262). Write tier: nothing leaves ScadBuddy.
 // Routes: backend/scadbuddy/api/native_spools.py.
 
 const SOURCE = "ScadBuddy's own spool inventory (the native spool provider)"
