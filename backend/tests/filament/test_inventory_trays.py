@@ -203,12 +203,61 @@ def test_a_link_binds_the_trays_free_tag(pg_pool: PgPool, known: bool) -> None:
     assert [e.kind for e in spools.events(a)].count("tag_bound") == 1
 
 
+def _tag_kind(pool: PgPool, spool_id: UUID) -> str | None:
+    with pool.connection() as conn:
+        row = conn.execute(
+            "SELECT t.kind FROM filament_tags t JOIN filament_tag_bindings b ON b.tag_id = t.id"
+            " WHERE b.spool_id = %s AND b.unbound_at IS NULL",
+            (spool_id,),
+        ).fetchone()
+    return None if row is None else str(row["kind"])
+
+
+def test_a_link_takes_an_archived_spools_tag(pg_pool: PgPool) -> None:
+    """An open binding on an archived spool does not hold the tag (as the BB pull's
+    `_bind` reads it): the link rebinds it to the live spool."""
+    s0, a, printer = _spool(pg_pool), _spool(pg_pool), _printer(pg_pool)
+    spools = FilamentSpoolStore(pg_pool)
+    spools.bind_tag(s0, tray_uuid=UUID_A, kind="bambu_mifare", actor="ann")
+    with pg_pool.connection() as conn:
+        conn.execute("UPDATE filament_spools SET archived_at = now() WHERE id = %s", (s0,))
+    inventory = FilamentInventory(pg_pool)
+    inventory.link(printer, 0, 1, a, _seen(tray_uuid=UUID_A), actor="ann")
+    assert spools.open_binding(s0) is None
+    assert spools.open_binding(a) is not None
+    held = _holder(inventory.trays(printer, [_seen(tray_uuid=UUID_A)]))
+    assert (held.spool.id if held.spool else None, held.found_by) == (a, "tag")
+
+
+def test_a_link_rebinds_a_spool_to_the_trays_tag(pg_pool: PgPool) -> None:
+    """Ruling: the tray's reading is the spool's tag; one tag per spool."""
+    a, printer = _spool(pg_pool), _printer(pg_pool)
+    spools = FilamentSpoolStore(pg_pool)
+    spools.bind_tag(a, tag_uid="04AABBCCDD", kind="ntag_openspool", actor="ann")
+    FilamentInventory(pg_pool).link(printer, 0, 1, a, _seen(tray_uuid=UUID_A), actor="ann")
+    tags = {t.tag_uid or t.tray_uuid: t for t in spools.tags(include_unbound=True)}
+    assert tags["04AABBCCDD"].binding is None
+    assert tags[UUID_A].binding is not None and tags[UUID_A].spool_number is not None
+    unbound = [e for e in spools.events(a) if e.kind == "tag_unbound"]
+    assert [e.data.get("reason") for e in unbound] == ["rebound"]
+
+
+def test_a_tag_uid_only_tray_binds_an_other_tag(pg_pool: PgPool) -> None:
+    a, printer = _spool(pg_pool), _printer(pg_pool)
+    inventory = FilamentInventory(pg_pool)
+    inventory.link(printer, 0, 1, a, _seen(tag_uid="0102030405060708"), actor="ann")
+    assert _tag_kind(pg_pool, a) == "other"
+    held = _holder(inventory.trays(printer, [_seen(tag_uid="0102030405060708")]))
+    assert held.found_by == "tag"
+
+
 def test_two_links_to_one_tray_serialise(pg_pool: PgPool) -> None:
     """The tray's advisory lock: links racing for one tray leave one holder."""
-    spools = [_spool(pg_pool) for _ in range(4)]
+    spools = [_spool(pg_pool) for _ in range(3)]
     printer = _printer(pg_pool)
     inventory = FilamentInventory(pg_pool)
-    with ThreadPoolExecutor(4) as workers:
+    # Three threads on the test pool's four connections: each link holds one at a time.
+    with ThreadPoolExecutor(3) as workers:
         list(workers.map(lambda s: inventory.link(printer, 0, 1, s, _seen(), actor="ann"), spools))
     with pg_pool.connection() as conn:
         placed = conn.execute(

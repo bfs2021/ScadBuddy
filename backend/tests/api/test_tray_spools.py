@@ -281,6 +281,20 @@ def test_a_tag_bound_elsewhere_refuses_the_link(client: TestClient, lan_printer:
     assert "tag" in tagged.json()["detail"]
 
 
+def test_a_tray_whose_keys_name_two_tags_is_409(client: TestClient, lan_printer: str) -> None:
+    """Tray 0's ``tray_uuid`` and ``tag_uid`` name two different free tags."""
+    a, b, c = _sb_spool(client), _sb_spool(client), _sb_spool(client)
+    spools = _filament(client).spools
+    spools.bind_tag(b, tray_uuid=UUID_A, kind="bambu_mifare", actor="ann")
+    spools.bind_tag(c, tag_uid="0102030405060708", kind="other", actor="ann")
+    for tag in spools.tags():
+        spools.unbind_tag(tag.id, actor="ann")
+    answer = client.put(_path(lan_printer, tray_id=0), json={"spool_id": str(a)})
+    assert answer.status_code == 409, answer.text
+    after = spools.get(a)
+    assert after is not None and after.location_id is None
+
+
 def test_a_printer_deleted_during_the_link_is_404_not_500(
     client: TestClient, lan_printer: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:

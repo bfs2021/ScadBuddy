@@ -173,17 +173,23 @@ class FilamentInventory:
         tray's previous holder moves to no place first, then the spool moves to the
         tray's place (`LocationStore.ensure_ams`), each with one ``moved`` event.
 
-        A tagged tray whose tag is on no spool (or not yet known) gets that tag bound to
-        the spool in the same transaction (`FilamentSpoolStore.bind_on`), so the tray
-        then resolves by its tag.
+        A tagged tray's tag is bound to the spool in the same transaction
+        (`FilamentSpoolStore.bind_on`), so the tray then resolves by its tag: a tag on no
+        spool, one not seen before, or one whose open binding is on an archived spool
+        (taken for re-use, as the BB pull's `_bind` takes it; that binding closes with
+        ``reason='rebound'``). A spool that holds another tag is rebound to the tray's:
+        the tray's reading is the physical truth, and a spool has one tag. The old
+        binding closes with ``reason='rebound'`` and a ``tag_unbound`` event.
 
         `TrayNotFilledError` when ``seen`` is not that tray filled; `TrayTagClashError`
-        when either of the tray's tags is bound to another spool; `LookupError` for no
-        such printer, or no such unarchived spool.
+        when either of the tray's tags is bound to another unarchived spool;
+        `TagKeysClashError` when its two keys name two different tags; `LookupError` for
+        no such printer, or no such unarchived spool.
 
         Locks, in this order: the tray's advisory lock (`_tray_lock`), so two links or
-        unlinks of one tray take turns; the tray's tags (#6261: every writer of bindings
-        takes the tag first); the spools by id; then the place, ``FOR SHARE`` in
+        unlinks of one tray take turns; the tray's tag, made first when it is new
+        (`FilamentSpoolStore.tag_on`; #6261: every writer of bindings takes the tag
+        first); the spools by id; then the place, ``FOR SHARE`` in
         `LocationStore.move_on`, after its spool, as `LocationStore.move` does. The
         place's row is never locked ``FOR UPDATE`` here, which would invert that order."""
         material = (seen.material or "").strip()
@@ -201,6 +207,10 @@ class FilamentInventory:
         with self._pool.connection() as conn, conn.transaction():
             _tray_lock(conn, printer_id, ams_id, tray_id)
             self._no_tag_clash(conn, seen, spool_id)
+            uid, tray = clean_tag_uid(seen.tag_uid), clean_tray_uuid(seen.tray_uuid)
+            kind: m.TagKind = "bambu_mifare" if tray is not None else "other"
+            if uid is not None or tray is not None:
+                FilamentSpoolStore.tag_on(conn, uid, tray, kind)
             rows = conn.execute(
                 "SELECT id, location_id, archived_at FROM filament_spools"
                 " WHERE id = %s OR location_id = %s ORDER BY id FOR UPDATE",
@@ -213,9 +223,7 @@ class FilamentInventory:
                 if row["id"] != spool_id:
                     LocationStore.move_on(conn, row["id"], None, actor=actor)
             LocationStore.move_on(conn, spool_id, place.id, actor=actor)
-            uid, tray = clean_tag_uid(seen.tag_uid), clean_tray_uuid(seen.tray_uuid)
             if uid is not None or tray is not None:
-                kind: m.TagKind = "bambu_mifare" if tray is not None else "other"
                 FilamentSpoolStore.bind_on(conn, spool_id, uid, tray, kind, False, actor)
             conn.execute(
                 "UPDATE filament_spools SET tray_fingerprint = %s WHERE id = %s",
@@ -257,8 +265,9 @@ class FilamentInventory:
     @staticmethod
     def _no_tag_clash(conn: Conn, seen: SeenTray, spool_id: UUID) -> None:
         """`TrayTagClashError` when a tag the tray reports (its ``tray_uuid``'s or its
-        ``tag_uid``'s, both checked, as `_Keys.hold` reads both) is bound to a spool other
-        than ``spool_id``. Each tag found is locked."""
+        ``tag_uid``'s, both checked, as `_Keys.hold` reads both) is bound to an unarchived
+        spool other than ``spool_id``. An archived holder does not count: `_Keys` ignores
+        it, and the link takes its tag. Each tag found is locked."""
         for column, key in (("tray_uuid", seen.tray_uuid), ("tag_uid", seen.tag_uid)):
             if key is None:
                 continue
@@ -268,8 +277,9 @@ class FilamentInventory:
             if tag is None:
                 continue
             holder = conn.execute(
-                "SELECT spool_id FROM filament_tag_bindings"
-                " WHERE tag_id = %s AND unbound_at IS NULL",
+                "SELECT b.spool_id FROM filament_tag_bindings b JOIN filament_spools s"
+                " ON s.id = b.spool_id WHERE b.tag_id = %s AND b.unbound_at IS NULL"
+                " AND s.archived_at IS NULL",
                 (tag["id"],),
             ).fetchone()
             if holder is not None and holder["spool_id"] != spool_id:

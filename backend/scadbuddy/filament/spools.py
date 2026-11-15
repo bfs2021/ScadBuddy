@@ -637,6 +637,14 @@ class FilamentSpoolStore:
         )
         return m.TagBinding.model_validate(row)
 
+    @staticmethod
+    def tag_on(conn: Conn, uid: str | None, tray: str | None, kind: m.TagKind) -> UUID:
+        """The id of the tag either cleaned key names, locked ``FOR UPDATE`` and given the
+        key it lacked, else a new tag of ``kind``, on ``conn``'s transaction; for a caller
+        that takes the tag before its spools (`filament/inventory.py`). Two tags, one per
+        key, are `TagKeysClashError`."""
+        return FilamentSpoolStore._tag(conn, uid, tray, kind)
+
     @contextmanager
     def transaction(self) -> Iterator[Conn]:
         """A connection in a transaction, for a caller that writes a spool, its tags and
