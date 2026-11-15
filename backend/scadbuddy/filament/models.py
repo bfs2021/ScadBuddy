@@ -799,14 +799,25 @@ class SbSpools(BaseModel):
         return []
 
     @classmethod
-    def of(cls, view: TrayView, spool_presets: dict[int, list[EffectivePreset]]) -> SbSpools:
+    def of(
+        cls,
+        view: TrayView,
+        spool_presets: dict[int, list[EffectivePreset]],
+        printer_model: str,
+    ) -> SbSpools:
+        """``view``'s held trays, and only ``printer_model``'s preset rows: the plan reads
+        no other (`resolver.PRINTER_MODEL`), so other printers' rows never grow the
+        request."""
         return cls(
             trays=[
                 HeldTray(ams_id=tray.ams_id, tray_id=tray.tray_id, spool=HeldSpool.of(tray.spool))
                 for tray in view.trays
                 if tray.spool is not None
             ],
-            spool_presets=spool_presets,
+            spool_presets={
+                number: [row for row in rows if row.printer_model == printer_model]
+                for number, rows in spool_presets.items()
+            },
         )
 
     async def presets(self, numbers: Sequence[int]) -> dict[int, list[EffectivePreset]]:

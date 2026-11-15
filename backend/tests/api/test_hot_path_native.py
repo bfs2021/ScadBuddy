@@ -423,6 +423,45 @@ def test_the_preview_slices_with_the_held_spools_own_preset(
     assert presets[0] == "Generic PLA @BBL H2C", presets
 
 
+def test_the_spool_hint_carries_only_this_printer_models_presets(
+    native_app: TestClient,
+    model: str,
+    fake_lan: FakeLan,
+    slicer: FakeSlicer,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The plan reads only the H2C's rows (`resolver.PRINTER_MODEL`), so the hint carries
+    only those: a spool's presets for other printers never grow the request. The
+    preview still resolves the H2C 0.4 one."""
+    row = lan_row(native_app, fake_lan)
+    spool = held_spool(native_app)
+    filament: Filament = _state(native_app).components.get(FILAMENT)
+    rows = [
+        SpoolPresetCreate(
+            printer_model="H2C", nozzle_diameter="0.4", slicer_filament="Generic PLA @BBL H2C"
+        ),
+        SpoolPresetCreate(
+            printer_model="X1C", nozzle_diameter="0.4", slicer_filament="Bambu PLA Basic @BBL X1C"
+        ),
+    ]
+    assert filament.spools.set_presets(spool.id, rows, actor="test") is not None
+    body = PrintRunRequest.model_validate(run_body(row, {"slots": []}))
+    settings = _state(native_app).settings_store.load()
+
+    hint = _call(
+        native_app, printing.preview_sb_spools, settings, _printers(native_app), filament, body
+    )
+
+    presets = hint["sb"]["spool_presets"][str(spool.number)]
+    assert [(p["printer_model"], p["nozzle_diameter"]) for p in presets] == [("H2C", "0.4")]
+    planned = _preview_plans(monkeypatch)
+    output = make_output(native_app, model)
+    filaments = native_app.get(f"/api/v1/print/outputs/{output}/filaments", params={"printer": row})
+    _preview(native_app, output, run_body(row, filaments.json()))
+    (run,) = planned
+    assert run.plates[0].plan.filament_presets[0].id == "Generic PLA @BBL H2C"
+
+
 def test_a_preview_request_with_no_spool_hint_slices_with_the_trays_presets(
     native_app: TestClient,
     model: str,
@@ -497,7 +536,7 @@ def test_the_spool_hint_carries_only_what_the_plan_reads(
         PrintRunRequest.model_validate(run_body(row, {"slots": []})),
     )
 
-    text = json.dumps(hint)
+    text = json.dumps(hint, ensure_ascii=False)
     assert "Ünïcødé" not in text and "note" not in text
     assert "updated_at" not in text and "shelf" not in text
     (tray,) = hint["sb"]["trays"]

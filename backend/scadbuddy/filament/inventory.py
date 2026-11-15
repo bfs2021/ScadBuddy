@@ -312,12 +312,16 @@ async def route_sb_spools(
 ) -> SbSpools | None:
     """What a native ``route``'s plan reads of SB spools, for a plan made where no
     database is (the dialog's background slice, #6262): the SB spool in each tray and
-    their own presets. No shelf: a plan's choices are the trays. ``None`` off a native
-    route, or with no report to read the trays from."""
+    their own presets for the H2C (`resolver.PRINTER_MODEL`, all the plan reads). No
+    shelf: a plan's choices are the trays. ``None`` off a native route, or with no report
+    to read the trays from."""
+    from scadbuddy.bambuddy.resolver import PRINTER_MODEL
+
     if route is None or not route.native:
         return None
     held = await route_trays(inventory, route.row, route.status)
     if held is None:
         return None
     numbers = sorted({tray.spool.number for tray in held.trays if tray.spool is not None})
-    return SbSpools.of(held, await source.presets(numbers) if numbers else {})
+    presets = await source.presets(numbers) if numbers else {}
+    return SbSpools.of(held, presets, PRINTER_MODEL)

@@ -1024,9 +1024,9 @@ async def gather_plate_options(
 
     ``trays_from`` (a native run, #3818 tier A, plan 2026-10-18 D1) replaces the inventory,
     the printer and its inventory-remain with the printer's loaded trays from its LAN
-    report, with ``held`` (#6262, `filament/inventory.py` `FilamentInventory.trays`, a
-    Postgres read) naming the SB spool in each and the shelf; no client is needed then,
-    and none is read. Without ``held`` the trays are shown alone."""
+    report, with ``held`` (#6262: the inventory's `TrayView`, or the background slice's
+    `SbSpools`, no shelf) naming the SB spool in each and the shelf it has; no client is
+    needed then, and none is read. Without ``held`` the trays are shown alone."""
     if trays_from is not None:
         return await _tray_plate_options(
             client,

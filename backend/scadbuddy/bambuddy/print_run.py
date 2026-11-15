@@ -579,8 +579,8 @@ async def filament_options(
 
     ``trays_from`` is a native run's printer status from its LAN report (#3818 tier A,
     plan 2026-10-18 D1, D4): the choices are its loaded trays with the SB spool ``held``
-    names in each (#6262, `FilamentInventory.trays`, a Postgres read), and nothing is
-    read of Bambuddy: ``client`` is ``None`` then (D3).
+    names in each (#6262: the inventory's `TrayView`, or the background slice's
+    `SbSpools`, no shelf), and nothing is read of Bambuddy: ``client`` is ``None`` then (D3).
     """
     if trays_from is not None:
         return await _tray_options(
@@ -3162,10 +3162,11 @@ async def plan_run(
     nothing of Bambuddy, and ``client`` is ``None`` (D3): the presets are the image's
     (D5), the choices the report's trays (D1), and the copy goes into the native library
     (D6), in the request's folder or the ``title``'s template folder, never a project.
-    ``held`` is the SB spool in each of those trays (#6262, `FilamentInventory.trays`), as
-    the dialog shows them, so a low-filament warning judges the spool's grams (#4551) and
-    a start books against it; ``presets`` reads the chosen SB spools' presets
-    (:func:`resolve_plates`). Without them a native run plans on the trays alone.
+    ``held`` is the SB spool in each of those trays (#6262: the inventory's `TrayView`,
+    or the background slice's `SbSpools`, no shelf), as the dialog shows them, so a
+    low-filament warning judges the spool's grams (#4551) and a start books against it;
+    ``presets`` reads the chosen SB spools' presets (:func:`resolve_plates`). Without
+    them a native run plans on the trays alone.
     """
     if source.is_sliced:
         return await _plan_sliced(bambuddy_client(client), source, settings, request, prepared)
