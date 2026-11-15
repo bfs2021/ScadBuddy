@@ -411,12 +411,12 @@ function ItemStatus({ item, run }: { item: OrderItemDetail; run: SliceQuoteRun |
       )}
       {running && (
         <span className="text-[11px] text-muted-foreground" data-testid={`item-quoting-${item.id}`}>
-          <span>Quoting…</span> since <When at={running.startedAt} /> ({elapsed(running.startedAt, now)})
+          <span>{running.stage === 'rendering' ? 'Rendering…' : 'Quoting…'}</span> since <When at={running.startedAt} /> ({elapsed(running.startedAt, now)})
         </span>
       )}
       {run?.error && (
         <span className="text-[11px] text-warn" data-testid={`item-quote-failed-${item.id}`} title={run.error}>
-          <span>Quote failed</span> <When at={run.finishedAt ?? run.startedAt} />
+          <span>{run.stage === 'rendering' ? 'Render failed' : 'Quote failed'}</span> <When at={run.finishedAt ?? run.startedAt} />
         </span>
       )}
     </span>
