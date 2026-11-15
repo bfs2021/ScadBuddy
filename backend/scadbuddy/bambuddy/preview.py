@@ -23,7 +23,7 @@ from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from contextlib import aclosing
 from datetime import timedelta
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from fastapi import status
 from pydantic import BaseModel, Field
@@ -57,6 +57,10 @@ from scadbuddy.slicing.catalogue import catalogue_for
 from scadbuddy.slicing.profiles import ProfileError, ProfileImageError
 from scadbuddy.slicing.start import NativeSliceStarter, start_native_slice
 from scadbuddy.slicing.store import NativeSliceStore, SliceSubjectError
+
+if TYPE_CHECKING:
+    # `filament.inventory` reads Postgres; the type only here, as `print_run` takes it.
+    from scadbuddy.filament.inventory import SbSpoolReads
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +119,7 @@ async def _planned(
     route: RunRoute | None = None,
     title: str | None = None,
     sb: SbSpools | None = None,
+    reads: SbSpoolReads | None = None,
 ) -> PlannedRun:
     """The run's own layout, upload and presets for ``request``, never into a project.
 
@@ -125,7 +130,8 @@ async def _planned(
     (#6262), read as the run's plan reads them (`filament/inventory.py`
     `read_sb_spools`), so it resolves as `/check` judges and as the run will. With no
     ``sb`` (a read that failed, or a quote's preview until #6262 Task 9) it plans on the
-    trays alone."""
+    trays alone. On Bambuddy's path the choices are the SB spools ``reads`` reads, as the
+    run's (#6262 Task 7)."""
     if source.is_sliced:
         raise ApiError(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -169,6 +175,7 @@ async def _planned(
         title=title,
         held=sb if lan else None,
         presets=sb if lan else None,
+        reads=reads,
     )
     if not planned.plates:
         raise ApiError(status.HTTP_422_UNPROCESSABLE_CONTENT, "There is no plate to slice.")
@@ -261,6 +268,7 @@ async def start_preview(
     title: str | None = None,
     fresh: bool = False,
     sb: SbSpools | None = None,
+    reads: SbSpoolReads | None = None,
 ) -> PreviewStarted:
     """Lay out, upload and slice what ``request`` would print, as the run does, and
     record the slice for ``subject``; the first plate when every plate prints.
@@ -271,7 +279,7 @@ async def start_preview(
     removed (#317), so trying spools would fill the project. A print into the project
     then slices its own copy."""
     planned = await _planned(
-        client, source, settings, request, native, route=route, title=title, sb=sb
+        client, source, settings, request, native, route=route, title=title, sb=sb, reads=reads
     )
     return await _start_plate(
         client,
@@ -303,6 +311,7 @@ async def start_preview_plates(
     route: RunRoute | None = None,
     title: str | None = None,
     sb: SbSpools | None = None,
+    reads: SbSpoolReads | None = None,
 ) -> list[PreviewStarted]:
     """:func:`start_preview` for every plate the source lays out (#4250 Ruling 2): a
     quote is the whole output's price, so ``request``'s ``plate_id``, ``plate_ids`` and
@@ -312,7 +321,7 @@ async def start_preview_plates(
     records to the preview sweeps, as the dialog leaves its own."""
     every = request.model_copy(update={"all_plates": True, "plate_ids": None, "plate_id": 1})
     planned = await _planned(
-        client, source, settings, every, native, route=route, title=title, sb=sb
+        client, source, settings, every, native, route=route, title=title, sb=sb, reads=reads
     )
     return [
         await _start_plate(

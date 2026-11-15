@@ -83,7 +83,7 @@ from scadbuddy.core.gitrepo import COMMIT_ID_PATTERN
 from scadbuddy.core.paths import DataPaths
 from scadbuddy.core.problems import DATABASE_ERRORS, DATABASE_UNAVAILABLE_PROBLEM, ApiError
 from scadbuddy.filament.component import FilamentDep
-from scadbuddy.filament.inventory import FilamentInventory
+from scadbuddy.filament.inventory import FilamentInventory, SbSpoolReads
 from scadbuddy.library.catalogue import Catalogue, declares_pipeline
 from scadbuddy.library.outputs import OUTPUT_ID_PATTERN, OutputMeta, OutputStore, require_output
 from scadbuddy.library.settings_store import ModelPrintChoices, SettingsStore, StoredSettings
@@ -385,7 +385,10 @@ async def analysis_context(
     printers: Printers | None = None,
     inventory: FilamentInventory | None = None,
     schema: SchemaAt | None = None,
+    reads: SbSpoolReads | None = None,
 ) -> AnalysisContext:
+    """``inventory`` reads the SB spool in a native route's trays; ``reads`` the SB
+    spools Bambuddy's path offers (#6262 Task 7)."""
     slug, params, meta = await asyncio.to_thread(_subject, target, outputs, catalogue)
     if meta is None and target.output_id is None and slug is not None:
         meta = await _newest_render(slug, params, outputs, schema)
@@ -406,6 +409,7 @@ async def analysis_context(
         budget=budget,
         downloads=downloads,
         native=native,
+        reads=reads,
     )
     route: RunRoute | None = None
     #: Why the named registry printer cannot be judged (gone, a disagreeing pair): the
@@ -602,6 +606,7 @@ async def post_run(
         printers,
         filament.inventory,
         schema=schema,
+        reads=filament.reads,
     )
     try:
         stored = await asyncio.to_thread(decisions.list, scopes=context.scopes())
@@ -652,6 +657,7 @@ async def post_preview(
         printers,
         filament.inventory,
         schema=schema,
+        reads=filament.reads,
     )
     diagnostic, fix = _find_fix(context, body)
     scope = _fix_scope(context, diagnostic, body.scope)
@@ -715,6 +721,7 @@ async def post_apply(
         printers,
         filament.inventory,
         schema=schema,
+        reads=filament.reads,
     )
     diagnostic, fix = _find_fix(context, body)
     scope = _fix_scope(context, diagnostic, body.scope)

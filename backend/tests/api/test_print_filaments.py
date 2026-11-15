@@ -28,6 +28,8 @@ API = f"{BASE}/api/v1"
 
 
 def inventory_routes(*, printer_id: int | None = 1) -> None:
+    # The picker's spools are SB spools (#6262 Task 7, `recorded_sb_spools`); an order
+    # print's `item_plan` still reads Bambuddy's until Task 9.
     respx.get(f"{API}/inventory/spools").mock(
         return_value=httpx.Response(200, json=recording("inventory-spools.json"))
     )
@@ -144,6 +146,7 @@ def prepared(client: TestClient, model: str) -> str:
 
 @pytest.mark.requires_postgres
 @respx.mock
+@pytest.mark.usefixtures("recorded_sb_spools")
 def test_the_filament_step_answers_with_the_inventory_and_a_suggestion(
     client: TestClient, model: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -173,6 +176,7 @@ def test_the_filament_step_answers_with_the_inventory_and_a_suggestion(
 
 @pytest.mark.requires_postgres
 @respx.mock
+@pytest.mark.usefixtures("recorded_sb_spools")
 def test_without_a_printer_the_spools_are_still_listed(client: TestClient, model: str) -> None:
     """The inventory does not need a printer; only the reconciled weights do."""
     output_id = prepared(client, model)
@@ -297,6 +301,7 @@ def test_an_unreadable_status_opens_the_filament_step_with_no_nozzles(
 
 @pytest.mark.requires_postgres
 @respx.mock
+@pytest.mark.usefixtures("recorded_sb_spools")
 def test_each_loaded_spool_says_which_extruder_it_feeds(client: TestClient, model: str) -> None:
     """#469 — the recorded H2C has the Filament Track Switch: AMS 0/1 on inlet B (the
     right extruder), AMS 2 on inlet A (the left). A shelf spool has no side."""

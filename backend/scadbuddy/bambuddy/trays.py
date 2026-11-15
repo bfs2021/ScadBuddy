@@ -4,8 +4,10 @@ A tray loaded with third-party filament has no RFID tag: the printer reports wha
 someone set on it (a material and a colour) but no ``tag_uid`` or ``tray_uuid``, so
 Bambuddy cannot tell which inventory spool is in it and assigns none. The spool in it
 then shows as a shelf spool. ScadBuddy cannot know which spool it is either, so the
-print dialog asks one plain question, and on the person's "yes" records the answer in
-Bambuddy (``POST /inventory/assignments``, :meth:`BambuddyClient.assign_spool`).
+print dialog asks one plain question, and on the person's "yes" records the answer:
+the SB spool at the tray first (`FilamentInventory.link`, #6262 Task 7), then, for a
+spool linked to a Bambuddy spool, in Bambuddy (``POST /inventory/assignments``,
+:meth:`BambuddyClient.assign_spool`; ``api/printing.py`` ``post_tray_spool``).
 
 Until then, the tray itself is a choice: a :class:`~scadbuddy.bambuddy.filaments.SpoolOption`
 with a negative :func:`tray_spool_id`, of the tray's material and colour, with no

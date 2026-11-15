@@ -10,7 +10,7 @@ from typing import Annotated
 from scadbuddy.api.components import component_dep
 from scadbuddy.core.components import Component, Components, Core, Key
 from scadbuddy.filament.catalog import CatalogStore
-from scadbuddy.filament.inventory import FilamentInventory
+from scadbuddy.filament.inventory import FilamentInventory, PoolSbSpoolReads
 from scadbuddy.filament.locations import LocationStore
 from scadbuddy.filament.presets import PoolSpoolPresets
 from scadbuddy.filament.print_uses import PoolPrintUses, print_use_hook
@@ -27,6 +27,13 @@ class Filament:
     inventory: FilamentInventory
     #: What a print's plan reads of SB spools' presets (#6262 F1, `resolve_plates`).
     presets: PoolSpoolPresets
+
+    @property
+    def reads(self) -> PoolSbSpoolReads:
+        """Every SB spool read a print's plan makes, as the print worker's CRUD routes
+        make them (`SbSpoolReads`): Bambuddy's path's picker rows among them (#6262
+        Task 7)."""
+        return PoolSbSpoolReads(self.inventory, self.presets)
 
 
 FILAMENT: Key[Filament] = Key("filament")

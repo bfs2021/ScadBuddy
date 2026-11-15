@@ -35,6 +35,7 @@ from scadbuddy.workflows.commands import TemporalRefusedError
 from tests.api.conftest import read_stored
 from tests.api.test_settings_runtime import _state
 from tests.bambuddy.conftest import recording
+from tests.support.sb_rows import seed_app_sb_spools
 
 # The trailing slash is load-bearing: /api/v1/printers is a 404 on Bambuddy 1.2.5.5.
 PRINTERS_URL = "https://bambuddy.test/api/v1/printers/"
@@ -911,12 +912,11 @@ def _profile_printer(client: TestClient) -> str:
 @respx.mock
 def test_profile_with_unknown_spool_is_422(client: TestClient) -> None:
     """#6153: each spool of the shop slice profile is one the print dialog offers on its
-    printer; here Bambuddy's inventory, as the printer runs on Bambuddy's path."""
+    printer; here ScadBuddy's own spools by number, as the printer runs on Bambuddy's
+    path (#6262 Task 7)."""
     printer = _profile_printer(client)
     client.put("/api/v1/settings", json={"bambuddy_url": "https://bambuddy.test"})
-    respx.get("https://bambuddy.test/api/v1/inventory/spools").mock(
-        return_value=httpx.Response(200, json=[{"id": 7, "material": "PLA"}])
-    )
+    seed_app_sb_spools(client, [{"id": 7, "material": "PLA"}])
     refused = client.put(
         "/api/v1/settings",
         json={"storefront_slice_profile": {"printer": printer, "spools": {"PETG": 8}}},
@@ -942,16 +942,14 @@ def test_profile_with_unknown_spool_is_422(client: TestClient) -> None:
 
 @respx.mock
 def test_profile_is_checked_against_the_connection_sent_beside_it(client: TestClient) -> None:
-    """#6255 review: one PUT that sets the Bambuddy URL and the profile checks the spools
-    at the new URL, not the stored one."""
+    """#6255 review: one PUT that sets the Bambuddy URL and the profile checks the
+    profile with the new connection, not the stored one. Since #6262 Task 7 the spools
+    on Bambuddy's path are ScadBuddy's own, so neither URL's spools are read."""
     printer = _profile_printer(client)
     client.put("/api/v1/settings", json={"bambuddy_url": "https://old.test"})
-    respx.get("https://old.test/api/v1/inventory/spools").mock(
-        return_value=httpx.Response(200, json=[])
-    )
-    respx.get("https://new.test/api/v1/inventory/spools").mock(
-        return_value=httpx.Response(200, json=[{"id": 7, "material": "PLA"}])
-    )
+    seed_app_sb_spools(client, [{"id": 7, "material": "PLA"}])
+    old = respx.get("https://old.test/api/v1/inventory/spools")
+    new = respx.get("https://new.test/api/v1/inventory/spools")
     saved = client.put(
         "/api/v1/settings",
         json={
@@ -961,6 +959,7 @@ def test_profile_is_checked_against_the_connection_sent_beside_it(client: TestCl
     )
     assert saved.status_code == 200, saved.text
     assert saved.json()["storefront_slice_profile"] == {"printer": printer, "spools": {"pla": 7}}
+    assert not old.called and not new.called
 
 
 @respx.mock

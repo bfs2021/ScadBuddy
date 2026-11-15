@@ -2250,7 +2250,8 @@ export const api = {
     `${API_BASE}/print/library/${fileId}/preview-slices/${jobId}/toolpath${slicerQuery(slicer)}`,
 
   /**
-   * #2164 — record in Bambuddy which spool is in a tray it had no spool for. Sent only
+   * #2164, #6262 — record which SB spool (by number) is in a tray Bambuddy had no spool
+   * for; ScadBuddy also writes Bambuddy's assignment for a linked spool. Sent only
    * on the person's own "yes".
    */
   assignTraySpool: (printerId: number, amsId: number, trayId: number, spoolId: number) =>

@@ -62,6 +62,7 @@ from scadbuddy.slicing.catalogue import catalogue_for
 from scadbuddy.slicing.profiles import Profiles
 
 if TYPE_CHECKING:
+    from scadbuddy.filament.inventory import SbSpoolReads
     from scadbuddy.filament.models import TrayView
     from scadbuddy.printers.component import Printers
 
@@ -176,6 +177,7 @@ async def choices_for(
     rack: RackUsage | None = None,
     native: Profiles | None = None,
     refresh_claim: RefreshClaim | None = None,
+    reads: SbSpoolReads | None = None,
 ) -> ChoicesView:
     """The dialog's choices, read in two waves (#2504): ``source`` and the printers
     together, then everything that needs the chosen printer together, its status read
@@ -187,7 +189,8 @@ async def choices_for(
     a few wasted reads on a rare path, for not waiting on the file every time. The
     rack's state is recorded by the second wave, so a failed catalogue read raises after
     it is written, not before (#2907). With ``native`` (the image's profiles) the
-    catalogue is theirs (``slicing/catalogue.py``), and no preset is read from Bambuddy."""
+    catalogue is theirs (``slicing/catalogue.py``), and no preset is read from Bambuddy.
+    The filament step offers ScadBuddy's own spools, read from ``reads`` (#6262 Task 7)."""
     presets = asyncio.ensure_future(
         # A native run's presets are the image's own: nothing read from Bambuddy, and
         # nothing kept under `cache` (#3818 tier A).
@@ -204,6 +207,7 @@ async def choices_for(
             remembered=remembered,
             printer_id=printer_id,
             rack=rack,
+            reads=reads,
         )
     finally:
         # A failed source or printer list answers without the catalogue; a catalogue
@@ -222,6 +226,7 @@ async def _choices(
     remembered: ModelPrintChoices | None,
     printer_id: int | None,
     rack: RackUsage | None,
+    reads: SbSpoolReads | None,
 ) -> ChoicesView:
     loaded, listed = await asyncio.gather(source, client.printers(), return_exceptions=True)
     ready = settled(loaded)
@@ -243,7 +248,9 @@ async def _choices(
     last: str | None = None
     if printer_id is None:
         read_presets, read = await asyncio.gather(
-            presets, filament_options(client, ready, printer_id=None), return_exceptions=True
+            presets,
+            filament_options(client, ready, printer_id=None, reads=reads),
+            return_exceptions=True,
         )
         catalogue = settled(read_presets)
         filaments = settled(read)
@@ -253,7 +260,7 @@ async def _choices(
             presets,
             _record_seen(rack, settings.registry_printer(printer_id), reading),
             _last_bed_type(client, printer_id),
-            filament_options(client, ready, printer_id=printer_id, status=reading),
+            filament_options(client, ready, printer_id=printer_id, status=reading, reads=reads),
             return_exceptions=True,
         )
         catalogue = settled(read_presets)
@@ -397,6 +404,7 @@ async def choices_for_output(
     catalogue_key: bytes | None,
     rack: RackUsage | None = None,
     refresh_claim: RefreshClaim | None = None,
+    reads: SbSpoolReads | None = None,
 ) -> ChoicesView:
     return await choices_for(
         client,
@@ -408,6 +416,7 @@ async def choices_for_output(
         catalogue_key=catalogue_key,
         rack=rack,
         refresh_claim=refresh_claim,
+        reads=reads,
     )
 
 

@@ -48,6 +48,18 @@ describe('TrayQuestion (#2164)', () => {
     expect(assign).toHaveBeenCalledWith(1, 3, 3, 16)
   })
 
+  it("posts the SB spool's number on Bambuddy's path, and names ScadBuddy when it fails (#6262)", async () => {
+    // On Bambuddy's path an option's spool_id is the SB spool's number (build_options).
+    const sb: SpoolOption = { ...black, spool_id: 7, sb_number: 7, sb_spool_id: '8d6f3c1e-0000-4000-8000-000000000007' }
+    const assign = vi.spyOn(api, 'assignTraySpool').mockRejectedValue(new Error('offline'))
+    render(<TrayQuestion printerId={1} tray={{ ...tray, candidates: [7] }} spools={[sb]} onAssigned={vi.fn()} onDecline={vi.fn()} />)
+    expect(screen.getByText(/spool #7/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, that one' }))
+    expect(await screen.findByText('ScadBuddy could not record it.')).toBeInTheDocument()
+    expect(assign).toHaveBeenCalledWith(1, 3, 3, 7)
+    assign.mockRestore()
+  })
+
   it('remembers a no until the tray changes', () => {
     const { result, rerender } = renderHook(({ trays }) => useDeclinedTrays(1, trays), { initialProps: { trays: [tray] } })
     expect(result.current.open).toEqual([tray])

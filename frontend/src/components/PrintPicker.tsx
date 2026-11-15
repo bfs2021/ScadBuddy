@@ -1065,7 +1065,7 @@ export function PrintPicker({
               goal: arrangeGoal,
               ...(registryPrinter ? { printer: registryPrinter } : {}),
               printer_id: sentPrinterId,
-              filament_plan: { slots: plan, force_colour_match: forceColourMatch },
+              filament_plan: { slots: plan, force_colour_match: forceColourMatch, ids: 'sb' },
               // #3637 — every colour a recoloured copy prints in has its slot, whether
               // or not this output's `colors` already lists it.
               colours: [
@@ -1152,7 +1152,7 @@ export function PrintPicker({
           // The registry printer, so a native dialog's analysis asks Bambuddy nothing (#4629).
           ...(registryPrinter ? { printer: registryPrinter } : {}),
           printer_id: sentPrinterId,
-          filament_plan: { slots: plan, force_colour_match: forceColourMatch },
+          filament_plan: { slots: plan, force_colour_match: forceColourMatch, ids: 'sb' },
           choices: printChoices,
           ...plateFields(plate),
           copies: effectiveCopies,
@@ -1171,7 +1171,7 @@ export function PrintPicker({
       ? {
           ...(registryPrinter ? { printer: registryPrinter } : {}),
           printer_id: sentPrinterId,
-          filament_plan: { slots: plan, force_colour_match: forceColourMatch },
+          filament_plan: { slots: plan, force_colour_match: forceColourMatch, ids: 'sb' },
           choices: printChoices,
           ...plateFields(plate),
           rack_position: rackPosition,
@@ -1525,7 +1525,7 @@ export function PrintPicker({
       await quote.start({
         ...(registryPrinter ? { printer: registryPrinter } : {}),
         printer_id: sentPrinterId,
-        filament_plan: { slots: plan, force_colour_match: forceColourMatch },
+        filament_plan: { slots: plan, force_colour_match: forceColourMatch, ids: 'sb' },
         choices: printChoices,
         filaments: priced,
         // A support slot with no filament chosen yet prices nothing.
@@ -1555,7 +1555,7 @@ export function PrintPicker({
       await itemPrint.start({
         ...(registryPrinter ? { printer: registryPrinter } : {}),
         printer_id: sentPrinterId,
-        filament_plan: { slots: plan, force_colour_match: forceColourMatch },
+        filament_plan: { slots: plan, force_colour_match: forceColourMatch, ids: 'sb' },
         choices: printChoices,
         // #5627: the quote's, as the background slice was made with them.
         ...(sentParts === null ? {} : { part_settings: sentParts }),

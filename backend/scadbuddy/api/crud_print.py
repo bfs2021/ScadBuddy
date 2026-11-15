@@ -105,7 +105,9 @@ A native run's SB spools and what its LAN starts use of them (area ``filament``,
 6) are `filament/inventory.py`'s and `filament/print_uses.py`'s, for `RemoteFilamentTrays`
 and `RemotePrintUses`: ``…/filament/trays`` (the SB spool in each tray a printer reports,
 a ``POST`` read so the trays' RFID keys stay out of the URL), ``…/filament/presets`` (the
-held spools' presets by number, a read), and ``…/filament/print-uses`` and
+held spools' presets by number, a read), ``…/filament/rows`` and ``…/filament/bb-to-sb``
+(the Bambuddy path's SB spools with their trays, and the SB number of each Bambuddy spool
+id an older plan names; reads, Task 7), and ``…/filament/print-uses`` and
 ``…/filament/print-uses/settle`` (a start's estimates, and a run's settle under its
 spools' row locks). Each write runs whole in one transaction with its ledger row, once
 per ``Idempotency-Key``: each answers what it booked, which a resend would not repeat.
@@ -190,7 +192,7 @@ from scadbuddy.bambuddy.copy_leases import (
     CopyLeases,
     LeaseLostError,
 )
-from scadbuddy.bambuddy.models import LocalPreset, LocalPresetDetail
+from scadbuddy.bambuddy.models import LocalPreset, LocalPresetDetail, SpoolAssignment
 from scadbuddy.bambuddy.outcomes import PrintOutcomeStore
 from scadbuddy.bambuddy.print_links import LinkedPrint, PrintLink, PrintReprint, PrintSend
 from scadbuddy.bambuddy.print_run import PrintRunResult
@@ -232,7 +234,7 @@ from scadbuddy.crud.print import (
 from scadbuddy.crud.wire import NOT_CONFIGURED
 from scadbuddy.filament import print_uses
 from scadbuddy.filament.component import FilamentDep
-from scadbuddy.filament.models import EffectivePreset, TrayView
+from scadbuddy.filament.models import EffectivePreset, FilamentInventorySpool, TrayView
 from scadbuddy.filament.print_uses import SlotUse
 from scadbuddy.library.output_prints import OutputPrintStore
 from scadbuddy.library.outputs import LanPlateSend, PlateSend
@@ -1720,6 +1722,11 @@ class SpoolsChanged(BaseModel):
 MAX_TRAYS = 64
 #: The most SB spool numbers one presets read names: one per tray it read.
 MAX_NUMBERS = MAX_TRAYS
+#: The most Bambuddy assignments one rows read sends: a tray each, over every printer
+#: Bambuddy has (#6262 Task 7).
+MAX_ASSIGNMENTS = 1024
+#: The most Bambuddy spool ids one ``bb-to-sb`` read names: one per slot of a plan.
+MAX_BB_IDS = 256
 
 
 class TraysAsk(BaseModel):
@@ -1729,6 +1736,14 @@ class TraysAsk(BaseModel):
 
 class PresetsAsk(BaseModel):
     numbers: list[int] = Field(max_length=MAX_NUMBERS)
+
+
+class RowsAsk(BaseModel):
+    bb_assignments: list[SpoolAssignment] = Field(default_factory=list, max_length=MAX_ASSIGNMENTS)
+
+
+class BbIdsAsk(BaseModel):
+    ids: list[int] = Field(max_length=MAX_BB_IDS)
 
 
 class PrintUsesBody(BaseModel):
@@ -1903,6 +1918,38 @@ async def filament_presets(
 ) -> dict[int, list[EffectivePreset]]:
     """Natural: a read."""
     return await filament.presets.presets(body.numbers)
+
+
+@router.post(
+    "/filament/rows",
+    name="crud_print_filament_rows",
+    summary="Every SB spool, its tray and its Bambuddy spool",
+    description=(
+        "Every unarchived SB spool by number, the tray it is in and the Bambuddy spool it"
+        " is linked to: the Bambuddy path's print picker (#6262 Task 7). A spool's tray is"
+        " the one a registry printer's latest report holds it in, else the one"
+        " `bb_assignments` (Bambuddy's `GET /inventory/assignments`) puts its linked"
+        " Bambuddy spool in. A read, sent as a `POST` for its body."
+    ),
+)
+async def filament_rows(body: RowsAsk, filament: FilamentDep) -> list[FilamentInventorySpool]:
+    """Natural: a read."""
+    return await asyncio.to_thread(filament.inventory.rows, bb_assignments=body.bb_assignments)
+
+
+@router.post(
+    "/filament/bb-to-sb",
+    name="crud_print_filament_bb_to_sb",
+    summary="The SB spool number of each Bambuddy spool id",
+    description=(
+        "The SB spool number each of `ids` (Bambuddy spool ids, as a plan from before #6262"
+        " Task 7 names them) is linked to through `filament_bb_links`; an unlinked id is"
+        " left out. A read."
+    ),
+)
+async def filament_bb_to_sb(body: BbIdsAsk, filament: FilamentDep) -> dict[int, int]:
+    """Natural: a read."""
+    return await asyncio.to_thread(filament.inventory.bb_to_sb, body.ids)
 
 
 @router.post(

@@ -18,6 +18,7 @@ from psycopg.types.json import Jsonb
 
 from scadbuddy.api.crud_areas import CRUD_AREAS
 from scadbuddy.auth.service_credentials import ServiceCredentialStore
+from scadbuddy.bambuddy.models import SpoolAssignment
 from scadbuddy.core.settings import Settings
 from scadbuddy.crud.client import CrudClient, CrudRefusedError
 from scadbuddy.crud.idempotency import KEY_REQUIRED_PROBLEM
@@ -140,6 +141,8 @@ async def test_the_trays_route_needs_the_print_credential(store: SettingsStore) 
             "/filament/presets",
             "/filament/print-uses",
             "/filament/print-uses/settle",
+            "/filament/rows",
+            "/filament/bb-to-sb",
         ):
             with pytest.raises(CrudRefusedError) as wrong:
                 other.request("POST", f"{BASE}{path}", json={})
@@ -176,6 +179,36 @@ async def test_the_presets_answer_as_the_apis_own(store: SettingsStore, crud: Cr
     assert remote == await PoolSpoolPresets(store.pool).presets(numbers)
     assert [p.slicer_filament for p in remote[found.number]] == ["Generic PLA @BBL H2C"]
     assert await RemoteFilamentTrays(crud).presets([]) == {}
+
+
+@pg
+async def test_the_rows_and_bb_links_answer_as_the_apis_own(
+    store: SettingsStore, crud: CrudClient
+) -> None:
+    """#6262 Task 7: the Bambuddy path's picker rows and its plan's id mapping, read by
+    the print worker through the CRUD service."""
+    linked = _spool(store)
+    _spool(store)
+    now = datetime.now(UTC)
+    with store.pool.connection() as conn:
+        conn.execute(
+            "INSERT INTO filament_bb_links (spool_id, bb_spool_id, bb_updated_at, linked_at)"
+            " VALUES (%s, 42, %s, %s)",
+            (linked, now, now),
+        )
+    assignments = [
+        SpoolAssignment(id=1, spool_id=42, printer_id=7, printer_name="H2C", ams_id=0, tray_id=2)
+    ]
+    remote = RemoteFilamentTrays(crud)
+
+    rows = await remote.rows(assignments)
+
+    assert rows == FilamentInventory(store.pool).rows(bb_assignments=assignments)
+    [row] = [r for r in rows if r.spool.id == linked]
+    assert row.bb_spool_id == 42
+    assert row.loaded is not None and (row.loaded.ams_id, row.loaded.tray_id) == (0, 2)
+    assert await remote.bb_to_sb([42, 43]) == {42: row.spool.number}
+    assert await remote.bb_to_sb([]) == {}
 
 
 @pg

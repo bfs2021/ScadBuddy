@@ -44,7 +44,8 @@ from scadbuddy.crud.guard import CrudCaller, crud_router
 #: access codes, and a virtual printer's sealed code opened (#5298 Task 33). Its
 #: ``filament`` area is ``…/print/filament/trays``, ``…/filament/presets``,
 #: ``…/filament/print-uses`` and ``…/filament/print-uses/settle``: a native run's SB
-#: spools and what its LAN starts use of them (#6262 Task 6). An area of its own, so a
+#: spools and what its LAN starts use of them (#6262 Task 6); and ``…/filament/rows`` and
+#: ``…/filament/bb-to-sb``, the Bambuddy path's SB spools (Task 7). An area of its own, so a
 #: print worker that books there waits for an API that serves them. The intake
 #: ``sources`` area is ``…/intake/sources/{id}/read``, ``…/preview`` and ``…/check``: a
 #: customer's staged file, checked by the intake worker (#6133).

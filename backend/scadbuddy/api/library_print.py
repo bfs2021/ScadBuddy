@@ -1264,6 +1264,7 @@ async def get_library_choices(
             catalogue_key=catalogue_name_key(store.kek),
             refresh_claim=catalogue_refresh_claim(store.defaults.database_url),
             rack=rack,
+            reads=filament.reads,
         )
     return await with_lan_printers(view, settings, printers)
 
@@ -1340,6 +1341,7 @@ async def get_library_filaments(
                 files=files,
             ),
             files=files,
+            reads=filament.reads,
         )
 
 
@@ -1699,4 +1701,5 @@ async def post_library_check(
             process_values=process_values,
             sb_trays=filament.inventory,
             sb_presets=filament.presets,
+            sb_reads=filament.reads,
         )

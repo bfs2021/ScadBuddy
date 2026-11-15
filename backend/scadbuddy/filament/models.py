@@ -742,6 +742,29 @@ class TrayView(BaseModel):
     shelf: list[Spool]
 
 
+class TrayPlace(BaseModel):
+    """The tray an SB spool is in (#6262 Task 7, `FilamentInventory.rows`): its
+    registry printer, that printer's Bambuddy id and name, and the tray. ``printer_id``
+    is ``None`` only for a Bambuddy assignment on a printer the registry has no row for
+    yet; ``bambuddy_printer_id`` is ``None`` for a printer reached over the LAN alone."""
+
+    printer_id: str | None
+    bambuddy_printer_id: int | None
+    printer_name: str | None
+    ams_id: int
+    tray_id: int
+
+
+class FilamentInventorySpool(BaseModel):
+    """An SB spool, the tray it is in, and the Bambuddy spool it is linked to
+    (`filament_bb_links`), as the Bambuddy path's print picker reads it (#6262 Task 7).
+    Named apart from `bambuddy/farm.py`'s ``InventorySpool`` (plan F16)."""
+
+    spool: Spool
+    loaded: TrayPlace | None = None
+    bb_spool_id: int | None = None
+
+
 class HeldSpool(BaseModel):
     """What a tray's picker row and its low-filament warnings read of the SB spool in it
     (`bambuddy/trays.py` `loaded_trays`): its id and number, its effective brand and

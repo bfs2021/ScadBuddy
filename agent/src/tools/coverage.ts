@@ -605,8 +605,9 @@ export const NOT_A_TOOL: readonly { operation: Operation; reason: string }[] = [
   {
     operation: 'POST /api/v1/print/printers/{printer_id}/trays/{ams_id}/{tray_id}/spool',
     reason:
-      "Records in Bambuddy which spool is in an untagged tray (#2164), sent only on a person's own answer " +
-      "to the print dialog's question; an agent cannot see which spool is physically in the tray.",
+      'Records which ScadBuddy spool is in an untagged tray (#2164, #6262): its tray place first, then, for a ' +
+      "spool linked to Bambuddy's, Bambuddy's assignment. Sent only on a person's own answer to the print " +
+      "dialog's question; an agent cannot see which spool is physically in the tray.",
   },
   {
     operation: 'GET /api/v1/print/printers/{printer_id}/camera/stream',

@@ -42,6 +42,7 @@ from scadbuddy.bambuddy.runs import PrintRun, run_key
 from scadbuddy.bambuddy.subject import PrintSubject
 from scadbuddy.core.gitrepo import GitError, RevisionNotFoundError
 from scadbuddy.core.problems import ApiError
+from scadbuddy.filament.component import FILAMENT
 from scadbuddy.library.catalogue import declares_pipeline
 from scadbuddy.library.libraries import CheckoutFetcher
 from scadbuddy.library.operations import PIN_TIMEOUT
@@ -218,6 +219,8 @@ class PreviewSlicer:
         lan = route is not None and route.native
         native_reads = await self.components.get(PRINT_LIBRARY).serving_native()
         slicing = self.components.get(SLICING)
+        # Bambuddy's path offers ScadBuddy's own spools (#6262 Task 7), as the run's.
+        reads = self.components.get(FILAMENT).reads
         if file_id is not None:
             return await start_library_quote_preview(
                 file_id,
@@ -231,6 +234,7 @@ class PreviewSlicer:
                 temporal=slicing.temporal(),
                 native_reads=native_reads,
                 route=route,
+                reads=reads,
             )
         assert output_id is not None
         outputs = LocalOutputs(core.outputs, core.catalogue)
@@ -264,6 +268,7 @@ class PreviewSlicer:
             native_reads=native_reads,
             route=route,
             title=naming.title,
+            reads=reads,
         )
 
     async def poll(self, started: PreviewStarted, subject: str) -> SlicedPlate | None:

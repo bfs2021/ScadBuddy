@@ -12,6 +12,7 @@ import {
   printOptionFields,
   printPath,
   printSequence,
+  sbPlanIds,
   setupPhrase,
   slotChoice,
   supportsChoice,
@@ -673,7 +674,7 @@ const sliceQuote = z
           'and a printer a run reaches over the LAN is sliced for with no Bambuddy call',
       ),
     filament_plan: z
-      .object({ slots: z.array(slotChoice), force_colour_match: z.boolean().default(true) })
+      .object({ slots: z.array(slotChoice), force_colour_match: z.boolean().default(true), ids: sbPlanIds })
       .describe('One spool per slot (slot_id from 1), as the print dialog sends it'),
     choices: printChoices,
     filaments: z

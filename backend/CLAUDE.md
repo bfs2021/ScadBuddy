@@ -419,7 +419,16 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   (`filament/inventory.py` `read_sb_spools`: the API's Postgres, or the print worker's
   CRUD routes `…/print/filament/trays` and `…/filament/presets`, area `filament`,
   `RemoteFilamentTrays`),
-  the run from the printer's stored report; a failed read plans on the trays alone. A
+  the run from the printer's stored report; a failed read plans on the trays alone. On
+  Bambuddy's path the picker offers SB spools too (#6262 Task 7: `build_options` over
+  `FilamentInventory.rows`, each placed by a printer's report, else by Bambuddy's
+  assignment of its linked spool), so a plan names SB numbers (`FilamentPlan.ids`
+  `"sb"`); a `"bb"` plan (an old client, an in-flight workflow's input) is mapped at read
+  by `filaments.sb_plan` (`bb_to_sb`), in activities and routes only, never in workflow
+  code, an unlinked slot dropped. The worker reads both through `…/filament/rows` and
+  `…/filament/bb-to-sb`. The tray question's answer
+  (`POST /print/printers/{id}/trays/{ams}/{tray}/spool`) takes the SB number, places it
+  at the tray, then writes Bambuddy's assignment for a linked spool. A
   LAN start books its slots' grams as `print_started` estimates at the plate's start in
   `filament_spool_events`, and the run's settle books each start's `print_ended` actual
   (`done`) or 0 (`filament/print_uses.py`, `print_use_hook`; on the worker through

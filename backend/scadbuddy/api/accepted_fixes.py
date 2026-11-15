@@ -103,6 +103,7 @@ class Fixes:
             await self.library.serving_native(),
             self.printers,
             self.filament.inventory,
+            reads=self.filament.reads,
         )
         try:
             stored = await asyncio.to_thread(self.decisions.list, scopes=context.scopes())

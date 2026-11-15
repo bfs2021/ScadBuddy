@@ -12,7 +12,6 @@ from fastapi import APIRouter, Query, status
 from pydantic import BaseModel
 
 from scadbuddy.api.deps import SettingsStoreDep
-from scadbuddy.bambuddy.client import client_for
 from scadbuddy.bambuddy.filaments import normalise_colour
 from scadbuddy.bambuddy.print_run import dialog_route
 from scadbuddy.bambuddy.trays import loaded_trays
@@ -41,8 +40,8 @@ class ProfileMaterial(BaseModel):
 
 class ProfileSpool(BaseModel):
     """A spool the print dialog offers on the profile's printer, under the id its
-    ``filament_plan`` names: a Bambuddy spool, or a loaded tray's negative id on a native
-    route."""
+    ``filament_plan`` names: an SB spool's number (#6262 Task 7), or a loaded tray's
+    negative id on a native route."""
 
     spool_id: int
     material: str
@@ -65,7 +64,8 @@ async def offered_spools(
 ) -> list[ProfileSpool] | None:
     """The spools the print dialog offers on registry printer ``printer``, as its route
     reads them: the loaded trays (with the SB spool in each, #6262) on a native route,
-    else Bambuddy's inventory. ``None`` when the registry has no such printer."""
+    else ScadBuddy's own spools by number (#6262 Task 7). ``None`` when the registry has
+    no such printer."""
     row = await asyncio.to_thread(printers.store.get, printer)
     if row is None:
         return None
@@ -84,17 +84,21 @@ async def offered_spools(
             )
             for tray in trays
         ]
-    async with client_for(settings) as client:
-        rows = await client.spools()
+    rows = await asyncio.to_thread(inventory.rows)
     return [
         ProfileSpool(
-            spool_id=spool.id,
-            material=spool.material,
-            colour=normalise_colour(spool.rgba),
-            label=_label(spool.brand, spool.material, spool.subtype, spool.color_name)
-            + f" (#{spool.id})",
+            spool_id=spool.number,
+            material=spool.names.material or "",
+            colour=normalise_colour(spool.effective.rgba),
+            label=_label(
+                spool.names.brand,
+                spool.names.material,
+                spool.names.subtype,
+                spool.effective.colour_name,
+            )
+            + f" (#{spool.number})",
         )
-        for spool in rows
+        for spool in (row.spool for row in rows)
     ]
 
 

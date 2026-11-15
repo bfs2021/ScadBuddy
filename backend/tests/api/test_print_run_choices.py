@@ -56,11 +56,12 @@ from tests.api.test_send import (
 )
 from tests.bambuddy.conftest import recording
 from tests.support.operations import press
+from tests.support.sb_rows import drop_app_sb_presets
 from tests.test_bambu3mf import add_plate
 
 # A run and the dialog both read or record the output's upload copies (#316), which
 # live in Postgres.
-pytestmark = pytest.mark.requires_postgres
+pytestmark = [pytest.mark.requires_postgres, pytest.mark.usefixtures("recorded_sb_spools")]
 
 API = f"{BASE}/api/v1"
 
@@ -362,6 +363,7 @@ def test_the_check_reads_every_spools_presets_together(client: TestClient, model
     output_id = prepared(client, model)
     upload_route()
     run_routes()
+    drop_app_sb_presets(client, [5, 9])  # the plan reads their Bambuddy spools' presets
     asked = asyncio.Event()
 
     async def presets(request: httpx.Request) -> httpx.Response:
@@ -390,6 +392,7 @@ def test_the_spools_read_together_are_capped(
     output_id = prepared(client, model)
     upload_route()
     run_routes()
+    drop_app_sb_presets(client, [5, 9])  # the plan reads their Bambuddy spools' presets
     open_reads = 0
     most = 0
 
@@ -475,6 +478,7 @@ def test_the_spools_read_together_fail_as_the_serial_reads_did(
     output_id = prepared(client, model)
     upload_route()
     run_routes()
+    drop_app_sb_presets(client, [5, 9])  # the plan reads their Bambuddy spools' presets
     failing = {5: first, 9: second}
 
     def presets(request: httpx.Request) -> httpx.Response:
@@ -1150,19 +1154,21 @@ def test_the_all_plates_filament_read_reads_the_spools_once(
     client: TestClient, model: str, paths: DataPaths, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Two plates, one spool inventory: the spools are the same for every plate, so an
-    all-plates read asks for them once (#480)."""
+    all-plates read asks for them once (#480): Bambuddy's assignments, which place the SB
+    spools (#6262 Task 7)."""
     slots_from_bambuddy(monkeypatch)
     output_id = two_plate_output(client, model, paths)
     upload_route()
     split_plates_routes()
     hardware_routes()
-    before = sum(1 for call in respx.calls if call.request.url.path.endswith("/inventory/spools"))
+    placed = "/inventory/assignments"
+    before = sum(1 for call in respx.calls if call.request.url.path.endswith(placed))
     response = client.get(
         f"/api/v1/print/outputs/{output_id}/filaments?printer_id=1&all_plates=true"
     )
     assert response.status_code == 200, response.text
     assert [slot["slot_id"] for slot in response.json()["slots"]] == [1, 2]
-    reads = sum(1 for call in respx.calls if call.request.url.path.endswith("/inventory/spools"))
+    reads = sum(1 for call in respx.calls if call.request.url.path.endswith(placed))
     assert reads - before == 1
 
 
@@ -1867,9 +1873,9 @@ def test_a_check_of_a_plan_with_no_slots_makes_no_read_of_its_own_for_spool_warn
     reads: list[object] = []
     real = filaments.read_inventory
 
-    async def counted(bambuddy: object) -> object:
+    async def counted(bambuddy: object, sb: object) -> object:
         reads.append(bambuddy)
-        return await real(bambuddy)  # type: ignore[arg-type]
+        return await real(bambuddy, sb)  # type: ignore[arg-type]
 
     monkeypatch.setattr(print_run, "read_inventory", counted)
 

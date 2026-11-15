@@ -16,8 +16,9 @@ function candidateName(spool: SpoolOption): string {
 }
 
 /**
- * The printer the answer is recorded for: a Bambuddy printer, whose assignment it writes,
- * or (#3818, plan 2026-10-18 D1) a native run's registry printer, which has no Bambuddy
+ * The printer the answer is recorded for: a Bambuddy printer, where "yes" posts the SB
+ * spool's number (#6262 Task 7) and ScadBuddy writes Bambuddy's assignment for a spool
+ * linked to Bambuddy's, or (#3818, plan 2026-10-18 D1) a native run's registry printer, which has no Bambuddy
  * id. There its candidates are the spools no tray holds, and "yes" places the SB spool
  * (`{spool_id}`, `linkOf`) through ScadBuddy's own
  * `PUT /printers/{printer}/trays/{ams}/{tray}/spool`, never Bambuddy's assignment.
@@ -37,8 +38,9 @@ type Props = Target & {
 
 /**
  * #2164 — a filled tray Bambuddy has no spool for (untagged filament): which spool is
- * it? "Yes" records it in Bambuddy (`POST /inventory/assignments`, the Manage Inventory
- * scope); "No / not sure" records nothing, offers the tray itself as a choice and is not
+ * it? "Yes" records the SB spool at the tray, then, for a spool linked to Bambuddy's,
+ * in Bambuddy (`POST /inventory/assignments`, the Manage Inventory scope); "No / not
+ * sure" records nothing, offers the tray itself as a choice and is not
  * asked again until the tray changes.
  */
 export function TrayQuestion({ tray, spools, onAssigned, onDecline, ...target }: Props) {
@@ -49,7 +51,7 @@ export function TrayQuestion({ tray, spools, onAssigned, onDecline, ...target }:
     .filter((spool): spool is SpoolOption => spool !== undefined && (!native || linkOf(spool) !== null))
   /**
    * What a candidate is picked by: natively its link's identity (`linkKey`), the SB
-   * spool's id; on the Bambuddy path the spool's own id.
+   * spool's id; on the Bambuddy path its `spool_id`, the SB spool's number (#6262).
    */
   // Every candidate has a link natively (filtered above); the index only keeps keys apart.
   const keyOf = (spool: SpoolOption) =>
@@ -82,14 +84,15 @@ export function TrayQuestion({ tray, spools, onAssigned, onDecline, ...target }:
         onAssigned()
       }
     } catch (cause) {
-      const fallback = native ? 'ScadBuddy could not link it.' : 'Bambuddy could not record it.'
+      const fallback = native ? 'ScadBuddy could not link it.' : 'ScadBuddy could not record it.'
       setError(cause instanceof ApiError ? cause.detail : fallback)
     } finally {
       setSaving(false)
     }
   }
 
-  // A native candidate is an SB spool, named by its number (#6262); Bambuddy's by its id.
+  // Every candidate is an SB spool, named by its number (#6262): natively `sb_number`, on
+  // Bambuddy's path `spool_id`, which is that number there (Task 7).
   const spoolRow = (spool: (typeof candidates)[number]) => (
     <>
       <Swatch colour={spool.colour} size="sm" />

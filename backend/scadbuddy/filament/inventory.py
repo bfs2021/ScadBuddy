@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Protocol
 from uuid import UUID
@@ -27,12 +27,19 @@ from psycopg import Connection
 from psycopg.rows import DictRow
 from psycopg_pool import ConnectionPool
 
-from scadbuddy.bambuddy.models import PrinterStatus
+from scadbuddy.bambuddy.models import PrinterStatus, SpoolAssignment
 from scadbuddy.bambuddy.trays import seen_trays, tray_label
 from scadbuddy.filament import models as m
 from scadbuddy.filament.colour import normalise_rgba
 from scadbuddy.filament.locations import LocationStore
-from scadbuddy.filament.models import SbSpools, TrayFoundBy, TrayHolder, TrayView
+from scadbuddy.filament.models import (
+    FilamentInventorySpool,
+    SbSpools,
+    TrayFoundBy,
+    TrayHolder,
+    TrayPlace,
+    TrayView,
+)
 from scadbuddy.filament.presets import PoolSpoolPresets
 from scadbuddy.filament.spools import FilamentSpoolStore
 from scadbuddy.printers.models import PrinterRow
@@ -42,10 +49,12 @@ from scadbuddy.spools.models import SeenTray, clean_tag_uid, clean_tray_uuid
 
 __all__ = [
     "FilamentInventory",
+    "FilamentInventorySpool",
     "PoolSbSpoolReads",
     "SbSpoolReads",
     "TrayHolder",
     "TrayNotFilledError",
+    "TrayPlace",
     "TrayTagClashError",
     "TrayView",
     "read_sb_spools",
@@ -163,6 +172,88 @@ class FilamentInventory:
             shelf=[spool for spool in spools.values() if spool.id not in held],
         )
 
+    def rows(
+        self,
+        *,
+        include_archived: bool = False,
+        bb_assignments: Sequence[SpoolAssignment] = (),
+    ) -> list[FilamentInventorySpool]:
+        """Every SB spool (by number; the archived ones too with ``include_archived``),
+        the tray it is in, and its Bambuddy spool (#6262 Task 7). ``loaded`` is the tray
+        a registry printer's latest report holds it in (`_Keys.hold`, as :meth:`trays`
+        reads it), else the tray Bambuddy assigns its linked Bambuddy spool to
+        (``bb_assignments``, ``GET /inventory/assignments``; the last row for a spool
+        wins, as Bambuddy keeps history rows), else ``None`` (plan Decision 3)."""
+        with self._pool.connection() as conn:
+            keys = _Keys(conn)
+            links = {
+                row["spool_id"]: row["bb_spool_id"]
+                for row in conn.execute("SELECT spool_id, bb_spool_id FROM filament_bb_links")
+            }
+        printers = {row.id: row for row in PrinterStore(self._pool, None).list()}
+        places: dict[UUID, TrayPlace] = {}
+        for printer_id, trays in self._reported(printers):
+            row = printers[str(printer_id)]
+            for tray in trays:
+                spool_id, _ = keys.hold(printer_id, tray)
+                if spool_id is not None and spool_id not in places:
+                    places[spool_id] = TrayPlace(
+                        printer_id=row.id,
+                        bambuddy_printer_id=row.bambuddy_printer_id,
+                        printer_name=row.name,
+                        ams_id=tray.ams_id,
+                        tray_id=tray.tray_id,
+                    )
+        by_bambuddy = {
+            row.bambuddy_printer_id: row
+            for row in printers.values()
+            if row.bambuddy_printer_id is not None
+        }
+        assigned = {assignment.spool_id: assignment for assignment in bb_assignments}
+        found: list[FilamentInventorySpool] = []
+        for spool in self._spools.list(include_archived=include_archived):
+            bb_id = links.get(spool.id)
+            loaded = places.get(spool.id)
+            assignment = assigned.get(bb_id) if bb_id is not None else None
+            if loaded is None and assignment is not None:
+                registry = by_bambuddy.get(assignment.printer_id)
+                loaded = TrayPlace(
+                    printer_id=registry.id if registry is not None else None,
+                    bambuddy_printer_id=assignment.printer_id,
+                    printer_name=assignment.printer_name
+                    or (registry.name if registry is not None else None),
+                    ams_id=assignment.ams_id,
+                    tray_id=assignment.tray_id,
+                )
+            found.append(FilamentInventorySpool(spool=spool, loaded=loaded, bb_spool_id=bb_id))
+        return found
+
+    def by_number(self, number: int) -> tuple[UUID, int | None] | None:
+        """Unarchived SB spool #``number``'s id and the Bambuddy spool it is linked to
+        (``None`` for none), or ``None`` for no such spool."""
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                "SELECT s.id, l.bb_spool_id FROM filament_spools s"
+                " LEFT JOIN filament_bb_links l ON l.spool_id = s.id"
+                " WHERE s.number = %s AND s.archived_at IS NULL",
+                (number,),
+            ).fetchone()
+        return None if row is None else (row["id"], row["bb_spool_id"])
+
+    def bb_to_sb(self, ids: Iterable[int]) -> dict[int, int]:
+        """The SB spool number each Bambuddy spool id among ``ids`` is linked to
+        (`filament_bb_links`); an unlinked id is left out (#6262 F14)."""
+        wanted = sorted(set(ids))
+        if not wanted:
+            return {}
+        with self._pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT l.bb_spool_id, s.number FROM filament_bb_links l"
+                " JOIN filament_spools s ON s.id = l.spool_id WHERE l.bb_spool_id = ANY(%s)",
+                (wanted,),
+            ).fetchall()
+        return {row["bb_spool_id"]: row["number"] for row in rows}
+
     def link(
         self,
         printer_id: UUID,
@@ -256,14 +347,18 @@ class FilamentInventory:
 
     def _others(self, printer_id: UUID) -> list[tuple[UUID, list[SeenTray]]]:
         """Every other registry printer's trays, as its latest stored report shows them."""
-        now = datetime.now(UTC)
         rows = {row.id: row for row in PrinterStore(self._pool, None).list()}
+        return [(other, trays) for other, trays in self._reported(rows) if other != printer_id]
+
+    def _reported(self, rows: Mapping[str, PrinterRow]) -> list[tuple[UUID, list[SeenTray]]]:
+        """The trays of each printer among ``rows`` that has a stored report, as its latest
+        report shows them."""
+        now = datetime.now(UTC)
         found: list[tuple[UUID, list[SeenTray]]] = []
-        for other, report in PrinterReportStore(self._pool).all().items():
-            row = rows.get(other)
-            if row is None or UUID(other) == printer_id:
-                continue
-            found.append((UUID(other), seen_trays(report_status(row, report, now=now))))
+        for printer_id, report in PrinterReportStore(self._pool).all().items():
+            row = rows.get(printer_id)
+            if row is not None:
+                found.append((UUID(printer_id), seen_trays(report_status(row, report, now=now))))
         return found
 
     @staticmethod
@@ -310,8 +405,10 @@ async def route_trays(
 
 
 class SbSpoolReads(Protocol):
-    """What a native plan reads of SB spools (#6262 Task 6): the SB spool in each tray a
-    printer reports, and spools' presets by number. The API's from Postgres
+    """What a plan reads of SB spools (#6262 Task 6): the SB spool in each tray a printer
+    reports and spools' presets by number; on the Bambuddy path (Task 7) every unarchived
+    SB spool with its tray (`FilamentInventory.rows`) and the SB number of each Bambuddy
+    spool id an older plan names (`FilamentInventory.bb_to_sb`). The API's from Postgres
     (:class:`PoolSbSpoolReads`); the print worker's over its CRUD routes (`crud/print.py`
     `RemoteFilamentTrays`, #5295), so both read them alike."""
 
@@ -319,20 +416,36 @@ class SbSpoolReads(Protocol):
 
     async def presets(self, numbers: Sequence[int]) -> dict[int, list[m.EffectivePreset]]: ...
 
+    async def rows(
+        self, bb_assignments: Sequence[SpoolAssignment]
+    ) -> list[FilamentInventorySpool]: ...
+
+    async def bb_to_sb(self, ids: Sequence[int]) -> dict[int, int]: ...
+
 
 class PoolSbSpoolReads:
     """:class:`SbSpoolReads` over a pool whose connections autocommit and return dict
     rows (the settings store's): each read in a thread."""
 
-    def __init__(self, pool: ConnectionPool[Conn]) -> None:
-        self._inventory = FilamentInventory(pool)
-        self._presets = PoolSpoolPresets(pool)
+    def __init__(self, inventory: FilamentInventory, presets: PoolSpoolPresets) -> None:
+        self._inventory = inventory
+        self._presets = presets
+
+    @classmethod
+    def over(cls, pool: ConnectionPool[Conn]) -> PoolSbSpoolReads:
+        return cls(FilamentInventory(pool), PoolSpoolPresets(pool))
 
     async def trays(self, printer_id: UUID, seen: Sequence[SeenTray]) -> TrayView:
         return await asyncio.to_thread(self._inventory.trays, printer_id, seen)
 
     async def presets(self, numbers: Sequence[int]) -> dict[int, list[m.EffectivePreset]]:
         return await self._presets.presets(numbers)
+
+    async def rows(self, bb_assignments: Sequence[SpoolAssignment]) -> list[FilamentInventorySpool]:
+        return await asyncio.to_thread(self._inventory.rows, bb_assignments=bb_assignments)
+
+    async def bb_to_sb(self, ids: Sequence[int]) -> dict[int, int]:
+        return await asyncio.to_thread(self._inventory.bb_to_sb, ids)
 
 
 async def read_sb_spools(

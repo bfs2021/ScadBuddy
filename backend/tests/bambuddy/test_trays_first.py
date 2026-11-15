@@ -607,8 +607,9 @@ async def test_resolve_plates_reads_no_spool_presets_on_a_native_run(
 
 
 @respx.mock
-async def test_the_inventory_path_is_unchanged() -> None:
-    """Without ``trays_from``: today's reads, in today's order."""
+async def test_the_inventory_path_reads_the_assignments_then_the_printer() -> None:
+    """Without ``trays_from``: Bambuddy's assignments (its spools no longer, #6262), then
+    the printer and its remaining filament, in that order."""
     order: list[str] = []
 
     def answer(body: Any) -> Any:
@@ -618,7 +619,6 @@ async def test_the_inventory_path_is_unchanged() -> None:
 
         return side_effect
 
-    respx.get(f"{API}/api/v1/inventory/spools").mock(side_effect=answer([]))
     respx.get(f"{API}/api/v1/inventory/assignments").mock(side_effect=answer([]))
     respx.get(f"{API}/api/v1/printers/1").mock(
         side_effect=answer(recording("printers.json")[0] | {"id": 1})
@@ -636,7 +636,6 @@ async def test_the_inventory_path_is_unchanged() -> None:
         )
     assert options.source == "inventory" and options.shelf == []
     assert order == [
-        "/api/v1/inventory/spools",
         "/api/v1/inventory/assignments",
         "/api/v1/printers/1",
         "/api/v1/printers/1/inventory-remain",

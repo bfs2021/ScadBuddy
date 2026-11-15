@@ -459,6 +459,10 @@ class PrintActivities:
                         title=await self._title(input.accepted.source) if native else None,
                         held=sb,
                         presets=sb,
+                        # Bambuddy's path offers the SB spools (#6262 Task 7); an input's
+                        # plan of Bambuddy spool ids (from before it) is read as SB
+                        # numbers here, in the activity, never in workflow code.
+                        reads=self.d.sb_spools,
                     )
                 )
         except ApiError as error:

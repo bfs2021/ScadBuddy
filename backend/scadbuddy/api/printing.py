@@ -17,6 +17,7 @@ from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
+from uuid import UUID
 
 import httpx
 import psycopg
@@ -50,6 +51,7 @@ from scadbuddy.api.deps import (
     StateDep,
     UploadsDep,
 )
+from scadbuddy.api.filament import actor as filament_actor
 from scadbuddy.api.models import require_model_exists
 from scadbuddy.api.operations import (
     OPERATION_RESPONSES,
@@ -63,6 +65,7 @@ from scadbuddy.api.operations import (
     temporal_refused,
     temporal_unavailable,
 )
+from scadbuddy.auth.component import CallerDep
 from scadbuddy.auth.routes import REQUEST_HEADER
 from scadbuddy.bambuddy.catalogue import (
     catalogue_name_key,
@@ -104,6 +107,7 @@ from scadbuddy.bambuddy.print_run import (
     filament_options_for_output,
     first_native_route,
     lan_printers,
+    read_status,
 )
 from scadbuddy.bambuddy.print_source import OutputSource, PrintSource
 from scadbuddy.bambuddy.printers_now import (
@@ -145,6 +149,7 @@ from scadbuddy.bambuddy.runs import (
     run_key,
 )
 from scadbuddy.bambuddy.subject import PrintSubject
+from scadbuddy.bambuddy.trays import seen_trays, tray_label
 from scadbuddy.core.authorship import current_author
 from scadbuddy.core.problems import (
     DATABASE_ERRORS,
@@ -667,22 +672,43 @@ async def get_printer_rack_usage(
 
 
 class TraySpool(BaseModel):
-    """The spool a person confirmed is in a tray (#2164)."""
+    """The SB spool a person confirmed is in a tray (#2164), by its number (#6262 Task 7):
+    a row of the filament step's ``spools``."""
 
     spool_id: int = Field(ge=1)
 
 
 class TrayAssigned(BaseModel):
+    #: The SB spool's number, as the request named it.
     spool_id: int
     printer_id: int
     ams_id: int
     tray_id: int
 
 
+def _tray_link_refused(error: Exception) -> ApiError:
+    """`FilamentInventory.link`'s refusals as problem documents, as the native path's
+    link (`api/tray_spools.py`) answers them."""
+    if isinstance(error, LookupError):
+        return ApiError(status.HTTP_404_NOT_FOUND, str(error))
+    return ApiError(status.HTTP_409_CONFLICT, str(error))
+
+
 @router.post(
     "/printers/{printer_id}/trays/{ams_id}/{tray_id}/spool",
     response_model=TrayAssigned,
     summary="Record which spool is in a tray",
+    description=(
+        "The Bambuddy path's answer to the print dialog's question about a filled tray"
+        " Bambuddy has no spool for (#2164): `spool_id` is the SB spool's number, a row of"
+        " the filament step's `spools` (#6262). ScadBuddy records the spool at the tray"
+        " first, with what Bambuddy's status shows in it (`FilamentInventory.link`); for a"
+        " spool linked to a Bambuddy spool it then writes Bambuddy's assignment"
+        " (`POST /inventory/assignments`, the key's Manage Inventory scope). 404 for an"
+        " unknown spool; 409 when the registry has no row for the Bambuddy printer yet,"
+        " Bambuddy's status does not show the tray filled, or the tray's tag is on another"
+        " spool. Never sent without the person's confirmation."
+    ),
     responses=OPERATION_RESPONSES,
 )
 async def post_tray_spool(
@@ -692,11 +718,52 @@ async def post_tray_spool(
     body: TraySpool,
     response: Response,
     ops: OperationsDep,
+    store: SettingsStoreDep,
+    printers: PrintersDep,
+    filament: FilamentDep,
+    caller: CallerDep,
     idempotency_key: IdempotencyKey = None,
 ) -> TrayAssigned | JSONResponse:
-    """#2164: a filled tray Bambuddy has no spool for, answered by the person in the
-    print dialog. ``POST /inventory/assignments`` in Bambuddy, which needs the key's
-    Manage Inventory scope. Never sent without that confirmation."""
+    """#2164, #6262 Task 7: the SB tray place first, then Bambuddy's assignment for a
+    linked spool. A resend places nothing twice (a spool already at the tray's place
+    moves nowhere) and its operation answers as the first did."""
+    found = await asyncio.to_thread(filament.inventory.by_number, body.spool_id)
+    if found is None:
+        raise ApiError(status.HTTP_404_NOT_FOUND, f"no spool #{body.spool_id}")
+    spool_id, bb_spool_id = found
+    row = await asyncio.to_thread(printers.store.by_bambuddy_id, printer_id)
+    if row is None:
+        raise ApiError(
+            status.HTTP_409_CONFLICT,
+            f"Bambuddy printer {printer_id} has no ScadBuddy printer yet; open Printers first",
+        )
+    async with client_for(store.load()) as client:
+        printer_status = await read_status(client, printer_id)
+    seen = next(
+        (
+            tray
+            for tray in (seen_trays(printer_status) if printer_status is not None else [])
+            if (tray.ams_id, tray.tray_id) == (ams_id, tray_id)
+        ),
+        None,
+    )
+    if seen is None:
+        raise ApiError(
+            status.HTTP_409_CONFLICT,
+            f"{row.name}'s status does not show {tray_label(ams_id, tray_id)} filled",
+        )
+    who = filament_actor(caller)
+    try:
+        await asyncio.to_thread(
+            filament.inventory.link, UUID(row.id), ams_id, tray_id, spool_id, seen, actor=who
+        )
+    except (LookupError, ValueError) as error:
+        raise _tray_link_refused(error) from None
+    assigned = TrayAssigned(
+        spool_id=body.spool_id, printer_id=printer_id, ams_id=ams_id, tray_id=tray_id
+    )
+    if bb_spool_id is None:
+        return assigned
     result = await run_operation(
         ops,
         response,
@@ -706,11 +773,13 @@ async def post_tray_spool(
             "printer_id": printer_id,
             "ams_id": ams_id,
             "tray_id": tray_id,
-            "spool_id": body.spool_id,
+            "spool_id": bb_spool_id,
         },
         idempotency_key=idempotency_key,
     )
-    return operation_answer(result, TrayAssigned)
+    answer = operation_answer(result, TrayAssigned)
+    # The operation names Bambuddy's spool; the answer names the SB spool asked for.
+    return assigned if isinstance(answer, TrayAssigned) else answer
 
 
 @router.get(
@@ -1482,9 +1551,11 @@ async def post_check(
             native=await library.serving_native(),
             process_values=process_values,
             part_settings=part_settings,
-            # ScadBuddy's own spools (#6262): the SB spool in each tray and its presets.
+            # ScadBuddy's own spools (#6262): the SB spool in each tray and its presets,
+            # and (Task 7) the spools Bambuddy's path offers.
             sb_trays=filament.inventory,
             sb_presets=filament.presets,
+            sb_reads=filament.reads,
         )
     if refusal is not None:
         check.errors.insert(0, refusal)
@@ -1655,17 +1726,18 @@ async def get_filaments(
         list[Annotated[int, Field(ge=1)]] | None, Query(max_length=MAX_PLATES)
     ] = None,
 ) -> FilamentOptions:
-    """Bambuddy's whole spool inventory, joined to where each spool is loaded (#87).
+    """ScadBuddy's own spools, each under its SB number, joined to where each is loaded
+    (#87, #6262 Task 7).
 
     One route rather than three calls from the browser, because the join is the part
-    with the traps in it: ``/inventory/assignments`` covers every printer while
+    with the traps in it: a spool's tray may be any printer's while
     ``inventory-remain`` covers one, ``remain: -1`` means unknown and so does
     ``used_grams: 0``.
 
     ``printer_id`` is what turns "the inventory" into "the inventory, and where it is on
-    this printer": without one the spools are still listed, with their last known
-    assignment, but the reconciled remaining weights are not. It is also what reads the
-    mounted nozzles (#78).
+    this printer": without one the spools are still listed, with their tray, but
+    Bambuddy's reconciled remaining weights are not. It is also what reads the mounted
+    nozzles (#78).
 
     ``all_plates`` answers for an all-plates print: one row per slot any plate uses, in
     place of ``plate_id``'s, so a slot only a later plate uses still gets a spool.
@@ -1696,6 +1768,7 @@ async def get_filaments(
             plate_id=plate_id,
             all_plates=all_plates,
             plate_ids=plate_ids,
+            reads=filament.reads,
         )
 
 
@@ -1751,6 +1824,7 @@ async def get_choices(
             catalogue_key=catalogue_name_key(store.kek),
             refresh_claim=catalogue_refresh_claim(store.defaults.database_url),
             rack=rack,
+            reads=filament.reads,
         )
     return await with_lan_printers(view, settings, printers)
 

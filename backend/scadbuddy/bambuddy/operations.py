@@ -94,7 +94,7 @@ def bambuddy_kinds(core: Core, components: Components) -> list[OperationKind]:
         native=components.get(SLICING).starter,
         printers=components.get(PRINTERS).store,
         reports=components.get(PRINTERS).reports,
-        sb_spools=PoolSbSpoolReads(core.settings_store.pool),
+        sb_spools=PoolSbSpoolReads.over(core.settings_store.pool),
     )
 
 
@@ -459,6 +459,8 @@ def bambuddy_kinds_over(
                     route=route,
                     title=title,
                     sb=sb,
+                    # Bambuddy's path offers the SB spools (#6262 Task 7), as the run's.
+                    reads=sb_spools,
                     # The dialog's Reslice (#4433): no finished slice answers it.
                     fresh=bool(request.get("fresh")),
                 )

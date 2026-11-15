@@ -81,6 +81,7 @@ def without_cloud() -> Catalogue:
 def spool(spool_id: int, material: str, preset: str | None, name: str | None) -> SpoolOption:
     return SpoolOption(
         spool_id=spool_id,
+        sb_number=spool_id,
         material=material,
         colour="#112233",
         slicer_filament=preset,
@@ -214,6 +215,27 @@ def test_a_spools_own_per_nozzle_row_wins_over_everything_but_an_override() -> N
         {4: [_preset("0.2", "34")]},
     )
     assert resolved.filament_presets == [PresetRef(source="local", id="34")]
+
+
+def test_an_own_preset_bambuddys_catalogue_lacks_is_found_by_its_name() -> None:
+    """#6262 Task 7: a pulled Bambuddy spool's preset is its BBL filament_id ("GFA00"),
+    which Bambuddy's catalogue rows do not carry; its name finds Bambu's preset, as the
+    Bambuddy spool's own name did before."""
+    bare = spool(1, "PLA", None, None)
+    own = _preset("0.4", "GFA00").model_copy(update={"slicer_filament_name": "Bambu PLA Basic"})
+    resolved = resolve(
+        options(bare),
+        plan(1),
+        PrintChoices(nozzles=[NozzleChoice(size="0.4")]),
+        recorded(),
+        {1: [own]},
+    )
+    named = resolve(
+        options(BASIC), plan(1), PrintChoices(nozzles=[NozzleChoice(size="0.4")]), recorded(), {}
+    )
+    assert resolved.filament_presets == named.filament_presets
+    assert "Generic" not in resolved.filament_presets[0].id
+    assert resolved.warnings == []
 
 
 def test_an_advanced_override_wins() -> None:

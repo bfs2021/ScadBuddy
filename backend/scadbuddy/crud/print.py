@@ -131,7 +131,7 @@ from psycopg.rows import DictRow
 from psycopg_pool import ConnectionPool
 
 from scadbuddy.bambuddy.copy_leases import CopyLease, LeaseLostError, hold_lease
-from scadbuddy.bambuddy.models import LocalPreset, LocalPresetDetail
+from scadbuddy.bambuddy.models import LocalPreset, LocalPresetDetail, SpoolAssignment
 from scadbuddy.bambuddy.print_links import (
     LinkedPrint,
     PrintLink,
@@ -167,7 +167,7 @@ from scadbuddy.crud.guard import PREFIX
 from scadbuddy.crud.idempotency import KEY_PROBLEM
 from scadbuddy.crud.render import WriteKeys
 from scadbuddy.crud.wire import NOT_CONFIGURED
-from scadbuddy.filament.models import EffectivePreset, TrayView
+from scadbuddy.filament.models import EffectivePreset, FilamentInventorySpool, TrayView
 from scadbuddy.filament.print_uses import SlotUse
 from scadbuddy.library.output_prints import OutputPrintStore
 from scadbuddy.library.outputs import LanPlateSend, PlateSend
@@ -1537,7 +1537,9 @@ class RemoteFilamentTrays:
     """`filament/inventory.py` `SbSpoolReads` over ``…/print/filament`` (area ``filament``,
     #6262 Task 6): the SB spool in each tray a native run's printer reports (the trays
     only: the route sends no shelf), and the held
-    spools' presets, as the API's own inventory reads them. Both are reads, natural, sent
+    spools' presets, as the API's own inventory reads them; and (Task 7) the Bambuddy
+    path's SB spools with their trays and the SB number of each Bambuddy spool id an
+    older plan names. All are reads, natural, sent
     again on the client's retries; the trays as a ``POST`` so their RFID keys stay out
     of the URL (spec 2026-10-01 §7)."""
 
@@ -1562,6 +1564,26 @@ class RemoteFilamentTrays:
             int(number): [EffectivePreset.model_validate(row) for row in rows]
             for number, rows in response.json().items()
         }
+
+    async def rows(self, bb_assignments: Sequence[SpoolAssignment]) -> list[FilamentInventorySpool]:
+        # Without each assignment's nested spool: the route reads where a spool is, and
+        # Bambuddy's whole spool row would only grow the body.
+        body = {
+            "bb_assignments": [
+                assignment.model_dump(mode="json", exclude={"spool"})
+                for assignment in bb_assignments
+            ]
+        }
+        response = await self._client.request("POST", f"{BASE}/filament/rows", json=body)
+        return [FilamentInventorySpool.model_validate(row) for row in response.json()]
+
+    async def bb_to_sb(self, ids: Sequence[int]) -> dict[int, int]:
+        if not ids:
+            return {}
+        response = await self._client.request(
+            "POST", f"{BASE}/filament/bb-to-sb", json={"ids": sorted(set(ids))}
+        )
+        return {int(bb_id): int(number) for bb_id, number in response.json().items()}
 
 
 class RemotePrintUses:

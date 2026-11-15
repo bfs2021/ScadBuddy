@@ -184,30 +184,18 @@ def _by_filament_id(rows: list[PresetChoice], filament_id: str, printer: str) ->
     )
 
 
-def preset_key(option: SpoolOption) -> int | None:
-    """What ``option``'s own presets are keyed by in :func:`resolve`'s ``spool_presets``
-    (#6262 F1): its SB spool's number, a tray's included. A Bambuddy-path inventory row
-    has none until #6262 Task 7 builds those rows from SB spools; meanwhile it is keyed by
-    its Bambuddy spool id, the only kind of positive id such an answer holds. A tray with
-    no SB spool has no key."""
-    if option.sb_number is not None:
-        return option.sb_number
-    return option.spool_id if option.spool_id > 0 else None
-
-
 def _own_preset(
     spool_presets: Mapping[int, Sequence[EffectivePreset]], option: SpoolOption, size: str
-) -> str | None:
-    """The preset ``option``'s spool names for exactly the H2C and this nozzle size
-    (`filament.presets.preset_for`), or ``None``."""
+) -> EffectivePreset | None:
+    """The preset ``option``'s SB spool names for exactly the H2C and this nozzle size
+    (`filament.presets.preset_for`), by its number (#6262 F1; every option with an SB
+    spool has one, a tray's and a Bambuddy-path row's alike), or ``None``."""
     # Here, not at the top: `filament.presets` reads this module's `PRINTER_MODEL`.
     from scadbuddy.filament.presets import preset_for
 
-    key = preset_key(option)
-    if key is None:
+    if option.sb_number is None:
         return None
-    found = preset_for(spool_presets.get(key, ()), PRINTER_MODEL, size)
-    return None if found is None else found.slicer_filament
+    return preset_for(spool_presets.get(option.sb_number, ()), PRINTER_MODEL, size)
 
 
 #: What a ref the image's catalogue does not hold is, by its source (#3818 D5): a
@@ -322,7 +310,8 @@ def resolve(
 ) -> Resolved:
     """Every slicer preset for ``plan`` on ``options``. ``spool_presets`` are each chosen
     spool's effective presets (#6262 F1, `filament.presets.effective_presets`), keyed by
-    :func:`preset_key`; only the row of exactly the H2C and the chosen nozzle is used."""
+    its SB number (``sb_number``); only the row of exactly the H2C and the chosen nozzle
+    is used."""
     chosen = _resolve_choices(choices, catalogue)
     warnings = list(chosen.warnings)
     errors = list(chosen.errors)
@@ -386,9 +375,9 @@ def resolve(
                 continue
         if ref is None:
             # The spool's own preset for this nozzle first (#6262 F1): an SB spool's,
-            # a tray's included (its SB spool's, by `preset_key`), the person's choice.
-            own_id = _own_preset(spool_presets, option, size)
-            own = [] if own_id is None else [own_id]
+            # a tray's included (its SB spool's, by number), the person's choice.
+            own_preset = _own_preset(spool_presets, option, size)
+            own = [] if own_preset is None else [own_preset.slicer_filament]
             if catalogue.is_native:
                 # A spool's preset is a preset name, a Bambu Cloud setting_id, a BBL
                 # filament_id (as a tray's tray_info_idx is) or a Bambuddy local id,
@@ -433,8 +422,15 @@ def resolve(
                 # A tray chosen for itself: its tray_info_idx is the BBL preset's
                 # filament_id, after its SB spool's own preset (#6262).
                 ref = _by_filament_id(catalogue.filament, option.slicer_filament, printer)
-            if ref is None and option.slicer_filament_name:
-                ref = _fits(catalogue.filament, f"{option.slicer_filament_name} @BBL H2C", printer)
+            # Then a preset by name: the spool's own preset's (an id the catalogue does not
+            # hold, such as a pulled Bambuddy spool's BBL filament_id, #6262 Task 7), else
+            # the option's.
+            for name in (
+                own_preset.slicer_filament_name if own_preset is not None else None,
+                option.slicer_filament_name,
+            ):
+                if ref is None and name:
+                    ref = _fits(catalogue.filament, f"{name} @BBL H2C", printer)
             if ref is None:
                 ref = _fits(catalogue.filament, f"Generic {option.material} @BBL H2C", printer)
                 if ref is not None:

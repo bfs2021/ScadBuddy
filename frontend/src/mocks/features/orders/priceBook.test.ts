@@ -10,7 +10,7 @@ import { FILAMENT_PETG, FILAMENT_PLA, ITEM_DRAFT, ORDER_ACCEPTED, ORDER_DRAFT, O
 const failure = (promise: Promise<unknown>) => promise.then(() => undefined, (e: unknown) => e as ApiError)
 const DIALOG = {
   printer_id: 1,
-  filament_plan: { slots: [{ slot_id: 1, spool_id: 9 }, { slot_id: 2, spool_id: 5 }], force_colour_match: false },
+  filament_plan: { slots: [{ slot_id: 1, spool_id: 9 }, { slot_id: 2, spool_id: 5 }], force_colour_match: false, ids: 'sb' as const },
   choices: { nozzles: [{ size: '0.4' as const, flow: 'standard' as const }], tier: 'standard' as const, bed_type: 'Textured PEI Plate' },
 }
 

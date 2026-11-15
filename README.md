@@ -1294,8 +1294,10 @@ clusters. It serves `/healthz` (`{"ok": true, "build_id": …, "task_queue": …
   goes through them too (`…/rack`; a LAN start's picks, a queue item's picks, a settled print's rows and a LAN
   start's settles take an `Idempotency-Key`), so the worker holds no rack pool. Through
   them too go the SB spool in each of a native run's trays and their presets, what a LAN
-  start uses of them, the kept copy of Bambuddy's local presets and a native slice's start
-  (`…/filament/trays`, `…/filament/presets`, `…/filament/print-uses`, area `filament`;
+  start uses of them, the kept copy of Bambuddy's local presets and a native slice's start,
+  and the SB spools Bambuddy's path offers and maps a plan by (`…/filament/trays`,
+  `…/filament/presets`, `…/filament/print-uses`, `…/filament/rows`, `…/filament/bb-to-sb`,
+  area `filament`;
   `…/held-presets`, `…/native-slices`; a start's uses and a run's settle take an
   `Idempotency-Key`).
   A LAN print reads a native slice's sliced 3MF by a URL the API mints for it

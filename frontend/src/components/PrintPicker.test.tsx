@@ -402,6 +402,7 @@ describe('PrintPicker', () => {
           { slot_id: 2, spool_id: 27 },
         ],
         force_colour_match: true,
+        ids: 'sb',
       },
       choices: {
         nozzles: [

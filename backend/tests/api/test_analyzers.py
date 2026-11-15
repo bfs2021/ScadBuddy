@@ -39,10 +39,20 @@ from tests.api.test_send import BASE, configure, make_output
 from tests.bambuddy.conftest import recording
 from tests.support.operations import press
 from tests.support.printers import linked_printer
+from tests.support.sb_rows import seed_app_sb_spools
 from tests.test_bambu3mf import add_plate
 
 API = f"{BASE}/api/v1"
 SILK_SPOOL = 5  # "Tri Color" subtype, preset "Bambu PLA Silk" (inventory-spools.json)
+
+
+@pytest.fixture
+def silk_sb_spools(client: TestClient, recorded_sb_spools: None) -> None:
+    """The recorded SB spools, SB spool #5 a Silk one. The recording names spool 5's
+    silk only by its Bambuddy preset ("Bambu PLA Silk"), which an SB spool does not carry
+    over (#6262 Task 7: the analyzers read SB spools), so its subtype says it here."""
+    [silk] = [row for row in recording("inventory-spools.json") if row["id"] == SILK_SPOOL]
+    seed_app_sb_spools(client, [{**silk, "subtype": "Silk", "updated_at": "2026-12-01T00:00:00"}])
 
 
 @pytest.fixture
@@ -58,14 +68,16 @@ def _ok(response: httpx.Response, status: int = 200) -> Any:
     return response.json() if response.content else None
 
 
-def bambuddy_routes(*, spools: httpx.Response | None = None) -> dict[str, respx.Route]:
-    """Only what an analysis reads: printers and the spool inventory."""
+def bambuddy_routes(*, assignments: httpx.Response | None = None) -> dict[str, respx.Route]:
+    """Only what an analysis reads of Bambuddy: printers and where its spools are, which
+    places the SB spools (#6262 Task 7; `recorded_sb_spools` seeds them)."""
     return {
         "printers": respx.get(f"{API}/printers/").mock(
             return_value=httpx.Response(200, json=recording("printers.json"))
         ),
-        "spools": respx.get(f"{API}/inventory/spools").mock(
-            return_value=spools or httpx.Response(200, json=recording("inventory-spools.json"))
+        "assignments": respx.get(f"{API}/inventory/assignments").mock(
+            return_value=assignments
+            or httpx.Response(200, json=recording("inventory-assignments.json"))
         ),
     }
 
@@ -260,6 +272,7 @@ def test_a_configurations_params_are_checked_as_a_render_checks_them(
 
 
 @respx.mock
+@pytest.mark.usefixtures("silk_sb_spools")
 def test_silk_on_supertack_is_found_from_the_plan_and_the_choices(
     client: TestClient, model: str
 ) -> None:
@@ -289,20 +302,21 @@ def test_silk_on_supertack_is_found_from_the_plan_and_the_choices(
     assert base["process_preset_name"] == "0.20mm Standard @BBL H2C"
     assert base["bed_type"] == "Supertack Plate"
     scopes = [(scope["kind"], scope["key"]) for scope in report["scopes"]]
-    assert ("material", "pla/tri color") in scopes and ("printer", "id:1") in scopes
+    assert ("material", "pla/silk") in scopes and ("printer", "id:1") in scopes
     # Not uploaded, so nothing asked Bambuddy for the plate's slots.
     inputs = {row["name"]: row for row in report["inputs"]}
     assert inputs["inventory"]["reason"] == "this output has not been uploaded to Bambuddy yet"
-    assert routes["spools"].called
+    assert routes["assignments"].called
     assert not any(call.request.method == "POST" for call in respx.calls)
 
 
 @respx.mock
+@pytest.mark.usefixtures("recorded_sb_spools")
 def test_a_missing_scope_is_named_as_the_reason_an_input_is_unavailable(
     client: TestClient, model: str
 ) -> None:
     configure(client)
-    bambuddy_routes(spools=httpx.Response(403, json={"detail": "forbidden"}))
+    bambuddy_routes(assignments=httpx.Response(403, json={"detail": "forbidden"}))
     output_id = make_output(client, model)
     report = _run(client, output_id, request=SILK_REQUEST, detail="advanced")
     filaments = next(row for row in report["inputs"] if row["name"] == "filaments")
@@ -355,6 +369,7 @@ VERIFIED = Analyzer(
 
 @pytest.mark.requires_postgres
 @respx.mock
+@pytest.mark.usefixtures("recorded_sb_spools")
 def test_an_uploaded_output_is_judged_on_the_inventory_too(
     client: TestClient, model: str, app: FastAPI
 ) -> None:
@@ -403,6 +418,7 @@ def test_an_uploaded_output_is_judged_on_the_inventory_too(
         ({"plate_ids": [3, 1]}, [1, 3], True),
     ],
 )
+@pytest.mark.usefixtures("recorded_sb_spools")
 def test_an_all_plates_print_is_judged_on_every_plates_filament(
     client: TestClient,
     model: str,
@@ -439,10 +455,7 @@ def test_an_all_plates_print_is_judged_on_every_plates_filament(
 
     respx.get(f"{API}/library/files/41/filament-requirements").mock(side_effect=requirements)
     shared = {
-        "spools": routes["spools"],
-        "assignments": respx.get(f"{API}/inventory/assignments").mock(
-            return_value=httpx.Response(200, json=recording("inventory-assignments.json"))
-        ),
+        "assignments": routes["assignments"],
         "printer": respx.get(f"{API}/printers/1").mock(
             return_value=httpx.Response(200, json=recording("printer.json"))
         ),
@@ -454,10 +467,9 @@ def test_an_all_plates_print_is_judged_on_every_plates_filament(
     report = _run(client, output_id, request={**SILK_REQUEST, **plates}, detail="advanced")
     found = {row["key"]: row for row in report["diagnostics"]}
     assert sorted(asked) == read
-    # Only the slots are a plate's own: the inventory is read once for every plate
-    # (the spools twice, once more for the filaments input's own read of the plan).
+    # Only the slots are a plate's own: the inventory is read once for every plate,
+    # and the filaments input's own read of the plan is that read (#6262 Task 7).
     assert {name: route.call_count for name, route in shared.items()} == {
-        "spools": 2,
         "assignments": 1,
         "printer": 1,
         "remain": 1,
@@ -544,6 +556,7 @@ def test_a_database_that_cannot_be_reached_degrades_to_a_503(
 
 
 @respx.mock
+@pytest.mark.usefixtures("silk_sb_spools")
 def test_without_choices_the_models_remembered_ones_and_printer_are_used(
     client: TestClient, model: str
 ) -> None:
@@ -620,6 +633,7 @@ def _run_library(client: TestClient, file_id: int, **body: Any) -> Any:
 
 @respx.mock
 @pytest.mark.requires_postgres
+@pytest.mark.usefixtures("silk_sb_spools")
 def test_a_library_file_is_judged_on_its_mesh_and_its_own_slots(
     client: TestClient, tmp_path: Path
 ) -> None:

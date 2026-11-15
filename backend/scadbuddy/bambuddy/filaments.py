@@ -1,9 +1,9 @@
-"""Choosing a spool per plate slot, from Bambuddy's own inventory (#87).
+"""Choosing a spool per plate slot (#87), from ScadBuddy's own spools (#6262 Task 7).
 
-This is a **picker**, not a matcher. It shows Bambuddy's spools with how much is left
-on each, marks the ones already loaded and puts them first, and hands the choice
-straight back to Bambuddy. ScadBuddy keeps no filament state of its own and decides no
-placement: which AMS tray a chosen spool is drawn from is Bambuddy's answer, computed
+This is a **picker**, not a matcher. It shows the SB spools with how much is left on
+each, marks the ones already loaded and puts them first, and hands the choice's type and
+colour to Bambuddy. ScadBuddy decides no placement on Bambuddy's path: which AMS tray a
+chosen spool is drawn from is Bambuddy's answer, computed
 by its scheduler's ``_compute_ams_mapping_for_printer`` whenever a queue item carries
 no ``ams_mapping`` — which is exactly what ScadBuddy sends.
 
@@ -57,12 +57,11 @@ from scadbuddy.bambuddy.models import (
     PrinterStatus,
     SlotChoice,
     SlotMaterial,
-    Spool,
     SpoolAssignment,
 )
 from scadbuddy.core.problems import ApiError
 from scadbuddy.filament.colour import same_opacity
-from scadbuddy.filament.models import HeldTrays
+from scadbuddy.filament.models import FilamentInventorySpool, HeldTrays
 from scadbuddy.print_library.reads import LibraryReads, reads_for, served_reads
 
 logger = logging.getLogger(__name__)
@@ -153,8 +152,8 @@ class SpoolOption(BaseModel):
     colour: str | None = None
     slicer_filament: str | None = None
     slicer_filament_name: str | None = None
-    #: ``label_weight - weight_used``, or Bambuddy's own reconciled figure for a loaded
-    #: spool, which wins where both exist.
+    #: The SB spool's grams left (its ledger), or Bambuddy's own reconciled figure for a
+    #: spool loaded in the chosen printer, which wins where both exist.
     remaining_g: float | None = None
     storage_location: str | None = None
     loaded: LoadedAt | None = None
@@ -179,8 +178,9 @@ class SpoolOption(BaseModel):
     #: untagged one, which reports -1.
     remain_percent: int | None = None
     #: ScadBuddy's own spool (#6262, `filament/inventory.py`): on a native run's tray
-    #: choice the SB spool the tray holds, on a shelf row the spool itself; ``None`` when
-    #: none is known. ``sb_number`` is its ``#N``, what its presets are read by (F1).
+    #: choice the SB spool the tray holds, on a shelf row or a Bambuddy-path row (Task 7,
+    #: whose ``spool_id`` is this number) the spool itself; ``None`` when none is known.
+    #: ``sb_number`` is its ``#N``, what its presets are read by (F1).
     sb_spool_id: UUID | None = None
     sb_number: int | None = None
     #: The colour with its alpha, ``#RRGGBBAA``: the held SB spool's own, else the tray's
@@ -243,10 +243,17 @@ class FilamentPlan(BaseModel):
     can print a part in the wrong colour when the right one is not loaded; with it on,
     Bambuddy holds the queue item until a tray of the right colour is loaded. A caller
     may still send ``False``.
+
+    ``ids`` says what a positive ``spool_id`` names (#6262 F14): ``"sb"`` an SB spool's
+    number, what every picker offers since Task 7 and every client sends; ``"bb"`` (the
+    default, so a plan from before it reads as it was meant: an in-flight run's input, an
+    older client) a Bambuddy spool id, mapped to its linked SB spool's number where it is
+    read (:func:`sb_plan`). A negative id is a tray chosen for itself either way.
     """
 
     slots: list[SlotChoice] = Field(default_factory=list)
     force_colour_match: bool = True
+    ids: Literal["bb", "sb"] = "bb"
 
     def spool_for(self, slot_id: int) -> int | None:
         return next((slot.spool_id for slot in self.slots if slot.slot_id == slot_id), None)
@@ -441,68 +448,62 @@ def seed_plan(options: FilamentOptions, remembered: Sequence[SlotChoice]) -> Fil
         )
         if kept is not None:
             chosen[slot.slot_id] = kept
-    return FilamentPlan(slots=[chosen[slot_id] for slot_id in sorted(chosen)])
+    return FilamentPlan(slots=[chosen[slot_id] for slot_id in sorted(chosen)], ids="sb")
 
 
 def build_options(
     *,
     library_file_id: int | None,
-    spools: list[Spool],
-    assignments: list[SpoolAssignment],
+    rows: Sequence[FilamentInventorySpool],
     requirements: list[SlotNeed],
     printer: Printer | None = None,
     slot_materials: list[SlotMaterial] | None = None,
 ) -> FilamentOptions:
-    """Join everything already fetched into what the dialog renders.
+    """Join everything already fetched into what the dialog renders: each unarchived SB
+    spool of ``rows`` (`FilamentInventory.rows`, #6262 Task 7) under its number, filled as
+    a native tray's spool is (`trays._from_spool`: its effective values, ``rgba`` and
+    ``needs_type``), at the tray it is in.
 
     Kept free of the client so the join — the part with the traps in it — is testable
     against recorded bodies without any HTTP at all.
     """
-    by_slot = {(material.ams_id, material.tray_id): material for material in (slot_materials or [])}
-    # Last assignment wins: Bambuddy keeps history rows, and a spool moved between
-    # trays would otherwise render in the tray it left.
-    assignment_by_spool = {assignment.spool_id: assignment for assignment in assignments}
+    # Here, not at the top: `trays` builds its choices from this module's models.
+    from scadbuddy.bambuddy.trays import _from_spool
 
+    by_slot = {(material.ams_id, material.tray_id): material for material in (slot_materials or [])}
     options: list[SpoolOption] = []
-    for spool in spools:
+    for row in rows:
+        spool, loaded = row.spool, row.loaded
         if spool.archived_at is not None:
             continue
-        assignment = assignment_by_spool.get(spool.id)
-        # ``inventory-remain`` was read for ``printer`` while ``/inventory/assignments``
-        # covers every printer, so a spool sitting in printer B's AMS 0 slot 1 must take
-        # none of printer A's AMS 0 slot 1 state — it is a different spool.
-        here = assignment is not None and (printer is None or assignment.printer_id == printer.id)
-        slot_material = (
-            by_slot.get((assignment.ams_id, assignment.tray_id)) if here and assignment else None
-        )
-        remaining = spool.remaining_g
+        # ``inventory-remain`` was read for ``printer`` while a spool's tray may be any
+        # printer's, so a spool sitting in printer B's AMS 0 slot 1 must take none of
+        # printer A's AMS 0 slot 1 state — it is a different spool.
+        here = loaded is not None and (printer is None or loaded.bambuddy_printer_id == printer.id)
+        slot_material = by_slot.get((loaded.ams_id, loaded.tray_id)) if here and loaded else None
+        option = SpoolOption(
+            spool_id=spool.number,
+            material=spool.names.material or "",
+            subtype=spool.names.subtype,
+            colour=normalise_colour(spool.effective.rgba),
+            storage_location=spool.names.location,
+            loaded=(
+                LoadedAt(
+                    # 0 for a printer Bambuddy does not have, reached over the LAN alone,
+                    # as its report's status reads (`printers.status.status_from_report`).
+                    printer_id=loaded.bambuddy_printer_id or 0,
+                    printer_name=loaded.printer_name,
+                    ams_id=loaded.ams_id,
+                    tray_id=loaded.tray_id,
+                )
+                if loaded is not None
+                else None
+            ),
+        ).model_copy(update=_from_spool(spool))
+        # Bambuddy's reconciliation of the tray beats the ledger for a spool loaded here.
         if slot_material is not None and slot_material.remaining_g is not None:
-            remaining = slot_material.remaining_g
-        options.append(
-            SpoolOption(
-                spool_id=spool.id,
-                material=spool.material,
-                subtype=spool.subtype,
-                brand=spool.brand,
-                color_name=spool.color_name,
-                colour=normalise_colour(spool.rgba),
-                slicer_filament=spool.slicer_filament,
-                slicer_filament_name=spool.slicer_filament_name,
-                remaining_g=remaining,
-                storage_location=spool.storage_location,
-                label_weight_g=spool.label_weight or None,
-                loaded=(
-                    LoadedAt(
-                        printer_id=assignment.printer_id,
-                        printer_name=assignment.printer_name,
-                        ams_id=assignment.ams_id,
-                        tray_id=assignment.tray_id,
-                    )
-                    if assignment
-                    else None
-                ),
-            )
-        )
+            option.remaining_g = slot_material.remaining_g
+        options.append(option)
 
     options.sort(key=_display_order(printer.id if printer else None))
     return _options(
@@ -903,8 +904,10 @@ async def gather_options(
     plate_id: int | None = None,
     fallback_colours: list[str] | None = None,
     own_colours: list[str] | None = None,
+    reads: SbRows | None = None,
 ) -> FilamentOptions:
-    """Read Bambuddy once for everything the filament step needs.
+    """Read Bambuddy once for everything the filament step needs, and ``reads`` for the
+    SB spools it offers (#6262 Task 7).
 
     ``own_colours`` replace the colors the file reports, slot by slot: the file was
     recolored for a run's spools (#457), and the step shows the model's.
@@ -916,21 +919,56 @@ async def gather_options(
         plate_ids=[plate_id],
         fallback_colours=fallback_colours,
         own_colours=own_colours,
+        reads=reads,
     )
     return options
 
 
-#: The spools and where each is loaded, read together (#2166 reuses one read).
-Inventory = tuple[list[Spool], list[SpoolAssignment]]
+#: The SB spools and where each is loaded, read once (#2166 reuses one read; #6262 Task 7).
+Inventory = list[FilamentInventorySpool]
 
 
-async def read_inventory(client: BambuddyClient) -> Inventory:
-    """The spools and their assignments, read together (#2354); a failure surfaces in
-    the order every reader once read them in, the spools' first."""
-    spools, assignments = await asyncio.gather(
-        client.spools(), client.spool_assignments(), return_exceptions=True
+class SbRows(Protocol):
+    """What the Bambuddy path reads of SB spools (`filament/inventory.py` `SbSpoolReads`,
+    the API's Postgres or the print worker's CRUD routes)."""
+
+    async def rows(
+        self, bb_assignments: Sequence[SpoolAssignment]
+    ) -> list[FilamentInventorySpool]: ...
+
+    async def bb_to_sb(self, ids: Sequence[int]) -> dict[int, int]: ...
+
+
+async def read_inventory(client: BambuddyClient, reads: SbRows | None) -> Inventory:
+    """The Bambuddy path's picker rows (#6262 Task 7): ScadBuddy's own spools, each in the
+    tray a printer's report holds it in, else the one Bambuddy assigns its linked spool to
+    (``/inventory/assignments``, read here). Without ``reads`` there are no SB spools to
+    offer, so there are no rows."""
+    assignments = await client.spool_assignments()
+    return await reads.rows(assignments) if reads is not None else []
+
+
+async def sb_plan(plan: FilamentPlan, reads: SbRows | None) -> FilamentPlan:
+    """``plan`` naming SB spool numbers (#6262 F14): as it is when its ``ids`` are
+    ``"sb"``; else each positive id, a Bambuddy spool's, mapped to its linked SB spool's
+    number (`FilamentInventory.bb_to_sb`), and a slot whose spool has no link dropped,
+    never read as SB spool #N. A tray chosen for itself (a negative id) is kept."""
+    if plan.ids == "sb":
+        return plan
+    named = [slot.spool_id for slot in plan.slots if slot.spool_id > 0]
+    mapped = await reads.bb_to_sb(named) if reads is not None and named else {}
+    return plan.model_copy(
+        update={
+            "ids": "sb",
+            "slots": [
+                slot
+                if slot.spool_id <= 0
+                else SlotChoice(slot_id=slot.slot_id, spool_id=mapped[slot.spool_id])
+                for slot in plan.slots
+                if slot.spool_id <= 0 or slot.spool_id in mapped
+            ],
+        }
     )
-    return settled(spools), settled(assignments)
 
 
 #: The most plates one request may name (#3652); a 3MF lays out far fewer.
@@ -1009,15 +1047,17 @@ async def gather_plate_options(
     native: LibraryReads | None = None,
     trays_from: PrinterStatus | None = None,
     held: HeldTrays | None = None,
+    reads: SbRows | None = None,
 ) -> list[FilamentOptions]:
     """:func:`gather_options` for several plates of one file, in ``plate_ids`` order.
 
-    The spools, assignments and printer are the same for every plate, so they are read
-    once (#480); only each plate's slots are read per plate, concurrently. The reads
-    keep the single-plate order, spools, assignments, the plates, then the printer and
-    its inventory-remain, so the same failure surfaces either way: a plate's error beats
-    the printer's, and among plates the first failing one in ``plate_ids`` order wins.
-    ``inventory`` is the spools and assignments when the caller has read them already.
+    The spools and printer are the same for every plate, so they are read once (#480);
+    only each plate's slots are read per plate, concurrently. The reads keep the
+    single-plate order, the spools (`read_inventory`: Bambuddy's assignments, then the SB
+    spools from ``reads``), the plates, then the printer and its inventory-remain, so the
+    same failure surfaces either way: a plate's error beats the printer's, and among
+    plates the first failing one in ``plate_ids`` order wins. ``inventory`` is the
+    spools when the caller has read them already.
     ``known`` answers each plate's slots in place of Bambuddy's ``filament-requirements``
     when they were read from the file itself (#2550). A native file's (#3827) are read
     from ``native``: the empty requirement, so its slots read as unknown.
@@ -1041,8 +1081,8 @@ async def gather_plate_options(
             held=held,
         )
     if client is None:
-        raise TypeError("the inventory is Bambuddy's: reading it needs a client")
-    spools, assignments = inventory if inventory is not None else await read_inventory(client)
+        raise TypeError("the Bambuddy path's options need a client")
+    rows = inventory if inventory is not None else await read_inventory(client, reads)
 
     answers = await asyncio.gather(
         *(
@@ -1070,8 +1110,7 @@ async def gather_plate_options(
     return [
         build_options(
             library_file_id=library_file_id,
-            spools=spools,
-            assignments=assignments,
+            rows=rows,
             requirements=requirements,
             printer=printer,
             slot_materials=slot_materials,
