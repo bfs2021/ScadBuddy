@@ -483,8 +483,11 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   (`effective()`: spool → type → subtype → material, the one resolver; a type links its
   price-book row by identity, alpha included, and never rewrites a found row), `spools.py`
   (instances and tag bindings; every writer locks the tag before the spool; archive closes
-  the open binding), `presets.py` (a spool's own presets and K values over its type's, by key; `preset_for` is exact, never a near nozzle), `ledger.py` (`filament_spool_events`, the one source of grams left:
-  the newest absolute reading, then the deltas after it; events carry their physical time,
+  the open binding; `detail()` is the spool page's read: tags, last tag and its holder, the
+  grams `basis`, `in_use`; `ledger()` pages every spool's events by an opaque `(at, seq)`
+  cursor; `low_stock` is computed per spool against `DEFAULT_LOW_STOCK_PCT`), `presets.py` (a spool's own presets and K values over its type's, by key; `preset_for` is exact, never a near nozzle), `ledger.py` (`filament_spool_events`, the one source of grams left:
+  the newest absolute reading, then the deltas after it (`basis()` returns that anchor and those
+  deltas, and `grams_left()` is built on it); events carry their physical time,
   ordered by `(at, seq)`; a time-less event gets a clock-step guard because the WSL clock
   steps back), `locations.py` (a spool moves only through `move()`; AMS trays are keyed by
   printer, AMS and tray, never by name), `bambuddy_pull.py` (import and the scheduled pull,

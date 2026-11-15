@@ -207,6 +207,34 @@ def test_a_tag_is_bound_moved_and_unbound(client: TestClient) -> None:
     assert client.post(f"{SPOOLS}/{a['id']}/tags", json={"kind": "other"}).status_code == 422
 
 
+def test_the_reads_the_filament_page_needs(client: TestClient) -> None:
+    a = _spool(client, grams_left=400, label_weight_g=1000)
+    tag = {"tag_uid": "AABBCCDD", "kind": "bambu_mifare"}
+    assert client.post(f"{SPOOLS}/{a['id']}/tags", json=tag).status_code == 201
+    detail = client.get(f"{SPOOLS}/{a['id']}").json()
+    assert detail["tag"]["tag_uid"] == "AABBCCDD"
+    assert detail["names"]["material"] == "PLA"
+    assert detail["basis"]["anchor"]["grams_after"] == 400
+    assert detail["in_use"] is False
+    assert detail["low_stock"] is False
+    rows = client.get("/api/v1/filament/tags").json()
+    assert [r["spool_number"] for r in rows] == [detail["number"]]
+    one = client.get(f"/api/v1/filament/tags/{rows[0]['id']}")
+    assert one.status_code == 200, one.text
+    assert [h["spool_id"] for h in one.json()["history"]] == [a["id"]]
+    assert client.get(f"/api/v1/filament/tags/{MISSING}").status_code == 404
+    page = client.get("/api/v1/filament/events", params={"limit": 1}).json()
+    assert len(page["events"]) == 1
+    assert page["events"][0]["spool_number"] == detail["number"]
+    rest = client.get("/api/v1/filament/events", params={"cursor": page["next_cursor"]})
+    assert rest.status_code == 200, rest.text
+    assert client.get("/api/v1/filament/events", params={"cursor": "nope"}).status_code == 422
+    assert client.get("/api/v1/filament/events", params={"limit": 501}).status_code == 422
+    summary = client.get("/api/v1/filament/summary").json()
+    assert summary["spools"] == 1
+    assert summary["grams_left"] == 400
+
+
 def test_a_spool_has_its_own_presets_and_k_values(client: TestClient) -> None:
     one = f"{SPOOLS}/{_spool(client)['id']}"
     rows = [{"printer_model": "H2C", "nozzle_diameter": "0.4", "slicer_filament": "P1"}]

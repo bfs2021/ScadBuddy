@@ -258,7 +258,12 @@ export const filamentTools: Tool[] = [
   defineTool({
     name: 'filament_spool_get',
     label: 'Read a spool',
-    description: 'One spool (archived too) with its effective values and `grams_left`.',
+    description:
+      'One spool (archived too) with its effective values, `names` (brand, material, subtype, category, effect, ' +
+      'insert type and place as text), `low_stock`, and: the `tag` bound now, the `last_tag` it had before with ' +
+      '`held_by` (the number of the spool that holds that tag now), its effective `presets` and `k_values`, the ' +
+      '`basis` of `grams_left` (the anchor reading and the deltas taken off it), and `in_use` (it has printed, so ' +
+      'it can be archived but not deleted).',
     input: z.object({ spool_id: z.string().uuid().describe("A spool's `id` from filament_spool_list") }),
     risk: 'read',
     source: SOURCE,
@@ -492,6 +497,87 @@ export const filamentTools: Tool[] = [
           `read the ledger of spool ${spool_id}`,
         ),
       ),
+  }),
+
+  defineTool({
+    name: 'filament_tag_list',
+    label: 'List spool tags',
+    description:
+      "ScadBuddy's spool tags (RFID or NFC), oldest first, each with its open `binding` and the `spool_number` " +
+      'it is on. A tag on no spool only with `include_unbound`.',
+    input: z.object({ include_unbound: z.boolean().default(false) }),
+    risk: 'read',
+    source: SOURCE,
+    routes: ['GET /api/v1/filament/tags'],
+    handler: async ({ include_unbound }, { backend }) =>
+      json(
+        await ok(
+          backend.GET('/api/v1/filament/tags', { params: { query: { include_unbound } } }),
+          'list the tags',
+        ),
+      ),
+  }),
+
+  defineTool({
+    name: 'filament_tag_get',
+    label: 'Read a spool tag',
+    description: 'One tag with its open binding and every binding it has had, newest first. 404 for none.',
+    input: z.object({ tag_id: z.string().uuid().describe("A tag's `id` from filament_tag_list") }),
+    risk: 'read',
+    source: SOURCE,
+    routes: ['GET /api/v1/filament/tags/{tag_id}'],
+    handler: async ({ tag_id }, { backend }) =>
+      json(
+        await ok(
+          backend.GET('/api/v1/filament/tags/{tag_id}', { params: { path: { tag_id } } }),
+          `read tag ${tag_id}`,
+        ),
+      ),
+  }),
+
+  defineTool({
+    name: 'filament_ledger_list',
+    label: 'Read the filament ledger',
+    description:
+      "Every spool's events, newest first, each with its `spool_number`. Filter by `spool_id`, `kind`, `source` " +
+      'and `since` (an ISO time with its offset). A page holds up to `limit` events (at most 500); when ' +
+      '`next_cursor` is set, pass it back as `cursor` for the next page.',
+    input: z.object({
+      spool_id: z.string().uuid().optional(),
+      kind: z.string().optional().describe('An event kind, such as `weighed`, `print_ended` or `moved`'),
+      source: z.enum(['ams_remain', 'scale', 'print_estimate', 'print_actual', 'person', 'bb']).optional(),
+      since: z.string().optional(),
+      cursor: z.string().optional(),
+      limit: z.number().int().min(1).max(500).default(100),
+    }),
+    risk: 'read',
+    source: SOURCE,
+    routes: ['GET /api/v1/filament/events'],
+    handler: async (query, { backend }) =>
+      json(
+        await ok(
+          backend.GET('/api/v1/filament/events', {
+            // The backend refuses an unknown kind with a 422 that names the kinds.
+            params: { query: query as never },
+          }),
+          'read the ledger',
+        ),
+      ),
+  }),
+
+  defineTool({
+    name: 'filament_summary',
+    label: 'Summarise the filament inventory',
+    description:
+      "The unarchived spools in total: their number, grams left, the value of those grams at each spool's cost " +
+      'per kg (`null` when none has a cost), the stock by material, how many sit in an AMS tray, how many are ' +
+      'low on stock, and how many still need a type.',
+    input: z.object({}),
+    risk: 'read',
+    source: SOURCE,
+    routes: ['GET /api/v1/filament/summary'],
+    handler: async (_input, { backend }) =>
+      json(await ok(backend.GET('/api/v1/filament/summary'), 'summarise the inventory')),
   }),
 
   defineTool({

@@ -650,6 +650,18 @@ class SpoolPatch(_Patch):
     archived: bool | None = None
 
 
+class SpoolNames(BaseModel):
+    """The names behind a spool's effective ids, and its place's name."""
+
+    brand: str | None = None
+    material: str | None = None
+    subtype: str | None = None
+    category: str | None = None
+    effect: str | None = None
+    insert_type: str | None = None
+    location: str | None = None
+
+
 class Spool(_Row):
     number: int
     type_id: UUID | None
@@ -686,6 +698,11 @@ class Spool(_Row):
     effective: EffectiveValues = Field(default_factory=EffectiveValues)
     #: The names of the fields the spool overrides.
     overridden: list[str] = Field(default_factory=list)
+    #: The text of the effective catalog rows and of the spool's place.
+    names: SpoolNames = Field(default_factory=lambda: SpoolNames())
+    #: Server-computed (F3): the grams left are under the spool's effective low-stock
+    #: percentage of its label weight, else the default's. False when either is unknown.
+    low_stock: bool = False
 
 
 # -- tags, bindings, the ledger -------------------------------------------------------
@@ -882,3 +899,78 @@ class BbLink(BaseModel):
     bb_updated_at: datetime | None
     pushed_hash: str | None
     linked_at: datetime
+
+
+# -- reads for the Filament section (#6262) ----------------------------------------
+
+
+class GramsBasis(BaseModel):
+    """What a spool's ``grams_left`` is made of: the reading it anchors on and the
+    deltas taken off it, oldest first."""
+
+    anchor: SpoolEvent | None
+    deltas: list[SpoolEvent]
+
+
+class LastTag(BaseModel):
+    """The tag a spool had before, how its binding ended, and the number of the spool
+    that holds the tag now."""
+
+    tag: Tag
+    unbound_at: datetime
+    reason: str | None
+    held_by: int | None
+
+
+class SpoolDetail(Spool):
+    """A spool with what its page shows: its tags, effective presets and K values, the
+    basis of its grams and whether it ever printed."""
+
+    #: The tag bound to it now.
+    tag: Tag | None = None
+    last_tag: LastTag | None = None
+    presets: list[EffectivePreset] = Field(default_factory=list)
+    k_values: list[EffectiveKValue] = Field(default_factory=list)
+    basis: GramsBasis
+    #: Any ``print_started`` or ``print_ended`` event: the spool is archived, not deleted.
+    in_use: bool = False
+
+
+class TagRow(Tag):
+    binding: TagBinding | None = None
+    spool_number: int | None = None
+
+
+class TagDetail(TagRow):
+    #: Every binding of the tag, newest first.
+    history: list[TagBinding] = Field(default_factory=list)
+
+
+class LedgerRow(SpoolEvent):
+    spool_number: int
+
+
+class EventPage(BaseModel):
+    events: list[LedgerRow]
+    #: Opaque: pass it back as ``cursor`` for the next page; ``None`` on the last.
+    next_cursor: str | None = None
+
+
+class MaterialStock(BaseModel):
+    material: str | None
+    spools: int
+    grams_left: float
+
+
+class InventorySummary(BaseModel):
+    """The unarchived spools in total."""
+
+    spools: int
+    grams_left: float
+    #: Grams left at each spool's effective cost per kg; ``None`` when none has a cost.
+    value_left: Decimal | None
+    by_material: list[MaterialStock]
+    #: Spools in an AMS tray place.
+    loaded: int
+    low_stock: int
+    needs_type: int

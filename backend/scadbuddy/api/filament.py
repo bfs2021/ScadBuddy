@@ -11,8 +11,8 @@ import asyncio
 from typing import Annotated, Any, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Response, status
-from pydantic import BaseModel, ValidationError
+from fastapi import APIRouter, Body, Query, Response, status
+from pydantic import AwareDatetime, BaseModel, ValidationError
 
 from scadbuddy.api.deps import SettingsStoreDep
 from scadbuddy.auth.component import CallerDep
@@ -27,6 +27,7 @@ from scadbuddy.filament.catalog import (
     CatalogSpec,
 )
 from scadbuddy.filament.component import FilamentDep
+from scadbuddy.filament.ledger import BadCursorError
 from scadbuddy.filament.locations import (
     LocationCycleError,
     LocationExistsError,
@@ -333,8 +334,10 @@ def _no_spool(spool_id: UUID) -> ApiError:
     summary="List spools",
     description=(
         "The spools by number, each with its `effective` values (its own override, else its "
-        "type's, else its subtype's and material's print defaults) and the names of the "
-        "fields it `overridden`. `needs_type=true` keeps only spools with no type yet, "
+        "type's, else its subtype's and material's print defaults), the names of the "
+        "fields it `overridden`, the `names` behind its ids and `low_stock` (the grams left "
+        "are under its low-stock percentage of its label weight, else 20 %; false when "
+        "either weight is unknown). `needs_type=true` keeps only spools with no type yet, "
         "`false` only typed ones. Archived spools only with `include_archived`."
     ),
 )
@@ -367,12 +370,18 @@ async def create_spool(filament: FilamentDep, caller: CallerDep, body: m.SpoolCr
 
 @router.get(
     "/spools/{spool_id}",
-    response_model=m.Spool,
+    response_model=m.SpoolDetail,
     summary="Read a spool",
-    description="One spool (archived too) with its effective values. 404 for none.",
+    description=(
+        "One spool (archived too) with its effective values and `names`, and what its page "
+        "shows: the `tag` bound now, the `last_tag` it had before and the number of the "
+        "spool that holds that one (`held_by`), its effective `presets` and `k_values`, the "
+        "`basis` of its `grams_left` (the anchor reading and the deltas taken off it), and "
+        "`in_use` (it has printed, so it is archived rather than deleted). 404 for none."
+    ),
 )
-async def get_spool(filament: FilamentDep, spool_id: UUID) -> m.Spool:
-    found = await asyncio.to_thread(filament.spools.get, spool_id)
+async def get_spool(filament: FilamentDep, spool_id: UUID) -> m.SpoolDetail:
+    found = await asyncio.to_thread(filament.spools.detail, spool_id)
     if found is None:
         raise _no_spool(spool_id)
     return found
@@ -610,6 +619,84 @@ async def add_spool_event(
     if made is None:
         raise _no_spool(spool_id)
     return made
+
+
+@router.get(
+    "/tags",
+    response_model=list[m.TagRow],
+    summary="List tags",
+    description=(
+        "Every tag, oldest first, with its open `binding` and the `spool_number` it is on. "
+        "A tag on no spool only with `include_unbound`."
+    ),
+)
+async def list_tags(filament: FilamentDep, include_unbound: bool = False) -> list[m.TagRow]:
+    return await asyncio.to_thread(filament.spools.tags, include_unbound=include_unbound)
+
+
+@router.get(
+    "/tags/{tag_id}",
+    response_model=m.TagDetail,
+    summary="Read a tag",
+    description=(
+        "One tag with its open binding and every binding it has had, newest first. 404 for none."
+    ),
+)
+async def get_tag(filament: FilamentDep, tag_id: UUID) -> m.TagDetail:
+    found = await asyncio.to_thread(filament.spools.tag, tag_id)
+    if found is None:
+        raise ApiError(status.HTTP_404_NOT_FOUND, f"no tag {tag_id}")
+    return found
+
+
+@router.get(
+    "/events",
+    response_model=m.EventPage,
+    summary="Read the ledger",
+    description=(
+        "Every spool's events, newest first by time then booking order, each with its "
+        "`spool_number`. Filter by `spool_id`, `kind`, `source` and `since` (a time with "
+        "its offset). A page holds up to `limit` events (at most 500); `next_cursor` is "
+        "opaque, and passing it back as `cursor` gives the next page with no row lost or "
+        "repeated. 422 for a cursor no page gave."
+    ),
+)
+async def list_events(
+    filament: FilamentDep,
+    spool_id: UUID | None = None,
+    kind: m.EventKind | None = None,
+    source: m.EventSource | None = None,
+    since: AwareDatetime | None = None,
+    cursor: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+) -> m.EventPage:
+    try:
+        return await asyncio.to_thread(
+            filament.spools.ledger,
+            spool_id=spool_id,
+            kind=kind,
+            source=source,
+            since=since,
+            cursor=cursor,
+            limit=limit,
+        )
+    except BadCursorError as exc:
+        raise _refused(exc) from None
+
+
+@router.get(
+    "/summary",
+    response_model=m.InventorySummary,
+    summary="Summarise the inventory",
+    description=(
+        "The unarchived spools in total: their number, grams left, the value of those "
+        "grams at each spool's cost per kg (`null` when none has a cost), the stock by "
+        "material, how many sit in an AMS tray, how many are low on stock, and how many "
+        "still need a type."
+    ),
+)
+async def get_summary(filament: FilamentDep) -> m.InventorySummary:
+    return await asyncio.to_thread(filament.spools.summary)
 
 
 # -- locations ------------------------------------------------------------------------

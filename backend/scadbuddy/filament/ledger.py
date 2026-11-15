@@ -30,6 +30,7 @@ events a print; #6263's AMS readings, one per tick, will need an incremental pat
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
@@ -123,11 +124,12 @@ def _reading(event: m.SpoolEvent, label_weight_g: int | None) -> float | None:
     return None
 
 
-def grams_left(
+def basis(
     events: Sequence[m.SpoolEvent], *, weight_locked: bool, label_weight_g: int | None
-) -> float | None:
-    """The grams left on a spool by the rule above; ``None`` with no reading to anchor
-    on. Never below zero. Events of one time keep the order they are given in."""
+) -> m.GramsBasis:
+    """The reading the grams left anchor on, and the deltas taken off it, by the rule
+    above; no anchor when there is no reading. Events of one time keep the order they are
+    given in."""
     ordered = sorted(events, key=lambda e: e.at)
     readings = [_reading(e, label_weight_g) for e in ordered]
     manual = max(
@@ -142,15 +144,30 @@ def grams_left(
             continue
         anchor = i
     if anchor < 0:
-        return None
+        return m.GramsBasis(anchor=None, deltas=[])
     ended = {(e.ref_kind, e.ref_id) for e in ordered if e.kind == "print_ended" and e.ref_id}
-    value = readings[anchor]
+    deltas = [
+        event
+        for event in ordered[anchor + 1 :]
+        if event.source in _DELTA
+        and event.delta_g is not None
+        and not (event.source == "print_estimate" and (event.ref_kind, event.ref_id) in ended)
+    ]
+    return m.GramsBasis(anchor=ordered[anchor], deltas=deltas)
+
+
+def grams_left(
+    events: Sequence[m.SpoolEvent], *, weight_locked: bool, label_weight_g: int | None
+) -> float | None:
+    """The grams left on a spool by the rule above; ``None`` with no reading to anchor
+    on. Never below zero. It is `basis`'s anchor less its deltas, so the two agree."""
+    found = basis(events, weight_locked=weight_locked, label_weight_g=label_weight_g)
+    if found.anchor is None:
+        return None
+    value = _reading(found.anchor, label_weight_g)
     assert value is not None
-    for event in ordered[anchor + 1 :]:
-        if event.source not in _DELTA or event.delta_g is None:
-            continue
-        if event.source == "print_estimate" and (event.ref_kind, event.ref_id) in ended:
-            continue
+    for event in found.deltas:
+        assert event.delta_g is not None
         value += event.delta_g
     return max(value, 0.0)
 
@@ -162,6 +179,68 @@ def events(conn: Conn, spool_id: UUID) -> list[m.SpoolEvent]:
         (spool_id,),
     ).fetchall()
     return [m.SpoolEvent.model_validate(row) for row in rows]
+
+
+class BadCursorError(ValueError):
+    """A ``cursor`` that no page of this ledger gave."""
+
+    def __init__(self) -> None:
+        super().__init__("the cursor is not one this ledger gave")
+
+
+def _encode(at: datetime, seq: int) -> str:
+    return base64.urlsafe_b64encode(f"{at.isoformat()}|{seq}".encode()).decode().rstrip("=")
+
+
+def _decode(cursor: str) -> tuple[datetime, int]:
+    try:
+        text = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)).decode()
+        at, seq = text.rsplit("|", 1)
+        return datetime.fromisoformat(at), int(seq)
+    except ValueError:
+        raise BadCursorError() from None
+
+
+def page(
+    conn: Conn,
+    *,
+    spool_id: UUID | None = None,
+    kind: m.EventKind | None = None,
+    source: m.EventSource | None = None,
+    since: datetime | None = None,
+    cursor: str | None = None,
+    limit: int = 100,
+) -> m.EventPage:
+    """One page of every spool's events, newest first by ``(at, seq)``. The cursor names
+    the last row of the page before, as that pair, so two events of one time never lose
+    or repeat a row at the page's edge (F4)."""
+    where: list[str] = []
+    args: list[Any] = []
+    for column, value in (("e.spool_id", spool_id), ("e.kind", kind), ("e.source", source)):
+        if value is not None:
+            where.append(f"{column} = %s")
+            args.append(value)
+    if since is not None:
+        where.append("e.at >= %s")
+        args.append(since)
+    if cursor is not None:
+        at, seq = _decode(cursor)
+        where.append("(e.at, e.seq) < (%s, %s)")
+        args.extend((at, seq))
+    clause = f" WHERE {' AND '.join(where)}" if where else ""
+    columns = ", ".join(f"e.{c}" for c in m.SpoolEvent.model_fields)
+    rows = conn.execute(
+        f"SELECT {columns}, e.seq, s.number AS spool_number FROM filament_spool_events e"
+        f" JOIN filament_spools s ON s.id = e.spool_id{clause}"
+        " ORDER BY e.at DESC, e.seq DESC LIMIT %s",
+        [*args, limit + 1],
+    ).fetchall()
+    more = len(rows) > limit
+    rows = rows[:limit]
+    return m.EventPage(
+        events=[m.LedgerRow.model_validate(row) for row in rows],
+        next_cursor=_encode(rows[-1]["at"], rows[-1]["seq"]) if more else None,
+    )
 
 
 def refresh_derived(conn: Conn, spool_id: UUID) -> None:

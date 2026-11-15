@@ -173,6 +173,10 @@ describe('filament spool tools', () => {
     ['filament_spool_list', 'read'],
     ['filament_spool_get', 'read'],
     ['filament_spool_events', 'read'],
+    ['filament_tag_list', 'read'],
+    ['filament_tag_get', 'read'],
+    ['filament_ledger_list', 'read'],
+    ['filament_summary', 'read'],
     ['filament_spool_upsert', 'write'],
     ['filament_spool_set_presets', 'write'],
     ['filament_spool_set_k_values', 'write'],
@@ -200,6 +204,29 @@ describe('filament spool tools', () => {
     expect(firstText(await runTool(tool('filament_spool_get'), { spool_id: ROW }, ctx()))).toEqual({ id: ROW })
     const events = await runTool(tool('filament_spool_events'), { spool_id: ROW }, ctx())
     expect(firstText(events)).toEqual([{ kind: 'created' }])
+  })
+
+  it('reads the tags, a page of the ledger and the summary', async () => {
+    const queries: string[] = []
+    server.use(
+      http.get(`${BACKEND}/api/v1/filament/tags`, ({ request }) => {
+        queries.push(new URL(request.url).search)
+        return HttpResponse.json([{ id: ROW }])
+      }),
+      http.get(`${BACKEND}/api/v1/filament/tags/${ROW}`, () => HttpResponse.json({ id: ROW, history: [] })),
+      http.get(`${BACKEND}/api/v1/filament/events`, ({ request }) => {
+        queries.push(new URL(request.url).search)
+        return HttpResponse.json({ events: [], next_cursor: null })
+      }),
+      http.get(`${BACKEND}/api/v1/filament/summary`, () => HttpResponse.json({ spools: 2 })),
+    )
+    const tags = await runTool(tool('filament_tag_list'), { include_unbound: true }, ctx())
+    expect(firstText(tags)).toEqual([{ id: ROW }])
+    expect(firstText(await runTool(tool('filament_tag_get'), { tag_id: ROW }, ctx()))).toEqual({ id: ROW, history: [] })
+    const page = await runTool(tool('filament_ledger_list'), { spool_id: ROW, cursor: 'abc', limit: 2 }, ctx())
+    expect(firstText(page)).toEqual({ events: [], next_cursor: null })
+    expect(firstText(await runTool(tool('filament_summary'), {}, ctx()))).toEqual({ spools: 2 })
+    expect(queries).toEqual(['?include_unbound=true', `?spool_id=${ROW}&cursor=abc&limit=2`])
   })
 
   it('adds a spool, edits it, archives it and deletes another', async () => {

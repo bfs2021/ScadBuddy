@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
+from datetime import datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -29,19 +31,28 @@ Conn = Connection[DictRow]
 Row = Mapping[str, Any]
 _Spools = list[m.Spool]
 _Events = list[m.SpoolEvent]
+_TagRows = list[m.TagRow]
 _Presets = list[m.EffectivePreset]
 _KValues = list[m.EffectiveKValue]
 _PresetRows = list[m.SpoolPresetCreate]
 _KRows = list[m.SpoolKValueCreate]
 
-#: The columns of a spool row: every field of `Spool` but the two it is given here.
-_SPOOL_FIELDS = tuple(f for f in m.Spool.model_fields if f not in {"effective", "overridden"})
+#: The columns of a spool row: every field of `Spool` but the four it is given here.
+_SPOOL_FIELDS = tuple(
+    f for f in m.Spool.model_fields if f not in {"effective", "overridden", "names", "low_stock"}
+)
 _SPOOL_COLUMNS = ", ".join(_SPOOL_FIELDS)
 _TYPE_COLUMNS = ", ".join(m.SpoolType.model_fields)
 _TAG_COLUMNS = ", ".join(m.Tag.model_fields)
 _BINDING_COLUMNS = ", ".join(m.TagBinding.model_fields)
+_TAG_COLUMNS_T = ", ".join(f"t.{f}" for f in m.Tag.model_fields)
+#: A binding's columns, prefixed so they cannot clash with the tag's (``id``).
+_BINDING_COLUMNS_B = ", ".join(f"b.{f} AS binding_{f}" for f in m.TagBinding.model_fields)
 #: The events that keep a spool from being deleted: it printed.
 _USED: tuple[m.EventKind, ...] = ("print_started", "print_ended")
+#: The percentage of its label weight under which a spool is low, when it sets none.
+#: Task 13 (#6262) replaces it with the setting ``filament_low_stock_pct``.
+DEFAULT_LOW_STOCK_PCT = 20
 #: What a create or a patch may write to a column of its own.
 _WRITABLE = frozenset(m.SpoolPatch.model_fields) - {"archived"}
 
@@ -108,18 +119,56 @@ def _hydrate(conn: Conn, rows: list[dict[str, Any]]) -> list[m.Spool]:
 
     subtypes = _by_id(conn, "filament_subtypes", "*", (level(r, "subtype_id") for r in rows))
     materials = _by_id(conn, "filament_materials", "*", (level(r, "material_id") for r in rows))
-    spools = []
-    for row in rows:
-        values = effective(
+    values = [
+        effective(
             row,
             pick(types, row["type_id"]),
             pick(subtypes, level(row, "subtype_id")),
             pick(materials, level(row, "material_id")),
         )
+        for row in rows
+    ]
+    brands = _by_id(conn, "filament_brands", "id, name", (v.brand_id for v in values))
+    categories = _by_id(conn, "filament_categories", "id, name", (v.category_id for v in values))
+    effects = _by_id(conn, "filament_effects", "id, name", (v.effect_id for v in values))
+    inserts = _by_id(conn, "filament_insert_types", "id, name", (v.insert_type_id for v in values))
+    places = _by_id(conn, "filament_locations", "id, name", (r["location_id"] for r in rows))
+
+    def name(found: dict[UUID, Row], key: UUID | None) -> str | None:
+        row = pick(found, key)
+        return None if row is None else str(row["name"])
+
+    spools = []
+    for row, own in zip(rows, values, strict=True):
+        names = m.SpoolNames(
+            brand=name(brands, own.brand_id),
+            material=name(materials, own.material_id),
+            subtype=name(subtypes, own.subtype_id),
+            category=name(categories, own.category_id),
+            effect=name(effects, own.effect_id),
+            insert_type=name(inserts, own.insert_type_id),
+            location=name(places, row["location_id"]),
+        )
         spools.append(
-            m.Spool.model_validate(row | {"effective": values, "overridden": overridden(row)})
+            m.Spool.model_validate(
+                row
+                | {
+                    "effective": own,
+                    "overridden": overridden(row),
+                    "names": names,
+                    "low_stock": _low_stock(row["grams_left"], own),
+                }
+            )
         )
     return spools
+
+
+def _low_stock(grams_left: float | None, values: m.EffectiveValues) -> bool:
+    label = values.label_weight_g
+    if grams_left is None or not label:
+        return False
+    pct = DEFAULT_LOW_STOCK_PCT if values.low_stock_pct is None else values.low_stock_pct
+    return grams_left / label * 100 < pct
 
 
 class FilamentSpoolStore:
@@ -145,6 +194,148 @@ class FilamentSpoolStore:
     def get(self, spool_id: UUID) -> m.Spool | None:
         with self._pool.connection() as conn:
             return self._spool(conn, spool_id)
+
+    def detail(self, spool_id: UUID) -> m.SpoolDetail | None:
+        """The spool with its tags, effective presets and K values, the basis of its
+        grams and whether it ever printed; ``None`` for no such spool."""
+        with self._pool.connection() as conn:
+            spool = self._spool(conn, spool_id)
+            if spool is None:
+                return None
+            history = ledger.events(conn, spool_id)
+            tag_row = conn.execute(
+                f"SELECT {_TAG_COLUMNS_T} FROM filament_tags t JOIN filament_tag_bindings b"
+                " ON b.tag_id = t.id WHERE b.spool_id = %s AND b.unbound_at IS NULL",
+                (spool_id,),
+            ).fetchone()
+            last = conn.execute(
+                f"SELECT {_TAG_COLUMNS_T}, b.unbound_at, b.reason,"
+                " (SELECT s.number FROM filament_tag_bindings o JOIN filament_spools s"
+                "  ON s.id = o.spool_id WHERE o.tag_id = t.id AND o.unbound_at IS NULL)"
+                " AS held_by FROM filament_tag_bindings b JOIN filament_tags t ON t.id = b.tag_id"
+                " WHERE b.spool_id = %s AND b.unbound_at IS NOT NULL"
+                " AND NOT EXISTS (SELECT 1 FROM filament_tag_bindings c"
+                "  WHERE c.spool_id = b.spool_id"
+                "  AND c.tag_id = b.tag_id AND c.unbound_at IS NULL)"
+                " ORDER BY b.unbound_at DESC, b.bound_at DESC LIMIT 1",
+                (spool_id,),
+            ).fetchone()
+            return m.SpoolDetail.model_validate(
+                spool.model_dump()
+                | {
+                    "tag": None if tag_row is None else m.Tag.model_validate(tag_row),
+                    "last_tag": None
+                    if last is None
+                    else m.LastTag(
+                        tag=m.Tag.model_validate(last),
+                        unbound_at=last["unbound_at"],
+                        reason=last["reason"],
+                        held_by=last["held_by"],
+                    ),
+                    "presets": p.effective_presets(conn, spool_id),
+                    "k_values": p.effective_k_values(conn, spool_id),
+                    "basis": ledger.basis(
+                        history,
+                        weight_locked=spool.weight_locked,
+                        label_weight_g=spool.effective.label_weight_g,
+                    ),
+                    "in_use": any(e.kind in _USED for e in history),
+                }
+            )
+
+    def summary(self) -> m.InventorySummary:
+        """The unarchived spools in total; a spool's value is its grams left at its
+        effective cost per kg."""
+        spools = self.list()
+        with self._pool.connection() as conn:
+            ams = {
+                row["id"]
+                for row in conn.execute(
+                    "SELECT l.id FROM filament_locations l JOIN filament_location_kinds k"
+                    " ON k.id = l.kind_id WHERE k.ams"
+                ).fetchall()
+            }
+        value: Decimal | None = None
+        stock: dict[str | None, tuple[int, float]] = {}
+        for spool in spools:
+            grams = spool.grams_left or 0.0
+            count, total = stock.get(spool.names.material, (0, 0.0))
+            stock[spool.names.material] = (count + 1, total + grams)
+            cost = spool.effective.cost_per_kg
+            if cost is not None and spool.grams_left is not None:
+                value = (value or Decimal(0)) + Decimal(str(grams)) / 1000 * cost
+        return m.InventorySummary(
+            spools=len(spools),
+            grams_left=sum(s.grams_left or 0.0 for s in spools),
+            value_left=None if value is None else value.quantize(Decimal("0.01")),
+            by_material=[
+                m.MaterialStock(material=name, spools=count, grams_left=total)
+                for name, (count, total) in sorted(
+                    stock.items(), key=lambda item: (item[0] is None, item[0] or "")
+                )
+            ],
+            loaded=sum(1 for s in spools if s.location_id in ams),
+            low_stock=sum(1 for s in spools if s.low_stock),
+            needs_type=sum(1 for s in spools if s.type_id is None),
+        )
+
+    def tags(self, *, include_unbound: bool = False) -> _TagRows:
+        """Every tag with its open binding and its spool's number, oldest first. A tag on
+        no spool only with ``include_unbound``."""
+        with self._pool.connection() as conn:
+            rows = conn.execute(
+                f"SELECT {_TAG_COLUMNS_T}, {_BINDING_COLUMNS_B}, s.number AS spool_number"
+                " FROM filament_tags t LEFT JOIN filament_tag_bindings b"
+                " ON b.tag_id = t.id AND b.unbound_at IS NULL"
+                " LEFT JOIN filament_spools s ON s.id = b.spool_id"
+                f"{'' if include_unbound else ' WHERE b.id IS NOT NULL'}"
+                " ORDER BY t.created_at, t.id"
+            ).fetchall()
+            return [self._tag_row(row) for row in rows]
+
+    def tag(self, tag_id: UUID) -> m.TagDetail | None:
+        """One tag with every binding it has had, newest first; ``None`` for no such tag."""
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                f"SELECT {_TAG_COLUMNS_T}, {_BINDING_COLUMNS_B}, s.number AS spool_number"
+                " FROM filament_tags t LEFT JOIN filament_tag_bindings b"
+                " ON b.tag_id = t.id AND b.unbound_at IS NULL"
+                " LEFT JOIN filament_spools s ON s.id = b.spool_id WHERE t.id = %s",
+                (tag_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            history = conn.execute(
+                f"SELECT {_BINDING_COLUMNS} FROM filament_tag_bindings WHERE tag_id = %s"
+                " ORDER BY bound_at DESC, id",
+                (tag_id,),
+            ).fetchall()
+        return m.TagDetail.model_validate(
+            self._tag_row(row).model_dump()
+            | {"history": [m.TagBinding.model_validate(h) for h in history]}
+        )
+
+    def ledger(
+        self,
+        *,
+        spool_id: UUID | None = None,
+        kind: m.EventKind | None = None,
+        source: m.EventSource | None = None,
+        since: datetime | None = None,
+        cursor: str | None = None,
+        limit: int = 100,
+    ) -> m.EventPage:
+        """One page of every spool's events, newest first (`ledger.page`)."""
+        with self._pool.connection() as conn:
+            return ledger.page(
+                conn,
+                spool_id=spool_id,
+                kind=kind,
+                source=source,
+                since=since,
+                cursor=cursor,
+                limit=limit,
+            )
 
     def create(self, body: m.SpoolCreate, *, actor: str) -> m.Spool:
         """A new spool and its ``created`` event; ``grams_left``, when sent, is that
@@ -526,6 +717,20 @@ class FilamentSpoolStore:
             f"SELECT {_SPOOL_COLUMNS} FROM filament_spools WHERE id = %s", (spool_id,)
         ).fetchone()
         return None if row is None else _hydrate(conn, [row])[0]
+
+    @staticmethod
+    def _tag_row(row: Row) -> m.TagRow:
+        binding = (
+            None
+            if row["binding_id"] is None
+            else m.TagBinding.model_validate(
+                {f: row[f"binding_{f}"] for f in m.TagBinding.model_fields}
+            )
+        )
+        return m.TagRow.model_validate(
+            {f: row[f] for f in m.Tag.model_fields}
+            | {"binding": binding, "spool_number": row["spool_number"]}
+        )
 
     @staticmethod
     def _lock(conn: Conn, spool_id: UUID) -> Row | None:
