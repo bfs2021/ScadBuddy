@@ -324,7 +324,14 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   with the agent's own migration files (`render/agent_migrations.py` `migrate_agent`) and open
   the credential vectors `tests/fixtures/secret-vectors.json`, a copy that
   `lint-codec-copies.sh` keeps equal to the agent's. `notify.py` re-wraps the agent's Web Push
-  keys and notification channels' tokens (#5299 step 5) in the same rotation.
+  keys and notification channels' tokens (#5299 step 5) in the same rotation. `background.py` and `operations.py` are
+  the agent's background tasks (with a Monitor's events, a Workflow's journal and child chats)
+  and its command record `ai_operations`, for `api/crud_agent_tasks.py` (areas
+  `background-tasks`, `operations`, #5299 step 8): the agent's `BackgroundTaskStore` and
+  `OperationStore` statement for statement, a task's create under the session's
+  `bgtask:<session>` advisory lock; an operation's insert or end writes its `activity` row in
+  the same transaction (`ActivityIndex.ingest_agent_operation_in`), and the bus's
+  `ai_operation.changed` stays only for an agent pod still on SQL.
 - The agent's small stores (#5299 step 5): `api/crud_agent_stores.py` (areas
   `activity-kinds`, `browser-origins`, `bridge-tabs`, `pairings`, `mcp-tokens`) and
   `api/crud_agent_notify.py` (area `notify`, sealed with the KEK under the agent's AAD), each
