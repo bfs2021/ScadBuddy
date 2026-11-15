@@ -1,14 +1,30 @@
 import { useId, useState } from 'react'
 import { ToggleGroup, ToggleGroupItem } from '../../components/ui/toggle-group'
 import type { Filament, ParamValue, PublicParam } from '../api/client'
-import { colourGone, filamentOf, paramFilaments, parseNumber, startColour, textLength, valueProblem, valueText } from '../params'
+import { colourSwatches, type ColourSwatch } from '../colours'
+import { colourGone, parseNumber, startColour, textLength, valueProblem, valueText } from '../params'
 import { ColourPicker } from './ColourPicker'
+
+/** A colour part as `ListingView` works it out from every pick (#6258). */
+export interface ColourPart {
+  swatches: readonly ColourSwatch[]
+  /** The colour the row shows: the pick, else the default or the moved default. */
+  shown: string | undefined
+  /** The colours that do not go with the other picks, each with why. */
+  greyed: ReadonlyMap<string, string>
+  triggerId: string
+  /** Whether the swap offer takes the focus once the grid closes. */
+  holdFocus: boolean
+  onPick: (next: ColourSwatch | undefined) => void
+}
 
 interface Props {
   param: PublicParam
   /** The visitor's value; undefined while the shop's own stands. */
   value: ParamValue | undefined
   filaments: readonly Filament[]
+  /** A colour part's state across the listing's parts. */
+  colour?: ColourPart
   onChange: (next: ParamValue | undefined) => void
 }
 
@@ -28,36 +44,40 @@ const INPUT =
  * with the theme's tokens only, so the back office's preview (StorefrontPage) shows the
  * same form in its own colours.
  */
-export function ParamField({ param, value, filaments, onChange }: Props) {
+export function ParamField({ param, value, filaments, colour, onChange }: Props) {
   const id = useId()
   const problem = valueProblem(param, value)
   const hintId = `${id}-hint`
 
   if (param.kind === 'choice' && param.colour) {
-    // #6152: a colour is a filament, picked in a grid of swatches; the value is its colour.
+    // #6152, #6258: a colour is picked in a grid of swatches, one per colour; the value is
+    // the colour, and the shop finds its filament in the one material the picks fix.
     const gone = colourGone(param)
-    const offered = paramFilaments(param, filaments)
-    // #6258: a pick is the colour in the values; the shop finds its filament.
-    const current = typeof value === 'string' ? filamentOf(offered, value) : undefined
-    // While no colour is set the row shows the shop's colour, the default an unpicked render
-    // takes (#6144).
-    const start = startColour(param)
-    const fallback = start === undefined ? undefined : filamentOf(offered, start)
+    const part = colour ?? {
+      swatches: colourSwatches(param, filaments),
+      shown: typeof value === 'string' ? value : startColour(param),
+      greyed: new Map<string, string>(),
+      onPick: (next: ColourSwatch | undefined) => onChange(next?.colour),
+    }
     return (
       <div className="min-w-0" aria-describedby={hintId}>
         <ColourPicker
           label={param.label}
-          filaments={offered}
-          fallback={fallback}
-          value={current?.id}
-          onChange={(next) => onChange(next?.colour)}
+          swatches={part.swatches}
+          picked={value !== undefined}
+          shown={part.shown}
+          greyed={part.greyed}
+          triggerId={colour?.triggerId}
+          holdFocus={colour?.holdFocus}
+          onChange={part.onPick}
         />
         <p id={hintId} className={gone ? BAD : HINT}>
           {gone
             ? 'No colour is available for this right now.'
             : value === undefined
-              ? "The shop's choice, unless you pick one."
-              : 'Pick “Use the shop’s choice” to go back to it.'}
+              ? // The issue's copy (#6258): a part the customer leaves alone.
+                'Our pick, change it if you like.'
+              : 'Pick “Use our pick” to go back to it.'}
         </p>
       </div>
     )

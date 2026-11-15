@@ -1,7 +1,9 @@
-import type { ElementType } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type ElementType } from 'react'
+import { Button } from '../../components/ui/button'
 import type { Listing, ParamValue } from '../api/client'
+import { colourName, colourPlan, colourSwatches, greyedReason, pickOutcome, swapText, type PartChange } from '../colours'
 import { listingUnavailable } from '../params'
-import { ParamField } from './ParamField'
+import { ParamField, type ColourPart } from './ParamField'
 
 export type ParamValues = Record<string, ParamValue>
 
@@ -14,6 +16,9 @@ export interface ListingViewProps {
   headingLevel?: 1 | 2
 }
 
+/** A greyed colour the visitor picked, waiting for an answer (#6258). */
+type Offer = { name: string; colour: string; changes: PartChange[] } | { name: string; colour: string; changes: null }
+
 /**
  * #5282 (spec 2026-11-02 §5.3, §5.4) — one listing as a visitor sees it: its title, its
  * description, its pictures, and a field for each parameter the customer may change. The
@@ -21,12 +26,66 @@ export interface ListingViewProps {
  * Storefront page as its live preview, so the shop sees the customer's form. It fetches
  * nothing and is styled with the theme's tokens only.
  *
+ * #6258: the colour picks fix one material (`colours.ts`). A colour that does not go with
+ * the other picks is greyed; picking it asks first whether to change the other parts to
+ * their closest colours in the new material.
+ *
  * Everything the shop typed (title, description, captions, labels) renders as React text,
  * never as HTML (spec §5.8).
  */
 export function ListingView({ listing, values, onChange, headingLevel = 1 }: ListingViewProps) {
   const Heading: ElementType = headingLevel === 1 ? 'h1' : 'h2'
+  const id = useId()
   const params = Object.entries(listing.params)
+  const plan = useMemo(() => colourPlan(listing, values), [listing, values])
+  const [offer, setOffer] = useState<Offer | null>(null)
+  const offerButton = useRef<HTMLButtonElement>(null)
+  const triggerId = (name: string) => `${id}-colour-${name}`
+
+  useEffect(() => {
+    if (!offer) return
+    // After the picker's popover gives focus back to its row on close.
+    const timer = setTimeout(() => offerButton.current?.focus(), 0)
+    return () => clearTimeout(timer)
+  }, [offer])
+
+  const closeOffer = (name: string) => {
+    setOffer(null)
+    document.getElementById(triggerId(name))?.focus()
+  }
+
+  const colourPart = (name: string): ColourPart | undefined => {
+    const param = listing.params[name]
+    if (!param || param.kind !== 'choice' || !param.colour) return undefined
+    const swatches = colourSwatches(param, listing.colours)
+    const greyed = new Map<string, string>()
+    for (const swatch of swatches) {
+      const why = greyedReason(listing, pickOutcome(listing, values, name, swatch.colour))
+      if (why) greyed.set(swatch.key, why)
+    }
+    return {
+      swatches,
+      shown: plan.shown[name],
+      greyed,
+      triggerId: triggerId(name),
+      holdFocus: offer?.name === name,
+      onPick: (next) => {
+        setOffer(null)
+        if (next === undefined) return onChange(name, undefined)
+        const outcome = pickOutcome(listing, values, name, next.colour)
+        if (outcome.kind === 'fits') return onChange(name, next.colour)
+        setOffer({ name, colour: next.colour, changes: outcome.kind === 'swap' ? outcome.changes : null })
+      },
+    }
+  }
+
+  const accept = (current: Offer) => {
+    if (current.changes === null) return
+    onChange(current.name, current.colour)
+    for (const change of current.changes) onChange(change.name, change.to)
+    closeOffer(current.name)
+  }
+
   return (
     <article className="flex min-w-0 flex-col gap-5">
       <header className="flex flex-col gap-2">
@@ -59,13 +118,50 @@ export function ListingView({ listing, values, onChange, headingLevel = 1 }: Lis
       {params.length > 0 ? (
         <form className="grid gap-[18px]" aria-label="Customize" onSubmit={(event) => event.preventDefault()}>
           {params.map(([name, param]) => (
-            <ParamField
-              key={name}
-              param={param}
-              value={values[name]}
-              filaments={listing.colours}
-              onChange={(next) => onChange(name, next)}
-            />
+            <div key={name} className="grid min-w-0 gap-3">
+              <ParamField
+                param={param}
+                value={values[name]}
+                filaments={listing.colours}
+                colour={colourPart(name)}
+                onChange={(next) => onChange(name, next)}
+              />
+              {offer?.name === name && (
+                <div
+                  role="alertdialog"
+                  aria-labelledby={`${id}-offer`}
+                  className="grid gap-3 rounded-[10px] border-[1.5px] border-primary bg-muted/40 p-3.5"
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') {
+                      event.stopPropagation()
+                      closeOffer(name)
+                    }
+                  }}
+                >
+                  <p id={`${id}-offer`} className="m-0 [overflow-wrap:anywhere]">
+                    {offer.changes === null
+                      ? `${colourName(listing, offer.colour)} can't be used with this design right now. Choose another colour.`
+                      : swapText(listing, offer.colour, offer.changes)}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {offer.changes !== null && (
+                      <Button ref={offerButton} type="button" className="min-h-11 px-4" onClick={() => accept(offer)}>
+                        Use {colourName(listing, offer.colour)}
+                      </Button>
+                    )}
+                    <Button
+                      ref={offer.changes === null ? offerButton : undefined}
+                      type="button"
+                      variant="outline"
+                      className="min-h-11 px-4"
+                      onClick={() => closeOffer(name)}
+                    >
+                      Keep my colours
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
           ))}
         </form>
       ) : (

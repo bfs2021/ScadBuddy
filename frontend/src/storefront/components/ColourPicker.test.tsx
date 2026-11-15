@@ -1,8 +1,9 @@
-import { render, screen, within } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
-import type { Filament } from '../api/client'
-import { ColourPicker } from './ColourPicker'
+import type { Filament, PublicParam } from '../api/client'
+import { colourSwatches } from '../colours'
+import { ColourPicker, GREYED_NOTE } from './ColourPicker'
 
 const f = (id: string, colour: string, colour_name: string | null, material = 'PLA'): Filament => ({ id, colour, colour_name, material })
 
@@ -14,51 +15,76 @@ const FILAMENTS = [
   f('s1', '#FFFFFF', 'Natural', 'PVA'),
 ]
 
-function show(props: Partial<Parameters<typeof ColourPicker>[0]> = {}) {
+const param = (filaments: readonly Filament[]): PublicParam => ({
+  kind: 'choice',
+  label: 'Letters',
+  group: '',
+  colour: true,
+  choices: [...new Set(filaments.map((filament) => filament.colour))],
+})
+
+function show(props: Partial<Parameters<typeof ColourPicker>[0]> & { filaments?: readonly Filament[] } = {}) {
   const onChange = vi.fn()
   const user = userEvent.setup()
-  render(<ColourPicker label="Letters" filaments={FILAMENTS} value={undefined} fallback={FILAMENTS[2]} onChange={onChange} {...props} />)
+  const { filaments = FILAMENTS, ...rest } = props
+  render(<ColourPicker label="Letters" swatches={colourSwatches(param(filaments), filaments)} picked={false} shown="#E8532F" onChange={onChange} {...rest} />)
   return { user, onChange }
 }
 
-describe('ColourPicker (#6152)', () => {
-  it('shows the shop’s choice until the customer picks, then hands back the filament', async () => {
-    const { user, onChange } = show()
+describe('ColourPicker (#6152, #6258)', () => {
+  it('shows the shop’s choice until the customer picks, then hands back the colour', async () => {
+    const { user, onChange } = show({ shown: '#0A2E8C' })
     const trigger = screen.getByRole('button', { name: /Letters/ })
-    expect(trigger).toHaveTextContent('Orange')
-    expect(trigger).toHaveTextContent('PLA')
+    expect(trigger).toHaveTextContent('Blue')
     await user.click(trigger)
-    await user.click(screen.getByRole('radio', { name: 'Orange PETG' }))
-    expect(onChange).toHaveBeenCalledWith(FILAMENTS[3])
+    await user.click(screen.getByRole('radio', { name: 'Orange' }))
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ colour: '#E8532F' }))
   })
 
-  it('tells two filaments of one name apart by their hex', async () => {
+  it('shows one swatch per colour across materials, and never a material', async () => {
+    const { user } = show()
+    const trigger = screen.getByRole('button', { name: /Letters/ })
+    expect(trigger).not.toHaveTextContent('PLA')
+    await user.click(trigger)
+    expect(screen.getAllByRole('radio', { name: 'Orange' })).toHaveLength(1)
+    expect(screen.queryByRole('group', { name: 'Material' })).toBeNull()
+    expect(document.body).not.toHaveTextContent(/PLA|PETG/)
+  })
+
+  it('tells two colours of one name apart by their hex', async () => {
     const { user } = show()
     await user.click(screen.getByRole('button', { name: /Letters/ }))
-    expect(screen.getByRole('radio', { name: 'Blue #0A2E8C PLA' })).toBeInTheDocument()
-    expect(screen.getByRole('radio', { name: 'Blue #3C6EDB PLA' })).toBeInTheDocument()
-    // One name in two materials is two choices, each named once.
-    expect(screen.getByRole('radio', { name: 'Orange PLA' })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'Blue #0A2E8C' })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'Blue #3C6EDB' })).toBeInTheDocument()
   })
 
   it('never offers a support material', async () => {
     const { user } = show()
     await user.click(screen.getByRole('button', { name: /Letters/ }))
     expect(screen.queryByRole('radio', { name: /Natural/ })).toBeNull()
-    const materials = screen.getByRole('group', { name: 'Material' })
-    expect(within(materials).queryByRole('button', { name: 'PVA' })).toBeNull()
   })
 
-  it('filters by material', async () => {
+  it('greys a colour, still pickable, with why and the explanation line', async () => {
+    const { user, onChange } = show({ greyed: new Map([['#e8532f', 'Choosing it changes the rim too.']]) })
+    await user.click(screen.getByRole('button', { name: /Letters/ }))
+    expect(screen.getByText(GREYED_NOTE)).toBeInTheDocument()
+    const orange = screen.getByRole('radio', { name: 'Orange' })
+    expect(orange).toHaveAccessibleDescription('Choosing it changes the rim too.')
+    expect(orange).toHaveAttribute('data-greyed')
+    expect(orange).toBeEnabled()
+    await user.click(screen.getByRole('radio', { name: 'Blue #0A2E8C' }))
+    expect(onChange).toHaveBeenCalled()
+  })
+
+  it('says nothing about greying while no colour is greyed', async () => {
     const { user } = show()
     await user.click(screen.getByRole('button', { name: /Letters/ }))
-    await user.click(screen.getByRole('button', { name: 'PETG' }))
-    expect(screen.getAllByRole('radio').map((radio) => radio.getAttribute('aria-label'))).toEqual(['Orange PETG'])
+    expect(screen.queryByText(GREYED_NOTE)).toBeNull()
   })
 
-  it('searches a long list, and moves through the grid with the arrow keys', async () => {
+  it('searches a long list, moves with the arrow keys, picks with Enter and closes with Escape', async () => {
     const many = Array.from({ length: 30 }, (_, n) => f(`m${n}`, `#${String(n).padStart(2, '0')}0000`, `Shade ${n}`))
-    const { user } = show({ filaments: many, fallback: undefined })
+    const { user, onChange } = show({ filaments: many, shown: undefined })
     const trigger = screen.getByRole('button', { name: /Letters/ })
     expect(trigger).toHaveTextContent('Choose a colour')
     await user.click(trigger)
@@ -68,12 +94,17 @@ describe('ColourPicker (#6152)', () => {
     screen.getAllByRole('radio')[0]!.focus()
     await user.keyboard('{ArrowRight}{ArrowDown}')
     expect(document.activeElement).toBe(screen.getAllByRole('radio')[5])
+    await user.keyboard('{Enter}')
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ colour: '#050000' }))
+    await user.click(trigger)
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('radio')).toBeNull()
   })
 
   it('goes back to the shop’s choice', async () => {
-    const { user, onChange } = show({ value: 'b1' })
+    const { user, onChange } = show({ picked: true, shown: '#0A2E8C' })
     await user.click(screen.getByRole('button', { name: /Letters/ }))
-    await user.click(screen.getByRole('button', { name: 'Use the shop’s choice' }))
+    await user.click(screen.getByRole('button', { name: 'Use our pick' }))
     expect(onChange).toHaveBeenCalledWith(undefined)
   })
 })

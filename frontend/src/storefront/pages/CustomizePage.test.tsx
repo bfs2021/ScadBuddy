@@ -109,13 +109,13 @@ describe('CustomizePage', () => {
     const { user } = show()
     const picker = await screen.findByRole('button', { name: /Base colour/ })
     await user.click(picker)
-    await user.click(await screen.findByRole('radio', { name: 'Signal orange PLA' }))
+    await user.click(await screen.findByRole('radio', { name: 'Signal orange' }))
     // A colour set waits for its preview: the shop fills the render's slots from it.
     await waitFor(() => expect(screen.getByRole('button', { name: 'Add to order' })).toBeEnabled())
     await user.click(screen.getByRole('button', { name: 'Add to order' }))
     await screen.findByText('Added to your order.')
     await user.click(picker)
-    await user.click(await screen.findByRole('button', { name: 'Use the shop’s choice' }))
+    await user.click(await screen.findByRole('button', { name: 'Use our pick' }))
     await user.click(screen.getByRole('button', { name: 'One more' }))
     await user.click(screen.getByRole('button', { name: 'Add to order' }))
     await waitFor(() => expect(sent).toHaveLength(2))
@@ -123,28 +123,37 @@ describe('CustomizePage', () => {
     expect(sent).toEqual([{ base_colour: '#E8532F' }, {}])
   })
 
-  it('shows no Material control, and sends only the colours the visitor sets (#6258)', async () => {
+  it('shows no Material control, and sends the colours the visitor sets and each moved default (#6258)', async () => {
     const sent = renders()
     const { user } = show(CHARM_ID)
     await waitFor(() => expect(sent).toHaveLength(1))
     expect(screen.queryByRole('radiogroup', { name: 'Material' })).toBeNull()
     expect(sent[0]).toEqual(expect.objectContaining({ values: {} }))
     await user.click(screen.getByRole('button', { name: /Body colour/ }))
-    await user.click(await screen.findByRole('radio', { name: 'Rust PETG' }))
-    await waitFor(() => expect(sent.at(-1)).toEqual(expect.objectContaining({ values: { body_colour: '#C0502A' } })))
+    await user.click(await screen.findByRole('radio', { name: 'Rust' }))
+    // Rust fixes the other material, which lacks the rim's default: the rim's closest is sent.
+    await waitFor(() => expect(sent.at(-1)).toEqual(expect.objectContaining({ values: { body_colour: '#C0502A', rim_colour: '#1C8C8C' } })))
+    await user.click(screen.getByRole('button', { name: /Body colour/ }))
+    await user.click(await screen.findByRole('radio', { name: 'Black' }))
+    // Black comes in both: the rim's default fits again and is left out.
+    await waitFor(() => expect(sent.at(-1)).toEqual(expect.objectContaining({ values: { body_colour: '#101010' } })))
     server.events.removeAllListeners()
     expect(sent.every((body) => !('picks' in (body as object)))).toBe(true)
+    expect(document.body).not.toHaveTextContent(/PLA|PETG/)
   })
 
-  it('says plainly when colours of no one material are set (#6258)', async () => {
-    const { user } = show(CHARM_ID)
-    await user.click(await screen.findByRole('button', { name: /Body colour/ }))
-    await user.click(await screen.findByRole('radio', { name: 'Signal orange PLA' }))
-    await user.click(screen.getByRole('button', { name: /Rim colour/ }))
-    await user.click(await screen.findByRole('radio', { name: 'Teal PETG' }))
+  it('names the parts when the shop refuses colours that share no material (#6258)', async () => {
+    window.localStorage.setItem(
+      'scadbuddy.storefront.customize.l3',
+      JSON.stringify({ v: 1, values: { body_colour: '#E8532F', rim_colour: '#1C8C8C' }, quantity: 1 }),
+    )
+    show(CHARM_ID)
     expect(
-      await screen.findByText("Some colours can't go together. Each print is made from one kind of plastic, and a few colours only come in one kind. Change one of them."),
+      await screen.findByText(
+        "The body colour and the rim colour can't go together. Each print is made from one kind of plastic, and a few colours only come in one kind. Change one of them.",
+      ),
     ).toBeInTheDocument()
+    expect(screen.queryByText(/listing_colours_clash/)).toBeNull()
   })
 
   it('says the preview must show before an add, with a retry, when the preview fails (#6152 review)', async () => {
@@ -160,7 +169,7 @@ describe('CustomizePage', () => {
     await waitFor(() => expect(screen.getByTestId('preview')).toHaveAttribute('data-status', 'done'))
     fail = true
     await user.click(screen.getByRole('button', { name: /Base colour/ }))
-    await user.click(await screen.findByRole('radio', { name: 'Signal orange PLA' }))
+    await user.click(await screen.findByRole('radio', { name: 'Signal orange' }))
     expect(await screen.findByText('You can add it once its preview shows. Its preview could not be made: try again.')).toBeInTheDocument()
     expect(screen.queryByText('You can add it once its preview shows.')).toBeNull()
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
@@ -189,6 +198,9 @@ describe('CustomizePage', () => {
     server.events.removeAllListeners()
     expect(sent[0]).toEqual({ listing_id: 'l1', listing_updated_at: '2026-11-07T12:00:00Z', values: { base_colour: '#E8532F' }, colours: {} })
     expect(screen.getByText('2')).toBeInTheDocument()
+    // The visitor's pick survives the reload: the row is theirs, not "our pick".
+    expect(screen.getByRole('button', { name: /Base colour/ })).toHaveAccessibleName('Base colour Signal orange')
+    expect(screen.getByText('Pick “Use our pick” to go back to it.')).toBeInTheDocument()
   })
 
   it('adds the design to the order with its values, never a guess of the slots', async () => {

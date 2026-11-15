@@ -15,6 +15,7 @@ import { Estimate } from '../components/Estimate'
 import { ListingView } from '../components/ListingView'
 import { clearChoices, loadChoices, saveChoices } from '../customizeState'
 import { useDraftChanged } from '../draftCount'
+import { clashText, sentValues } from '../colours'
 import { keepOffered, listingUnavailable, valueProblem } from '../params'
 import { POLL, type PollTiming } from '../poll'
 
@@ -64,14 +65,13 @@ function inSeconds(error: StoreError): string {
 }
 
 /** What a visitor reads when a render or an add is refused. */
-function refusalText(error: unknown): string {
+function refusalText(error: unknown, listing?: Listing): string {
   if (!(error instanceof StoreError)) return errorText(error)
   if (error.slug === 'render_limited') return `You have made a lot of previews. Try again ${inSeconds(error)}.`
   if (error.slug === 'render_queue_full') return `The shop is busy making other previews. Try again ${inSeconds(error)}.`
   if (error.slug === 'rate_limited') return `Your connection has sent a lot of requests. Try again ${inSeconds(error)}.`
   // #6258: the colours given share no allowed material (the issue's page copy).
-  if (error.slug === 'listing_colours_clash')
-    return "Some colours can't go together. Each print is made from one kind of plastic, and a few colours only come in one kind. Change one of them."
+  if (error.slug === 'listing_colours_clash') return clashText(listing, error.parts)
   return errorText(error)
 }
 
@@ -188,7 +188,9 @@ export function CustomizePage({
     [listing, values],
   )
   const blocked = !listing || listingUnavailable(listing) || problems.length > 0 || stale
-  const current = listing ? choicesKey(listing, values) : ''
+  /** #6258: the visitor's values and each default that moved off its material. */
+  const sent = useMemo(() => (listing ? sentValues(listing, values) : {}), [listing, values])
+  const current = listing ? choicesKey(listing, sent) : ''
 
   useEffect(() => {
     if (listing) saveChoices(listing.id, { values, quantity })
@@ -215,13 +217,14 @@ export function CustomizePage({
    * #6152, #6258: the shop fills the slots from the done render of these choices, and
    * answers 409 `render_pending` to an add that sets a colour until that render is done.
    */
-  const waitsForPreview = !shownIsCurrent && listing !== undefined && setsColour(listing, values)
+  const waitsForPreview = !shownIsCurrent && listing !== undefined && setsColour(listing, sent)
   const input = (on: Listing): RenderInput => ({
     listing_id: on.id,
     listing_updated_at: on.updated_at,
     // #6258: a colour is its value; the shop finds its filament in the one material the
-    // colours resolve to. Never a guess of the slots.
-    values,
+    // colours resolve to. Never a guess of the slots. A default that moved is sent too, so
+    // the shop resolves the same material.
+    values: sent,
     colours: {},
   })
 
@@ -322,7 +325,7 @@ export function CustomizePage({
     } catch (caught) {
       if (!live()) return
       if (changedListing(caught)) setStale(true)
-      setRenderError(refusalText(caught))
+      setRenderError(refusalText(caught, listing))
       if (retryable(caught) && !retry) {
         const after = Math.min((caught.retryAfter ?? 60) * 1000, RETRY_RENDER_CAP_MS)
         setTimeout(() => {
@@ -352,7 +355,7 @@ export function CustomizePage({
       setAdded(true)
     } catch (caught) {
       if (changedListing(caught)) setStale(true)
-      setAddError(refusalText(caught))
+      setAddError(refusalText(caught, listing))
     } finally {
       setAdding(false)
     }

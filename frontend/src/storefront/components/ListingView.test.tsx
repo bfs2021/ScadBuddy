@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import { useState } from 'react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
@@ -16,7 +16,7 @@ describe('ListingView', () => {
     expect(onChange).toHaveBeenLastCalledWith('size', 5)
     // #6152: a colour is a picker of filaments; #6258: a pick is the colour in the values.
     await userEvent.click(screen.getByRole('button', { name: /Base colour/ }))
-    await userEvent.click(screen.getByRole('radio', { name: 'Signal orange PLA' }))
+    await userEvent.click(screen.getByRole('radio', { name: 'Signal orange' }))
     expect(onChange).toHaveBeenLastCalledWith('base_colour', '#E8532F')
   })
 
@@ -74,8 +74,8 @@ describe('ListingView', () => {
     // #6152: the colour row names the shop's colour; its grid shows it picked.
     expect(screen.getByRole('button', { name: /Base colour/ })).toHaveAccessibleName('Base colour Ocean blue')
     await userEvent.click(screen.getByRole('button', { name: /Base colour/ }))
-    expect(screen.getByRole('radio', { name: 'Ocean blue PLA' })).toHaveAttribute('data-state', 'on')
-    expect(screen.getByRole('radio', { name: 'Signal orange PLA' })).toHaveAttribute('data-state', 'off')
+    expect(screen.getByRole('radio', { name: 'Ocean blue' })).toHaveAttribute('data-state', 'on')
+    expect(screen.getByRole('radio', { name: 'Signal orange' })).toHaveAttribute('data-state', 'off')
     expect(screen.getByLabelText('Length (mm)')).toHaveAttribute('placeholder', '60')
   })
 
@@ -97,14 +97,91 @@ describe('ListingView', () => {
     render(<Stateful />)
     const row = () => screen.getByRole('button', { name: /Base colour/ })
     const hint = () => document.getElementById(row().closest('[aria-describedby]')!.getAttribute('aria-describedby')!)
-    expect(hint()).toHaveTextContent("The shop's choice, unless you pick one.")
+    expect(hint()).toHaveTextContent('Our pick, change it if you like.')
     await userEvent.click(row())
-    await userEvent.click(screen.getByRole('radio', { name: 'Ocean blue PLA' }))
+    await userEvent.click(screen.getByRole('radio', { name: 'Ocean blue' }))
     expect(onChange.mock.calls.every(([, value]) => value === undefined)).toBe(true)
     expect(row()).toHaveAccessibleName('Base colour Ocean blue')
     await userEvent.click(row())
-    expect(screen.getByRole('radio', { name: 'Ocean blue PLA' })).toHaveAttribute('data-state', 'on')
-    expect(hint()).toHaveTextContent("The shop's choice, unless you pick one.")
+    expect(screen.getByRole('radio', { name: 'Ocean blue' })).toHaveAttribute('data-state', 'on')
+    expect(hint()).toHaveTextContent('Our pick, change it if you like.')
     expect(screen.queryByText(/Tap it again/)).toBeNull()
+  })
+})
+
+describe('ListingView colours (#6258)', () => {
+  function Charm({ start = {}, onValues }: { start?: Record<string, ParamValue>; onValues?: (values: Record<string, ParamValue>) => void }) {
+    const [values, setValues] = useState<Record<string, ParamValue>>(start)
+    onValues?.(values)
+    return (
+      <ListingView
+        listing={CHARM}
+        values={values}
+        onChange={(name, value) => setValues(({ [name]: _old, ...rest }) => (value === undefined ? rest : { ...rest, [name]: value }))}
+      />
+    )
+  }
+  const row = (label: RegExp) => screen.getByRole('button', { name: label })
+  const hintOf = (label: RegExp) => document.getElementById(row(label).closest('[aria-describedby]')!.getAttribute('aria-describedby')!)
+
+  it('renders no material text anywhere', async () => {
+    render(<Charm />)
+    await userEvent.click(row(/Body colour/))
+    expect(document.body).not.toHaveTextContent(/PLA|PETG/)
+    // Black comes in both materials: one swatch.
+    expect(screen.getAllByRole('radio', { name: 'Black' })).toHaveLength(1)
+  })
+
+  it('greys the colours that do not go with a pick, and explains', async () => {
+    render(<Charm start={{ body_colour: '#E8532F' }} />)
+    await userEvent.click(row(/Rim colour/))
+    expect(screen.getByText(/Some colours can't go together\. Each print is made from one kind of plastic/)).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'Teal' })).toHaveAccessibleDescription('Choosing it changes the body colour too.')
+    expect(screen.getByRole('radio', { name: 'Black' })).not.toHaveAttribute('data-greyed')
+  })
+
+  it('offers a swap for a greyed colour; "Use Teal" moves the other picked part to its closest colour', async () => {
+    let latest: Record<string, ParamValue> = {}
+    render(<Charm start={{ body_colour: '#E8532F' }} onValues={(values) => (latest = values)} />)
+    await userEvent.click(row(/Rim colour/))
+    await userEvent.click(screen.getByRole('radio', { name: 'Teal' }))
+    const offer = await screen.findByRole('alertdialog')
+    expect(offer).toHaveTextContent("Teal doesn't go with Signal orange for the body colour. Use Teal and change the body colour to Rust?")
+    expect(latest).toEqual({ body_colour: '#E8532F' })
+    await userEvent.click(screen.getByRole('button', { name: 'Use Teal' }))
+    expect(latest).toEqual({ body_colour: '#C0502A', rim_colour: '#1C8C8C' })
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+  })
+
+  it('"Keep my colours" changes nothing, and Escape does the same', async () => {
+    let latest: Record<string, ParamValue> = {}
+    render(<Charm start={{ body_colour: '#E8532F' }} onValues={(values) => (latest = values)} />)
+    await userEvent.click(row(/Rim colour/))
+    await userEvent.click(screen.getByRole('radio', { name: 'Teal' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Keep my colours' }))
+    expect(latest).toEqual({ body_colour: '#E8532F' })
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    await userEvent.click(row(/Rim colour/))
+    await userEvent.click(screen.getByRole('radio', { name: 'Rust' }))
+    const offer = await screen.findByRole('alertdialog')
+    // Focus moves into the offer, so the keyboard reaches it.
+    await waitFor(() => expect(offer).toContainElement(document.activeElement as HTMLElement))
+    await userEvent.keyboard('{Escape}')
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(latest).toEqual({ body_colour: '#E8532F' })
+  })
+
+  it('shows an unpicked part as "our pick", moves it while its default does not fit, and puts it back', async () => {
+    render(<Charm />)
+    expect(row(/Rim colour/)).toHaveAccessibleName('Rim colour Ocean blue')
+    expect(hintOf(/Rim colour/)).toHaveTextContent('Our pick, change it if you like.')
+    await userEvent.click(row(/Body colour/))
+    await userEvent.click(screen.getByRole('radio', { name: 'Rust' }))
+    // Rust comes only in the other material, which has no Ocean blue: the rim follows.
+    expect(row(/Rim colour/)).toHaveAccessibleName('Rim colour Teal')
+    expect(hintOf(/Rim colour/)).toHaveTextContent('Our pick, change it if you like.')
+    await userEvent.click(row(/Body colour/))
+    await userEvent.click(screen.getByRole('radio', { name: 'Signal orange' }))
+    expect(row(/Rim colour/)).toHaveAccessibleName('Rim colour Ocean blue')
   })
 })

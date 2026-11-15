@@ -64,10 +64,15 @@ export const TAG: Listing = {
 export const CHARM_ID = 'l3'
 const PETG_TEAL = { id: 'f-petg-teal', colour: '#1C8C8C', colour_name: 'Teal', material: 'PETG' }
 const PETG_RUST = { id: 'f-petg-rust', colour: '#C0502A', colour_name: 'Rust', material: 'PETG' }
+/** One colour in both materials: one swatch on the page (#6258). */
+const PLA_BLACK = { id: 'f-pla-black', colour: '#101010', colour_name: 'Black', material: 'PLA' }
+const PETG_BLACK = { id: 'f-petg-black', colour: '#101010', colour_name: 'Black', material: 'PETG' }
 
 /**
  * #6152, #6258: a listing in two materials. A print is of one: the first of the shop's
- * order (PETG, then PLA) that has every colour the visitor sets.
+ * order (here PLA, then PETG) that has every colour the visitor sets. Black comes in both;
+ * blue and orange only in PLA, teal and rust only in PETG, so the page greys colours and
+ * offers a swap.
  */
 export const CHARM: Listing = {
   id: CHARM_ID,
@@ -79,7 +84,7 @@ export const CHARM: Listing = {
       label: 'Body colour',
       group: '',
       colour: true,
-      choices: [BLUE.colour, ORANGE.colour, PETG_TEAL.colour, PETG_RUST.colour],
+      choices: [BLUE.colour, ORANGE.colour, PETG_TEAL.colour, PETG_RUST.colour, PLA_BLACK.colour],
       default: BLUE.colour,
     },
     rim_colour: {
@@ -87,13 +92,14 @@ export const CHARM: Listing = {
       label: 'Rim colour',
       group: '',
       colour: true,
-      choices: [BLUE.colour, ORANGE.colour, PETG_TEAL.colour, PETG_RUST.colour],
+      choices: [BLUE.colour, ORANGE.colour, PETG_TEAL.colour, PETG_RUST.colour, PLA_BLACK.colour],
       default: BLUE.colour,
     },
   },
-  colours: [BLUE, ORANGE, PETG_TEAL, PETG_RUST],
+  colours: [BLUE, ORANGE, PETG_TEAL, PETG_RUST, PLA_BLACK, PETG_BLACK],
   media: [],
-  materials: SHOP_MATERIALS,
+  // This listing's own order: PLA first, so its defaults (Ocean blue) fit until a pick moves it.
+  materials: ['PLA', 'PETG'],
   updated_at: '2026-11-07T12:00:00Z',
 }
 
