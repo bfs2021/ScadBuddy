@@ -308,6 +308,7 @@ _SPOOL_REFUSED = (
     SpoolInUseError,
     TagUnnamedError,
     TagKeysClashError,
+    TypeRowsDuplicateError,
 )
 
 
@@ -491,6 +492,88 @@ async def unbind_tag(filament: FilamentDep, caller: CallerDep, tag_id: UUID) -> 
     if closed is None:
         raise ApiError(status.HTTP_404_NOT_FOUND, f"tag {tag_id} is on no spool")
     return closed
+
+
+@router.get(
+    "/spools/{spool_id}/presets",
+    response_model=list[m.EffectivePreset],
+    summary="Read a spool's slicer presets",
+    description=(
+        "The presets the spool prints with: one slicer filament per printer model and "
+        "nozzle diameter, the spool's own row for a key over its type's (`overridden` is "
+        "true for the spool's own). 404 for no such spool."
+    ),
+)
+async def get_spool_presets(filament: FilamentDep, spool_id: UUID) -> list[m.EffectivePreset]:
+    found = await asyncio.to_thread(filament.spools.presets, spool_id)
+    if found is None:
+        raise _no_spool(spool_id)
+    return found
+
+
+@router.put(
+    "/spools/{spool_id}/presets",
+    response_model=list[m.EffectivePreset],
+    summary="Replace a spool's own slicer presets",
+    description=(
+        "The whole list of the spool's own presets; the answer is the effective set. An "
+        "empty list resets the spool to its type's presets. Writes one `edited` event. "
+        "404 for no such spool, 422 for two rows with the same model and nozzle."
+    ),
+)
+async def put_spool_presets(
+    filament: FilamentDep, caller: CallerDep, spool_id: UUID, body: list[m.SpoolPresetCreate]
+) -> list[m.EffectivePreset]:
+    try:
+        saved = await asyncio.to_thread(
+            filament.spools.set_presets, spool_id, body, actor=actor(caller)
+        )
+    except _SPOOL_REFUSED as exc:
+        raise _refused(exc) from None
+    if saved is None:
+        raise _no_spool(spool_id)
+    return saved
+
+
+@router.get(
+    "/spools/{spool_id}/k-values",
+    response_model=list[m.EffectiveKValue],
+    summary="Read a spool's pressure-advance values",
+    description=(
+        "The K values the spool prints with: one per printer, extruder and nozzle diameter, "
+        "the spool's own row for a key over its type's (`overridden` is true for the "
+        "spool's own). 404 for no such spool."
+    ),
+)
+async def get_spool_k_values(filament: FilamentDep, spool_id: UUID) -> list[m.EffectiveKValue]:
+    found = await asyncio.to_thread(filament.spools.k_values, spool_id)
+    if found is None:
+        raise _no_spool(spool_id)
+    return found
+
+
+@router.put(
+    "/spools/{spool_id}/k-values",
+    response_model=list[m.EffectiveKValue],
+    summary="Replace a spool's own pressure-advance values",
+    description=(
+        "The whole list of the spool's own K values; the answer is the effective set. An "
+        "empty list resets the spool to its type's values. Writes one `edited` event. 404 "
+        "for no such spool, 422 for a printer that does not exist or a repeated key."
+    ),
+)
+async def put_spool_k_values(
+    filament: FilamentDep, caller: CallerDep, spool_id: UUID, body: list[m.SpoolKValueCreate]
+) -> list[m.EffectiveKValue]:
+    try:
+        saved = await asyncio.to_thread(
+            filament.spools.set_k_values, spool_id, body, actor=actor(caller)
+        )
+    except _SPOOL_REFUSED as exc:
+        raise _refused(exc) from None
+    if saved is None:
+        raise _no_spool(spool_id)
+    return saved
 
 
 @router.get(

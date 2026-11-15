@@ -206,8 +206,28 @@ def test_a_tag_is_bound_moved_and_unbound(client: TestClient) -> None:
     assert client.post(f"{SPOOLS}/{a['id']}/tags", json={"kind": "other"}).status_code == 422
 
 
+def test_a_spool_has_its_own_presets_and_k_values(client: TestClient) -> None:
+    one = f"{SPOOLS}/{_spool(client)['id']}"
+    rows = [{"printer_model": "H2C", "nozzle_diameter": "0.4", "slicer_filament": "P1"}]
+    saved = client.put(f"{one}/presets", json=rows)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()[0]["overridden"] is True
+    assert client.get(f"{one}/presets").json() == saved.json()
+    assert client.put(f"{one}/presets", json=[rows[0], rows[0]]).status_code == 422
+    reset = client.put(f"{one}/presets", json=[])
+    assert reset.status_code == 200
+    assert reset.json() == []
+    k = {"printer_id": MISSING, "extruder": 0, "nozzle_diameter": "0.4", "k_value": "0.02"}
+    assert client.put(f"{one}/k-values", json=[k]).status_code == 422
+    assert client.put(f"{one}/k-values", json=[]).json() == []
+    assert client.get(f"{one}/k-values").json() == []
+
+
 def test_a_missing_spool_is_404(client: TestClient) -> None:
     one = f"{SPOOLS}/{MISSING}"
+    for leaf in ("presets", "k-values"):
+        assert client.get(f"{one}/{leaf}").status_code == 404
+        assert client.put(f"{one}/{leaf}", json=[]).status_code == 404
     assert client.get(one).status_code == 404
     assert client.patch(one, json={"note": "x"}).status_code == 404
     assert client.delete(one).status_code == 404

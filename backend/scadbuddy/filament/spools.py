@@ -20,14 +20,19 @@ from psycopg_pool import ConnectionPool
 
 from scadbuddy.filament import ledger
 from scadbuddy.filament import models as m
+from scadbuddy.filament import presets as p
 from scadbuddy.filament.catalog import CatalogRefError
-from scadbuddy.filament.types import TypeTempError, effective, overridden
+from scadbuddy.filament.types import TypeRowsDuplicateError, TypeTempError, effective, overridden
 from scadbuddy.spools.models import clean_tag_uid, clean_tray_uuid
 
 Conn = Connection[DictRow]
 Row = Mapping[str, Any]
 _Spools = list[m.Spool]
 _Events = list[m.SpoolEvent]
+_Presets = list[m.EffectivePreset]
+_KValues = list[m.EffectiveKValue]
+_PresetRows = list[m.SpoolPresetCreate]
+_KRows = list[m.SpoolKValueCreate]
 
 #: The columns of a spool row: every field of `Spool` but the two it is given here.
 _SPOOL_FIELDS = tuple(f for f in m.Spool.model_fields if f not in {"effective", "overridden"})
@@ -216,6 +221,86 @@ class FilamentSpoolStore:
                 if patch.archived is not None:
                     self._archive(conn, current, patch.archived, actor)
                 return self._spool(conn, spool_id)
+        except errors.ForeignKeyViolation:
+            raise CatalogRefError() from None
+
+    def presets(self, spool_id: UUID) -> _Presets | None:
+        """The spool's slicer presets, its own over its type's; ``None`` for no such
+        spool."""
+        with self._pool.connection() as conn:
+            if self._spool(conn, spool_id) is None:
+                return None
+            return p.effective_presets(conn, spool_id)
+
+    def set_presets(self, spool_id: UUID, rows: _PresetRows, *, actor: str) -> _Presets | None:
+        """Replace the spool's own presets with ``rows`` (``[]`` resets it to its type's);
+        ``None`` for no such spool. One ``edited`` event holds the spool's own rows
+        before and after, as ``changes.presets``. Two rows of one key are
+        `TypeRowsDuplicateError`."""
+        table = "filament_spool_presets"
+        try:
+            with self._pool.connection() as conn, conn.transaction():
+                if self._lock(conn, spool_id) is None:
+                    return None
+                before = p.own_presets(conn, spool_id)
+                conn.execute(f"DELETE FROM {table} WHERE spool_id = %s", (spool_id,))
+                for row in rows:
+                    conn.execute(
+                        f"INSERT INTO {table} (spool_id, printer_model, nozzle_diameter,"
+                        " slicer_filament, slicer_filament_name) VALUES (%s, %s, %s, %s, %s)",
+                        (
+                            spool_id,
+                            row.printer_model,
+                            row.nozzle_diameter,
+                            row.slicer_filament,
+                            row.slicer_filament_name,
+                        ),
+                    )
+                after = p.own_presets(conn, spool_id)
+                self._edited(conn, spool_id, "presets", before, after, actor)
+                return p.effective_presets(conn, spool_id)
+        except errors.UniqueViolation:
+            raise TypeRowsDuplicateError() from None
+
+    def k_values(self, spool_id: UUID) -> _KValues | None:
+        """The spool's pressure-advance values, its own over its type's; ``None`` for no
+        such spool."""
+        with self._pool.connection() as conn:
+            if self._spool(conn, spool_id) is None:
+                return None
+            return p.effective_k_values(conn, spool_id)
+
+    def set_k_values(self, spool_id: UUID, rows: _KRows, *, actor: str) -> _KValues | None:
+        """`set_presets` for K values. A printer that does not exist is `CatalogRefError`."""
+        table = "filament_spool_k_values"
+        try:
+            with self._pool.connection() as conn, conn.transaction():
+                if self._lock(conn, spool_id) is None:
+                    return None
+                before = p.own_k_values(conn, spool_id)
+                conn.execute(f"DELETE FROM {table} WHERE spool_id = %s", (spool_id,))
+                for row in rows:
+                    conn.execute(
+                        f"INSERT INTO {table} (spool_id, printer_id, extruder, nozzle_diameter,"
+                        " nozzle_type, k_value, name, cali_idx, setting_id)"
+                        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                        (
+                            spool_id,
+                            row.printer_id,
+                            row.extruder,
+                            row.nozzle_diameter,
+                            row.nozzle_type,
+                            row.k_value,
+                            row.name,
+                            row.cali_idx,
+                            row.setting_id,
+                        ),
+                    )
+                after = p.own_k_values(conn, spool_id)
+                self._edited(conn, spool_id, "k_values", before, after, actor)
+                return p.effective_k_values(conn, spool_id)
+        except errors.UniqueViolation:
+            raise TypeRowsDuplicateError() from None
         except errors.ForeignKeyViolation:
             raise CatalogRefError() from None
 
@@ -441,6 +526,20 @@ class FilamentSpoolStore:
             f"SELECT {_SPOOL_COLUMNS} FROM filament_spools WHERE id = %s", (spool_id,)
         ).fetchone()
         return None if row is None else _hydrate(conn, [row])[0]
+
+    @staticmethod
+    def _lock(conn: Conn, spool_id: UUID) -> Row | None:
+        return conn.execute(
+            "SELECT id FROM filament_spools WHERE id = %s FOR UPDATE", (spool_id,)
+        ).fetchone()
+
+    @staticmethod
+    def _edited(
+        conn: Conn, spool_id: UUID, field: str, before: Any, after: Any, actor: str
+    ) -> None:
+        ledger.record(
+            conn, spool_id, "edited", actor=actor, data={"changes": {field: [before, after]}}
+        )
 
     def _check(self, conn: Conn, spool_id: UUID) -> None:
         spool = self._spool(conn, spool_id)

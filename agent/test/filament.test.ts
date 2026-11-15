@@ -174,6 +174,8 @@ describe('filament spool tools', () => {
     ['filament_spool_get', 'read'],
     ['filament_spool_events', 'read'],
     ['filament_spool_upsert', 'write'],
+    ['filament_spool_set_presets', 'write'],
+    ['filament_spool_set_k_values', 'write'],
     ['filament_spool_archive', 'write'],
     ['filament_spool_delete', 'write'],
     ['filament_spool_bind_tag', 'write'],
@@ -228,6 +230,25 @@ describe('filament spool tools', () => {
     const deleted = await runTool(tool('filament_spool_delete'), { spool_id: ROW }, ctx())
     expect(firstText(deleted)).toEqual({ deleted: ROW })
     expect(calls).toEqual([['add', fields], ['edit', { rgba: null }], ['archive', { archived: true }], ['delete']])
+  })
+
+  it("replaces a spool's own presets and K values", async () => {
+    const calls: unknown[] = []
+    server.use(
+      http.put(`${SPOOL}/presets`, async ({ request }) => {
+        calls.push(['presets', await request.json()])
+        return HttpResponse.json([])
+      }),
+      http.put(`${SPOOL}/k-values`, async ({ request }) => {
+        calls.push(['k', await request.json()])
+        return HttpResponse.json([])
+      }),
+    )
+    const presets = [{ printer_model: 'H2C', nozzle_diameter: '0.4', slicer_filament: 'P1' }]
+    const k_values = [{ printer_id: ROW, extruder: 0, nozzle_diameter: '0.4', k_value: '0.02' }]
+    expect((await runTool(tool('filament_spool_set_presets'), { spool_id: ROW, presets }, ctx())).isError).toBeFalsy()
+    expect((await runTool(tool('filament_spool_set_k_values'), { spool_id: ROW, k_values }, ctx())).isError).toBeFalsy()
+    expect(calls).toEqual([['presets', presets], ['k', k_values]])
   })
 
   it('says why a spool that printed is not deleted', async () => {

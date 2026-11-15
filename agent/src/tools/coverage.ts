@@ -7,6 +7,14 @@ import type { Operation } from './registry.js'
 /** Backend operations deliberately left without a tool, each with the reason. */
 export const NOT_A_TOOL: readonly { operation: Operation; reason: string }[] = [
   {
+    operation: 'GET /api/v1/filament/spools/{spool_id}/presets',
+    reason: "A spool's effective slicer presets (#6262); the assistant reads them in filament_spool_get's answer, and the Filament page shows them on the spool.",
+  },
+  {
+    operation: 'GET /api/v1/filament/spools/{spool_id}/k-values',
+    reason: "A spool's effective pressure-advance values (#6262); the assistant reads them in filament_spool_get's answer, and the Filament page shows them on the spool.",
+  },
+  {
     operation: 'GET /api/v1/storefront/slice-profile/options',
     reason: "The printers and spools the Storefront settings control offers for the shop's slice profile (#6153). The assistant reads the profile through get_settings; the shop sets it in Settings, Storefront pricing.",
   },

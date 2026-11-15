@@ -1,0 +1,162 @@
+"""A spool's own presets and K values over its type's (#6262, spec §5.3)."""
+
+from __future__ import annotations
+
+from decimal import Decimal
+from uuid import UUID
+
+import pytest
+
+from scadbuddy.filament.catalog import CatalogRefError, CatalogStore
+from scadbuddy.filament.models import (
+    Material,
+    SpoolCreate,
+    SpoolKValueCreate,
+    SpoolPresetCreate,
+    SpoolTypeCreate,
+    TypeKValue,
+    TypePreset,
+)
+from scadbuddy.filament.presets import effective_presets, preset_for
+from scadbuddy.filament.spools import FilamentSpoolStore
+from scadbuddy.filament.types import SpoolTypeStore, TypeRowsDuplicateError
+from tests.conftest import PgPool
+from tests.support.printers import bambuddy_printer
+
+pytestmark = pytest.mark.requires_postgres
+
+
+def _type_with_spool(pool: PgPool) -> tuple[SpoolTypeStore, FilamentSpoolStore, UUID, UUID]:
+    material = next(
+        r.id
+        for r in CatalogStore(pool).list("materials")
+        if isinstance(r, Material) and r.name == "PLA"
+    )
+    types = SpoolTypeStore(pool)
+    kind = types.create(
+        SpoolTypeCreate(code="PLA-X", material_id=material, label_weight_g=1000, rgba="#FFFFFFFF")
+    )
+    spools = FilamentSpoolStore(pool)
+    spool = spools.create(SpoolCreate(type_id=kind.id), actor="ann")
+    return types, spools, kind.id, spool.id
+
+
+def _type_preset(type_id: UUID, nozzle: str, filament: str) -> TypePreset:
+    return TypePreset(
+        type_id=type_id,
+        printer_model="H2C",
+        nozzle_diameter=nozzle,
+        slicer_filament=filament,
+        slicer_filament_name=None,
+    )
+
+
+def _own(nozzle: str, filament: str) -> SpoolPresetCreate:
+    return SpoolPresetCreate(printer_model="H2C", nozzle_diameter=nozzle, slicer_filament=filament)
+
+
+def test_a_spool_preset_overrides_its_types_for_that_key(pg_pool: PgPool) -> None:
+    types, spools, type_id, spool_id = _type_with_spool(pg_pool)
+    types.set_presets(
+        type_id, [_type_preset(type_id, "0.4", "GFA00"), _type_preset(type_id, "0.6", "GFA01")]
+    )
+    before = spools.presets(spool_id)
+    assert before is not None
+    assert [(p.nozzle_diameter, p.slicer_filament, p.overridden) for p in before] == [
+        ("0.4", "GFA00", False),
+        ("0.6", "GFA01", False),
+    ]
+    saved = spools.set_presets(spool_id, [_own("0.4", "P1")], actor="ann")
+    assert saved is not None
+    assert [(p.nozzle_diameter, p.slicer_filament, p.overridden) for p in saved] == [
+        ("0.4", "P1", True),
+        ("0.6", "GFA01", False),
+    ]
+    assert spools.presets(spool_id) == saved
+
+
+def test_a_spool_preset_for_a_key_the_type_lacks_is_kept(pg_pool: PgPool) -> None:
+    types, spools, type_id, spool_id = _type_with_spool(pg_pool)
+    types.set_presets(type_id, [_type_preset(type_id, "0.4", "GFA00")])
+    saved = spools.set_presets(spool_id, [_own("0.2", "P2")], actor="ann")
+    assert saved is not None
+    assert [(p.nozzle_diameter, p.overridden) for p in saved] == [("0.2", True), ("0.4", False)]
+
+
+def test_setting_an_empty_list_resets_to_the_type(pg_pool: PgPool) -> None:
+    types, spools, type_id, spool_id = _type_with_spool(pg_pool)
+    types.set_presets(type_id, [_type_preset(type_id, "0.4", "GFA00")])
+    spools.set_presets(spool_id, [_own("0.4", "P1")], actor="ann")
+    reset = spools.set_presets(spool_id, [], actor="ann")
+    assert reset is not None
+    assert [(p.slicer_filament, p.overridden) for p in reset] == [("GFA00", False)]
+    events = [e for e in spools.events(spool_id) if e.kind == "edited"]
+    assert len(events) == 2
+    changes = events[1].data["changes"]["presets"]
+    assert [row["slicer_filament"] for row in changes[0]] == ["P1"]
+    assert changes[1] == []
+
+
+def test_a_repeated_key_is_refused_and_no_spool_is_none(pg_pool: PgPool) -> None:
+    _, spools, _, spool_id = _type_with_spool(pg_pool)
+    with pytest.raises(TypeRowsDuplicateError):
+        spools.set_presets(spool_id, [_own("0.4", "A"), _own("0.4", "B")], actor="ann")
+    missing = UUID(int=9)
+    assert spools.presets(missing) is None
+    assert spools.set_presets(missing, [], actor="ann") is None
+    assert spools.k_values(missing) is None
+    assert spools.set_k_values(missing, [], actor="ann") is None
+
+
+def test_preset_for_is_exact(pg_pool: PgPool) -> None:
+    types, _, type_id, spool_id = _type_with_spool(pg_pool)
+    types.set_presets(type_id, [_type_preset(type_id, "0.4", "GFA00")])
+    with pg_pool.connection() as conn:
+        rows = effective_presets(conn, spool_id)
+    assert preset_for(rows, "H2C", "0.2") is None
+    assert preset_for(rows, "H2D", "0.4") is None
+    found = preset_for(rows, "H2C", "0.4")
+    assert found is not None
+    assert found.slicer_filament == "GFA00"
+
+
+def test_a_spool_k_value_overrides_its_types_and_resets(pg_pool: PgPool, pg_conninfo: str) -> None:
+    types, spools, type_id, spool_id = _type_with_spool(pg_pool)
+    printer = UUID(bambuddy_printer(pg_conninfo, 1))
+    types.set_k_values(
+        type_id,
+        [
+            TypeKValue(
+                type_id=type_id,
+                printer_id=printer,
+                extruder=ext,
+                nozzle_diameter="0.4",
+                nozzle_type=None,
+                k_value=Decimal("0.02"),
+                name=None,
+                cali_idx=None,
+                setting_id=None,
+            )
+            for ext in (0, 1)
+        ],
+    )
+    own = SpoolKValueCreate(
+        printer_id=printer, extruder=1, nozzle_diameter="0.4", k_value=Decimal("0.05"), name="mine"
+    )
+    saved = spools.set_k_values(spool_id, [own], actor="ann")
+    assert saved is not None
+    assert [(k.extruder, k.k_value, k.overridden) for k in saved] == [
+        (0, Decimal("0.0200"), False),
+        (1, Decimal("0.0500"), True),
+    ]
+    assert spools.k_values(spool_id) == saved
+    reset = spools.set_k_values(spool_id, [], actor="ann")
+    assert reset is not None
+    assert [k.overridden for k in reset] == [False, False]
+    assert [e.kind for e in spools.events(spool_id)].count("edited") == 2
+    with pytest.raises(CatalogRefError):
+        spools.set_k_values(
+            spool_id,
+            [own.model_copy(update={"printer_id": UUID(int=9)})],
+            actor="ann",
+        )

@@ -536,6 +536,32 @@ class SpoolKValue(BaseModel):
     setting_id: str | None
 
 
+class EffectivePreset(BaseModel):
+    """A slicer preset a spool is printed with: its own row for the key, else its type's.
+    ``overridden`` is true for a row of the spool's own."""
+
+    printer_model: str
+    nozzle_diameter: str
+    slicer_filament: str
+    slicer_filament_name: str | None
+    overridden: bool
+
+
+class EffectiveKValue(BaseModel):
+    """A pressure-advance value a spool is printed with: its own row for the key, else
+    its type's. ``overridden`` is true for a row of the spool's own."""
+
+    printer_id: UUID
+    extruder: int
+    nozzle_diameter: str
+    nozzle_type: str | None
+    k_value: Decimal
+    name: str | None
+    cali_idx: int | None
+    setting_id: str | None
+    overridden: bool
+
+
 # -- spools ---------------------------------------------------------------------------
 
 

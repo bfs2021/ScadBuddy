@@ -307,6 +307,80 @@ export const filamentTools: Tool[] = [
   }),
 
   defineTool({
+    name: 'filament_spool_set_presets',
+    label: "Set a spool's own slicer presets",
+    description:
+      "Replace a spool's own slicer filament presets with `presets` (the whole list): one per printer model " +
+      "and nozzle diameter. A spool's row for a key overrides its type's; an empty list resets the spool to " +
+      "its type's presets. The answer is the effective set (`overridden` marks the spool's own). Only what " +
+      'the user says. Writes ScadBuddy only.',
+    input: z.object({
+      spool_id: z.string().uuid(),
+      presets: z.array(
+        z.object({
+          printer_model: z.string().describe('A printer model, e.g. `H2C`'),
+          nozzle_diameter: z.string().describe('e.g. `0.4`'),
+          slicer_filament: z.string().describe("The slicer's filament id, e.g. `GFA00`"),
+          slicer_filament_name: z.string().optional(),
+        }),
+      ),
+    }),
+    risk: 'write',
+    source: SOURCE,
+    routes: ['PUT /api/v1/filament/spools/{spool_id}/presets'],
+    summarize: ({ spool_id, presets }) => `Set ${presets.length} own slicer preset(s) on spool ${spool_id}`,
+    handler: async ({ spool_id, presets }, { backend }) =>
+      json(
+        await ok(
+          backend.PUT('/api/v1/filament/spools/{spool_id}/presets', {
+            params: { path: { spool_id } },
+            body: presets,
+          }),
+          `set the presets of spool ${spool_id}`,
+        ),
+      ),
+  }),
+
+  defineTool({
+    name: 'filament_spool_set_k_values',
+    label: "Set a spool's own pressure-advance values",
+    description:
+      "Replace a spool's own pressure-advance (K) values with `k_values` (the whole list): one per printer, " +
+      "extruder and nozzle diameter. A spool's row for a key overrides its type's; an empty list resets the " +
+      "spool to its type's values. The answer is the effective set (`overridden` marks the spool's own). " +
+      'Only what the user says. Writes ScadBuddy only.',
+    input: z.object({
+      spool_id: z.string().uuid(),
+      k_values: z.array(
+        z.object({
+          printer_id: z.string().uuid(),
+          extruder: z.number().int().min(0),
+          nozzle_diameter: z.string().describe('e.g. `0.4`'),
+          k_value: z.string().describe('A decimal, e.g. `0.02`'),
+          nozzle_type: z.string().optional(),
+          name: z.string().optional(),
+          cali_idx: z.number().int().optional(),
+          setting_id: z.string().optional(),
+        }),
+      ),
+    }),
+    risk: 'write',
+    source: SOURCE,
+    routes: ['PUT /api/v1/filament/spools/{spool_id}/k-values'],
+    summarize: ({ spool_id, k_values }) => `Set ${k_values.length} own K value(s) on spool ${spool_id}`,
+    handler: async ({ spool_id, k_values }, { backend }) =>
+      json(
+        await ok(
+          backend.PUT('/api/v1/filament/spools/{spool_id}/k-values', {
+            params: { path: { spool_id } },
+            body: k_values as never,
+          }),
+          `set the K values of spool ${spool_id}`,
+        ),
+      ),
+  }),
+
+  defineTool({
     name: 'filament_spool_archive',
     label: 'Archive or restore a spool',
     description:

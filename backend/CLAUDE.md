@@ -483,7 +483,7 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   (`effective()`: spool → type → subtype → material, the one resolver; a type links its
   price-book row by identity, alpha included, and never rewrites a found row), `spools.py`
   (instances and tag bindings; every writer locks the tag before the spool; archive closes
-  the open binding), `ledger.py` (`filament_spool_events`, the one source of grams left:
+  the open binding), `presets.py` (a spool's own presets and K values over its type's, by key; `preset_for` is exact, never a near nozzle), `ledger.py` (`filament_spool_events`, the one source of grams left:
   the newest absolute reading, then the deltas after it; events carry their physical time,
   ordered by `(at, seq)`; a time-less event gets a clock-step guard because the WSL clock
   steps back), `locations.py` (a spool moves only through `move()`; AMS trays are keyed by
