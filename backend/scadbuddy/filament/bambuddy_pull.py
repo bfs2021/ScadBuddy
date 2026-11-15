@@ -234,6 +234,7 @@ def _one(
         # BB may not move ``updated_at`` for a weighing: its events are booked anyway,
         # once each.
         booked = _book(conn, spool_id, bb, actor)
+        _bb_presets(conn, spool_id, bb)
         return ("updated", spool_id, False) if changed or booked else None
     after = snapshot(bb)
     held = _holder(conn, after, bb.id)
@@ -243,10 +244,44 @@ def _one(
             return "archived", held_id, False
         typeless = _link(conn, store, bb, held_id, after, now, actor)
         _book(conn, held_id, bb, actor)
+        _bb_presets(conn, held_id, bb)
         return "linked", held_id, typeless
     made, typeless = _create(conn, store, bb, after, now, actor)
     _book(conn, made, bb, actor)
+    _bb_presets(conn, made, bb)
     return "created", made, typeless
+
+
+#: The H2C nozzle sizes a Bambuddy spool's one preset is written for (ruling R1).
+BB_PRESET_NOZZLES = ("0.2", "0.4", "0.6", "0.8")
+
+
+def _bb_presets(conn: Conn, spool_id: UUID, bb: BbSpool) -> None:
+    """A linked BB spool's ``slicer_filament`` (and its name) as the SB spool's own H2C
+    preset at every nozzle size, a ``migrated`` row (#6262 Task 7 ruling R1), so a plan
+    on Bambuddy's path finds the preset Bambuddy's spool named. Only where the spool
+    has no row of a person's for that key; a migrated row follows Bambuddy's change. A
+    spool with a type takes none: its type gives its presets (F27, `drop_migrated`)."""
+    # Here, not at the top: `filament.presets` reads `bambuddy.resolver`.
+    from scadbuddy.bambuddy.resolver import PRINTER_MODEL
+
+    if not bb.slicer_filament:
+        return
+    typed = conn.execute(
+        "SELECT type_id IS NOT NULL AS typed FROM filament_spools WHERE id = %s", (spool_id,)
+    ).fetchone()
+    if typed is None or typed["typed"]:
+        return
+    for size in BB_PRESET_NOZZLES:
+        conn.execute(
+            "INSERT INTO filament_spool_presets (spool_id, printer_model, nozzle_diameter,"
+            " slicer_filament, slicer_filament_name, migrated) VALUES (%s, %s, %s, %s, %s, true)"
+            " ON CONFLICT (spool_id, printer_model, nozzle_diameter) DO UPDATE SET"
+            " slicer_filament = EXCLUDED.slicer_filament,"
+            " slicer_filament_name = EXCLUDED.slicer_filament_name"
+            " WHERE filament_spool_presets.migrated",
+            (spool_id, PRINTER_MODEL, size, bb.slicer_filament, bb.slicer_filament_name),
+        )
 
 
 # -- step 2: an SB spool that already is this BB spool ---------------------------------

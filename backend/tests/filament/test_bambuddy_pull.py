@@ -192,6 +192,69 @@ def test_a_linked_spool_given_its_first_type_drops_its_migrated_presets(
     assert ([r["slicer_filament"] for r in before], after) == (["P1"], [])
 
 
+def _own_presets(pool: PgPool, spool: UUID) -> list[tuple[str, str, str | None, bool]]:
+    with pool.connection() as conn:
+        return [
+            (r["nozzle_diameter"], r["slicer_filament"], r["slicer_filament_name"], r["migrated"])
+            for r in conn.execute(
+                "SELECT * FROM filament_spool_presets WHERE spool_id = %s ORDER BY nozzle_diameter",
+                (spool,),
+            )
+        ]
+
+
+def test_a_bb_spools_preset_is_the_sb_spools_where_it_has_none(pg_pool: PgPool) -> None:
+    """#6262 Task 7 ruling R1: Bambuddy's ``slicer_filament`` and its name become the
+    SB spool's ``migrated`` H2C rows at every nozzle size, a person's own row kept, and
+    a later pull follows Bambuddy's change on the migrated rows only."""
+    f = _filament(pg_pool)
+    report = pull(f, [bb(slicer_filament="GFA00", slicer_filament_name="Bambu PLA Basic")], now=NOW)
+    (spool,) = f.spools.list()
+    assert spool.type_id is None and report.needs_type == 1
+    assert _own_presets(pg_pool, spool.id) == [
+        (size, "GFA00", "Bambu PLA Basic", True) for size in ("0.2", "0.4", "0.6", "0.8")
+    ]
+    with pg_pool.connection() as conn:
+        conn.execute(
+            "UPDATE filament_spool_presets SET slicer_filament = 'MINE',"
+            " slicer_filament_name = NULL, migrated = false"
+            " WHERE spool_id = %s AND nozzle_diameter = '0.4'",
+            (spool.id,),
+        )
+    pull(
+        f,
+        [
+            bb(
+                slicer_filament="GFA05",
+                slicer_filament_name="Bambu PLA Silk",
+                updated_at="2026-11-14T11:00:00",
+            )
+        ],
+        now=NOW,
+    )
+    assert _own_presets(pg_pool, spool.id) == [
+        ("0.2", "GFA05", "Bambu PLA Silk", True),
+        ("0.4", "MINE", None, False),
+        ("0.6", "GFA05", "Bambu PLA Silk", True),
+        ("0.8", "GFA05", "Bambu PLA Silk", True),
+    ]
+
+
+def test_a_typed_spool_takes_no_preset_from_bambuddy(pg_pool: PgPool) -> None:
+    """R1 with F27: a spool's type gives its presets; a pull adds no migrated row over
+    it (one the type's first assignment would have dropped)."""
+    f = _filament(pg_pool)
+    f.types.create(
+        SpoolTypeCreate(
+            code="GFA00-RED", material_id=_pla(pg_pool), rgba="#FF0000", label_weight_g=1000
+        )
+    )
+    pull(f, [bb(material_number="gfa00-red", slicer_filament="GFA00")], now=NOW)
+    (spool,) = f.spools.list()
+    assert spool.type_id is not None
+    assert _own_presets(pg_pool, spool.id) == []
+
+
 def test_a_bb_spool_whose_record_link_names_an_sb_spool_is_linked(pg_pool: PgPool) -> None:
     """A native spool migrated onto its physical spool's id, which the BB record is
     linked to (`spool_record_links`), is that BB spool, tag or not."""

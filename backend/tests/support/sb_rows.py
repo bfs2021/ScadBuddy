@@ -21,12 +21,10 @@ from scadbuddy.bambuddy.models import Spool as BbSpool
 from scadbuddy.bambuddy.models import SpoolAssignment
 from scadbuddy.filament.bambuddy_pull import pull
 from scadbuddy.filament.component import FILAMENT, Filament
-from scadbuddy.filament.models import FilamentInventorySpool, Spool, SpoolPresetCreate, TrayPlace
+from scadbuddy.filament.models import FilamentInventorySpool, Spool, TrayPlace
 from tests.bambuddy.conftest import recording
 
 NOW = datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
-#: The H2C nozzle sizes a seeded spool gets a preset for.
-NOZZLE_SIZES = ("0.2", "0.4", "0.6", "0.8")
 
 _NO_VALUES = dict.fromkeys(
     name for name, field in Spool.model_fields.items() if field.is_required()
@@ -104,44 +102,36 @@ def rows_of(
     return rows
 
 
-def seed_sb_spools(filament: Filament, spools: Sequence[BbSpool]) -> None:
-    """Pull Bambuddy's ``spools`` into SB spools (`bambuddy_pull.pull`), each numbered
-    as its Bambuddy id and linked to it, so an API test's recorded ids name the same
-    spools on the Bambuddy path's picker (#6262 Task 7). The numbering restarts the
-    identity before each spool; only a test database may be seeded. Tags are left off: the
+def seed_sb_spools(filament: Filament, spools: Sequence[BbSpool], *, offset: int = 0) -> None:
+    """Pull Bambuddy's ``spools`` into SB spools (`bambuddy_pull.pull`, which also gives
+    each typeless one its Bambuddy preset, ruling R1), each linked to it and numbered as
+    its Bambuddy id plus ``offset``: 0 so an API test's recorded ids name the same
+    spools, else numbers no Bambuddy id shares, so a route that passes an SB number to
+    Bambuddy unmapped fails (#6262 Task 7 review I5). The numbering restarts the identity
+    before each spool; only a test database may be seeded. Tags are left off: the
     recordings redact every tag to one value, which would make each spool after the first
-    the first one again. A spool Bambuddy names a ``slicer_filament`` for gets it as its
-    own H2C preset at every nozzle size, the preset the Bambuddy path read from it before
-    #6262 Task 7 (the pull does not carry it over: see the task's report)."""
+    the first one again."""
     for bb in sorted(spools, key=lambda spool: spool.id):
         with filament.spools.transaction() as conn:
             conn.execute(
                 sql.SQL("ALTER TABLE filament_spools ALTER COLUMN number RESTART WITH {}").format(
-                    sql.Literal(bb.id)
+                    sql.Literal(bb.id + offset)
                 )
             )
         pull(filament, [bb.model_copy(update={"tag_uid": None, "tray_uuid": None})], now=NOW)
-        found = filament.inventory.by_number(bb.id)
-        assert found is not None and found[1] == bb.id, bb.id
-        if bb.slicer_filament:
-            rows = [
-                SpoolPresetCreate(
-                    printer_model="H2C",
-                    nozzle_diameter=size,
-                    slicer_filament=bb.slicer_filament,
-                    slicer_filament_name=bb.slicer_filament_name,
-                )
-                for size in NOZZLE_SIZES
-            ]
-            assert filament.spools.set_presets(found[0], rows, actor="test") is not None
+        assert filament.inventory.bb_to_sb([bb.id]) == {bb.id: bb.id + offset}, bb.id
 
 
-def seed_app_sb_spools(client: TestClient, rows: Sequence[dict[str, Any]] | None = None) -> None:
+def seed_app_sb_spools(
+    client: TestClient, rows: Sequence[dict[str, Any]] | None = None, *, offset: int = 0
+) -> None:
     """:func:`seed_sb_spools` into the app's own store: Bambuddy's spool rows ``rows``,
     else the recorded inventory (``inventory-spools.json``)."""
     state: AppState = getattr(client.app.state, STATE_ATTR)  # type: ignore[attr-defined]
     listed = recording("inventory-spools.json") if rows is None else rows
-    seed_sb_spools(state.components.get(FILAMENT), [BbSpool.model_validate(r) for r in listed])
+    seed_sb_spools(
+        state.components.get(FILAMENT), [BbSpool.model_validate(r) for r in listed], offset=offset
+    )
 
 
 def drop_app_sb_presets(client: TestClient, numbers: Sequence[int]) -> None:

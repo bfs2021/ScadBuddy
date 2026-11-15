@@ -40,7 +40,7 @@ from scadbuddy.filament.models import (
     TrayPlace,
     TrayView,
 )
-from scadbuddy.filament.presets import PoolSpoolPresets
+from scadbuddy.filament.presets import PoolSpoolPresets, effective_presets
 from scadbuddy.filament.spools import FilamentSpoolStore
 from scadbuddy.printers.models import PrinterRow
 from scadbuddy.printers.reports import PrinterReportStore, report_status
@@ -183,16 +183,22 @@ class FilamentInventory:
         a registry printer's latest report holds it in (`_Keys.hold`, as :meth:`trays`
         reads it), else the tray Bambuddy assigns its linked Bambuddy spool to
         (``bb_assignments``, ``GET /inventory/assignments``; the last row for a spool
-        wins, as Bambuddy keeps history rows), else ``None`` (plan Decision 3)."""
+        wins, as Bambuddy keeps history rows), else ``None`` (plan Decision 3). A registry
+        printer with no stored report has no trays to read, so a spool placed in one of
+        its trays (`_Keys.placed`) is there, as last linked (#6262 Task 7 review I4).
+        Each row carries the spool's effective presets."""
+        spools = self._spools.list(include_archived=include_archived)
         with self._pool.connection() as conn:
             keys = _Keys(conn)
             links = {
                 row["spool_id"]: row["bb_spool_id"]
                 for row in conn.execute("SELECT spool_id, bb_spool_id FROM filament_bb_links")
             }
+            presets = {spool.id: effective_presets(conn, spool.id) for spool in spools}
         printers = {row.id: row for row in PrinterStore(self._pool, None).list()}
         places: dict[UUID, TrayPlace] = {}
-        for printer_id, trays in self._reported(printers):
+        reported = self._reported(printers)
+        for printer_id, trays in reported:
             row = printers[str(printer_id)]
             for tray in trays:
                 spool_id, _ = keys.hold(printer_id, tray)
@@ -204,6 +210,25 @@ class FilamentInventory:
                         ams_id=tray.ams_id,
                         tray_id=tray.tray_id,
                     )
+        # A report, read above, wins over a placement on a printer that has none.
+        unreported = {UUID(printer_id) for printer_id in printers} - {
+            printer_id for printer_id, _ in reported
+        }
+        for (printer_id, ams_id, tray_id), held in keys.placed.items():
+            if printer_id not in unreported:
+                continue
+            row = printers[str(printer_id)]
+            for spool_id, _ in held:
+                places.setdefault(
+                    spool_id,
+                    TrayPlace(
+                        printer_id=row.id,
+                        bambuddy_printer_id=row.bambuddy_printer_id,
+                        printer_name=row.name,
+                        ams_id=ams_id,
+                        tray_id=tray_id,
+                    ),
+                )
         by_bambuddy = {
             row.bambuddy_printer_id: row
             for row in printers.values()
@@ -211,7 +236,7 @@ class FilamentInventory:
         }
         assigned = {assignment.spool_id: assignment for assignment in bb_assignments}
         found: list[FilamentInventorySpool] = []
-        for spool in self._spools.list(include_archived=include_archived):
+        for spool in spools:
             bb_id = links.get(spool.id)
             loaded = places.get(spool.id)
             assignment = assigned.get(bb_id) if bb_id is not None else None
@@ -225,7 +250,11 @@ class FilamentInventory:
                     ams_id=assignment.ams_id,
                     tray_id=assignment.tray_id,
                 )
-            found.append(FilamentInventorySpool(spool=spool, loaded=loaded, bb_spool_id=bb_id))
+            found.append(
+                FilamentInventorySpool(
+                    spool=spool, loaded=loaded, bb_spool_id=bb_id, presets=presets[spool.id]
+                )
+            )
         return found
 
     def by_number(self, number: int) -> tuple[UUID, int | None] | None:

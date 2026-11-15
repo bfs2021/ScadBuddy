@@ -763,6 +763,9 @@ class FilamentInventorySpool(BaseModel):
     spool: Spool
     loaded: TrayPlace | None = None
     bb_spool_id: int | None = None
+    #: The spool's effective presets (`presets.effective_presets`), so its row names the
+    #: preset it slices with on the chosen nozzle (#6262 Task 7 review R2).
+    presets: list[EffectivePreset] = Field(default_factory=list)
 
 
 class HeldSpool(BaseModel):

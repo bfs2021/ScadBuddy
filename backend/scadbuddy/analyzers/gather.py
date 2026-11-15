@@ -42,8 +42,9 @@ from scadbuddy.bambuddy.filaments import (
 from scadbuddy.bambuddy.library_view import NotViewableError, library_geometry
 from scadbuddy.bambuddy.models import Printer
 from scadbuddy.bambuddy.print_run import RunRoute
-from scadbuddy.bambuddy.resolver import DEFAULT_BED, PrintChoices
+from scadbuddy.bambuddy.resolver import DEFAULT_BED, PRINTER_MODEL, PrintChoices
 from scadbuddy.core.problems import ApiError
+from scadbuddy.filament.presets import preset_for
 from scadbuddy.library.outputs import MODEL_NAME, OutputMeta, OutputStore
 from scadbuddy.library.settings_store import ModelPrintChoices, StoredSettings
 from scadbuddy.print_library.reads import LibraryReads, served_reads
@@ -306,6 +307,7 @@ async def _read_bambuddy(
             inventory=inventory,
             native=native,
             reads=reads,
+            nozzle=_nozzle(context),
         )
         context.filament_options = read[0] if len(read) == 1 else every_plate(read)
     except ApiError as error:
@@ -399,11 +401,13 @@ async def _read_filaments(
     except ApiError as error:
         context.unavailable["filaments"] = error.detail
         return None
-    spools = {row.spool.number: row.spool for row in inventory}
+    rows = {row.spool.number: row for row in inventory}
     for choice in sorted(plan.slots, key=lambda row: row.slot_id):
-        spool = spools.get(choice.spool_id)
-        if spool is None:
+        row = rows.get(choice.spool_id)
+        if row is None:
             continue
+        spool = row.spool
+        preset = preset_for(row.presets, PRINTER_MODEL, _nozzle(context))
         context.filaments.append(
             FilamentSlot(
                 slot_id=choice.slot_id,
@@ -411,8 +415,15 @@ async def _read_filaments(
                 material=spool.names.material,
                 subtype=spool.names.subtype,
                 brand=spool.names.brand,
+                # The SB spool's preset for the chosen nozzle (#6262 Task 7 review R2).
+                preset_name=preset.slicer_filament_name if preset else None,
             )
         )
     if not context.filaments:
         context.unavailable["filaments"] = "no spool of the plan is in ScadBuddy's spools"
     return inventory
+
+
+def _nozzle(context: AnalysisContext) -> str:
+    """The nozzle size a spool's preset is read for: the choices' first, else 0.4."""
+    return context.choices.nozzles[0].size if context.choices is not None else "0.4"

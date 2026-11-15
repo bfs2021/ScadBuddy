@@ -359,7 +359,9 @@ def bambuddy_kinds_over(
 
     async def assign_tray_run(request: dict[str, Any], checked: dict[str, Any]) -> dict[str, Any]:
         """#2164: the person confirmed which spool is in a filled tray Bambuddy had no
-        spool for. Bambuddy upserts by tray, so a rerun records the same answer."""
+        spool for. Bambuddy upserts by tray, so a rerun records the same answer.
+        ``spool_id`` is Bambuddy's spool; the result names ``sb_number``, the SB spool the
+        person chose (#6262 Task 7 review M2), when the request carries it."""
         settings = await asyncio.to_thread(settings_store.load)
         async with client_for(settings) as client:
             assigned = await client.assign_spool(
@@ -369,7 +371,7 @@ def bambuddy_kinds_over(
                 tray_id=request["tray_id"],
             )
         return {
-            "spool_id": assigned.spool_id,
+            "spool_id": request.get("sb_number", assigned.spool_id),
             "printer_id": assigned.printer_id,
             "ams_id": assigned.ams_id,
             "tray_id": assigned.tray_id,

@@ -558,6 +558,7 @@ def test_the_bambuddy_preview_is_unchanged(
     profiles = dialog_profiles(tmp_path / "profiles")
     app_settings = _settings(settings, s3, kek_file, profiles, slicer_backend="bambuddy")
     for client in _open(app_settings):
+        seed_app_sb_spools(client)
         output_id = prepared(client, model)
         started = start(client, output_id)
         assert (started["job_id"], started["slicer"]) == (9, "bambuddy")
@@ -576,6 +577,7 @@ def test_native_library_with_native_slicer(
     profiles = dialog_profiles(tmp_path / "profiles")
     app_settings = _settings(settings, s3, kek_file, profiles, library_backend="native")
     for client in _open(app_settings):
+        seed_app_sb_spools(client)
         with fake_slicer_worker(client, settings.temporal_task_queue_slicer) as fake:
             output_id = prepared(client, model)
             started = start(client, output_id)

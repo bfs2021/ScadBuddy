@@ -39,20 +39,10 @@ from tests.api.test_send import BASE, configure, make_output
 from tests.bambuddy.conftest import recording
 from tests.support.operations import press
 from tests.support.printers import linked_printer
-from tests.support.sb_rows import seed_app_sb_spools
 from tests.test_bambu3mf import add_plate
 
 API = f"{BASE}/api/v1"
 SILK_SPOOL = 5  # "Tri Color" subtype, preset "Bambu PLA Silk" (inventory-spools.json)
-
-
-@pytest.fixture
-def silk_sb_spools(client: TestClient, recorded_sb_spools: None) -> None:
-    """The recorded SB spools, SB spool #5 a Silk one. The recording names spool 5's
-    silk only by its Bambuddy preset ("Bambu PLA Silk"), which an SB spool does not carry
-    over (#6262 Task 7: the analyzers read SB spools), so its subtype says it here."""
-    [silk] = [row for row in recording("inventory-spools.json") if row["id"] == SILK_SPOOL]
-    seed_app_sb_spools(client, [{**silk, "subtype": "Silk", "updated_at": "2026-12-01T00:00:00"}])
 
 
 @pytest.fixture
@@ -272,7 +262,7 @@ def test_a_configurations_params_are_checked_as_a_render_checks_them(
 
 
 @respx.mock
-@pytest.mark.usefixtures("silk_sb_spools")
+@pytest.mark.usefixtures("recorded_sb_spools")
 def test_silk_on_supertack_is_found_from_the_plan_and_the_choices(
     client: TestClient, model: str
 ) -> None:
@@ -302,7 +292,7 @@ def test_silk_on_supertack_is_found_from_the_plan_and_the_choices(
     assert base["process_preset_name"] == "0.20mm Standard @BBL H2C"
     assert base["bed_type"] == "Supertack Plate"
     scopes = [(scope["kind"], scope["key"]) for scope in report["scopes"]]
-    assert ("material", "pla/silk") in scopes and ("printer", "id:1") in scopes
+    assert ("material", "pla/tri color") in scopes and ("printer", "id:1") in scopes
     # Not uploaded, so nothing asked Bambuddy for the plate's slots.
     inputs = {row["name"]: row for row in report["inputs"]}
     assert inputs["inventory"]["reason"] == "this output has not been uploaded to Bambuddy yet"
@@ -556,7 +546,7 @@ def test_a_database_that_cannot_be_reached_degrades_to_a_503(
 
 
 @respx.mock
-@pytest.mark.usefixtures("silk_sb_spools")
+@pytest.mark.usefixtures("recorded_sb_spools")
 def test_without_choices_the_models_remembered_ones_and_printer_are_used(
     client: TestClient, model: str
 ) -> None:
@@ -633,7 +623,7 @@ def _run_library(client: TestClient, file_id: int, **body: Any) -> Any:
 
 @respx.mock
 @pytest.mark.requires_postgres
-@pytest.mark.usefixtures("silk_sb_spools")
+@pytest.mark.usefixtures("recorded_sb_spools")
 def test_a_library_file_is_judged_on_its_mesh_and_its_own_slots(
     client: TestClient, tmp_path: Path
 ) -> None:

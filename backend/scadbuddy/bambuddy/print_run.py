@@ -1213,6 +1213,7 @@ async def _slot_errors(
         trays_from=prepared.printer_status if native else None,
         held=held if native else None,
         reads=reads,
+        nozzle=request.choices.nozzles[0].size,
     )
     if not native:
         per_plate = [
@@ -3374,6 +3375,7 @@ async def plan_run(
         # its number for its presets (`resolve_plates`) and its id for the start's uses.
         trays_from=printer_status if native_run else None,
         held=held if native_run else None,
+        nozzle=choices.nozzles[0].size,
     )
     if not native_run:
         per_plate = [with_trays(options, printer_status, printer_id) for options in per_plate]

@@ -14,12 +14,14 @@ import asyncio
 import json
 
 import httpx
+import psycopg
 import pytest
 import respx
 from fastapi.testclient import TestClient
 
 from scadbuddy.bambuddy import send
 from scadbuddy.bambuddy.print_source import OutputSource
+from scadbuddy.filament.inventory import FilamentInventory
 from tests.api.test_print import presets_routes
 from tests.api.test_send import BASE, configure, make_output, upload_route
 from tests.bambuddy.conftest import recording
@@ -188,6 +190,53 @@ def test_without_a_printer_the_spools_are_still_listed(client: TestClient, model
     assert body["printer_id"] is None
     assert body["spools"]
     assert all(row["loaded"] is None or row["loaded"]["printer_id"] for row in body["spools"])
+
+
+@pytest.mark.requires_postgres
+@respx.mock
+@pytest.mark.sb_offset(100)
+@pytest.mark.usefixtures("recorded_sb_spools")
+def test_the_picker_names_each_spool_by_its_sb_number_never_its_bambuddy_id(
+    client: TestClient, model: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#6262 Task 7 review I5: SB numbers no Bambuddy id shares (Bambuddy's spool 9 is
+    SB spool #109). The options, the suggestion and the loaded tray all name #109."""
+    slots_from_bambuddy(monkeypatch)
+    output_id = prepared(client, model)
+    upload_route()
+    presets_routes()
+    inventory_routes()
+    nozzle_routes()
+
+    body = client.get(f"/api/v1/print/outputs/{output_id}/filaments?printer_id=1").json()
+
+    ids = {row["spool_id"] for row in body["spools"] if not row.get("tray_only")}
+    assert ids == {spool["id"] + 100 for spool in recording("inventory-spools.json")}
+    assert {choice["spool_id"] for choice in body["suggested"]} <= ids
+    [loaded] = [row for row in body["spools"] if row["spool_id"] == 109]
+    assert loaded["loaded"] is not None and loaded["sb_number"] == 109
+
+
+@pytest.mark.requires_postgres
+@respx.mock
+def test_spools_that_cannot_be_read_answer_503_as_bambuddys_do(
+    client: TestClient, model: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#6262 Task 7 review M6: the SB spools' store failing is a 503, as a failed
+    Bambuddy read is, never a 500."""
+
+    def down(*_args: object, **_kwargs: object) -> None:
+        raise psycopg.OperationalError("the database is gone")
+
+    monkeypatch.setattr(FilamentInventory, "rows", down)
+    output_id = prepared(client, model)
+    upload_route()
+    presets_routes()
+    inventory_routes(printer_id=None)
+
+    response = client.get(f"/api/v1/print/outputs/{output_id}/filaments")
+
+    assert response.status_code == 503, response.text
 
 
 def nozzle_routes(*diameters: str) -> respx.Route:

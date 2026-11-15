@@ -40,6 +40,7 @@ from scadbuddy.core.events import Event, PreviewSliceEvent
 from scadbuddy.core.paths import DataPaths
 from scadbuddy.filament.component import FILAMENT, Filament
 from scadbuddy.filament.models import Material, SpoolCreate
+from scadbuddy.operations.component import OPERATIONS
 from scadbuddy.preview_follow.component import PREVIEW_FOLLOWS
 from tests.api.conftest import follow_operation
 from tests.api.test_print_filaments import prepared, queue_route
@@ -591,7 +592,8 @@ def _tray_answer_setup(client: TestClient, *, bb_link: int | None) -> int:
     )
     filament = _filament(client)
     if bb_link is not None:
-        seed_sb_spools(filament, [BbSpool(id=bb_link, material="PLA")])
+        # An SB number no Bambuddy id shares (review I5): the route must map it.
+        seed_sb_spools(filament, [BbSpool(id=bb_link, material="PLA")], offset=100)
         found = filament.inventory.bb_to_sb([bb_link])
         return found[bb_link]
     material = next(
@@ -645,6 +647,13 @@ def test_yes_records_the_sb_spool_in_the_tray_then_bambuddys(client: TestClient)
         "tray_id": 3,
     }
     assert (2, 3) in _trays_of(client, number)
+    # A 202's follower reads the recorded operation (GET /operations/{id}): it names the
+    # SB spool too, never Bambuddy's (review M2).
+    with _state(client).components.get(OPERATIONS).store._pool.connection() as conn:
+        [row] = conn.execute(
+            "SELECT result FROM operations WHERE kind = 'assign_tray_spool'"
+        ).fetchall()
+    assert row["result"]["spool_id"] == number
 
 
 @respx.mock

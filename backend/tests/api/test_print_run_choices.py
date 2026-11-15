@@ -750,6 +750,39 @@ def test_a_plan_is_sliced_and_queued_with_the_mapping_on_the_wire(
 
 
 @respx.mock
+@pytest.mark.sb_offset(100)
+@pytest.mark.usefixtures("slots_from_bambuddy")
+def test_a_plan_of_sb_numbers_no_bambuddy_id_shares_prints_those_spools(
+    client: TestClient, model: str
+) -> None:
+    """#6262 Task 7 review I5: SB spools #109 and #105 (Bambuddy's 9 and 5) print with
+    their own colours and presets, read by number, never as Bambuddy ids; and a "bb"
+    plan of Bambuddy's ids is mapped to them."""
+    output_id = prepared(client, model)
+    upload_route()
+    run_routes()
+    sliced = slice_routes()
+    queue_route()
+    plan = {
+        "ids": "sb",
+        "slots": [{"slot_id": 1, "spool_id": 109}, {"slot_id": 2, "spool_id": 105}],
+    }
+
+    response = run_print(client, output_id, json=run_request(filament_plan=plan))
+
+    assert response.status_code == 200, response.text
+    slice_body: dict[str, Any] = json.loads(sliced.calls.last.request.content)
+    assert slice_body["filament_colours"] == ["#688197", "#0047BB"]
+    assert slice_body["filament_presets"] == [
+        {"source": "cloud", "id": "GFSG00_24"},
+        {"source": "cloud", "id": "GFSA05_21"},
+    ]
+    check = client.post(f"/api/v1/print/outputs/{output_id}/check", json=body())
+    assert check.status_code == 200, check.text
+    assert check.json()["errors"] == []
+
+
+@respx.mock
 @pytest.mark.usefixtures("slots_from_bambuddy")
 def test_all_plates_pads_a_plate_that_uses_only_slot_2(
     client: TestClient, model: str, paths: DataPaths

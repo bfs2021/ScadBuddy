@@ -774,6 +774,9 @@ async def post_tray_spool(
             "ams_id": ams_id,
             "tray_id": tray_id,
             "spool_id": bb_spool_id,
+            # What the operation's result names (review M2), so a 202's follower reads
+            # the SB spool too.
+            "sb_number": body.spool_id,
         },
         idempotency_key=idempotency_key,
     )

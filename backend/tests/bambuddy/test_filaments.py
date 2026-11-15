@@ -53,7 +53,7 @@ from scadbuddy.bambuddy.models import (
 from scadbuddy.bambuddy.print_run import filament_options
 from scadbuddy.bambuddy.print_source import PrintSource, ReadFile
 from scadbuddy.core.problems import ApiError
-from scadbuddy.filament.models import FilamentInventorySpool, TrayPlace
+from scadbuddy.filament.models import EffectivePreset, FilamentInventorySpool, TrayPlace
 from scadbuddy.print_library.reads import LibraryReads
 from tests.bambuddy.conftest import BASE_URL, recording
 from tests.support.sb_rows import FakeSbRows, rows_of, sb_spool
@@ -1135,6 +1135,43 @@ def test_bambuddy_options_are_sb_numbers() -> None:
     assert option.remaining_g == 812.0
     assert option.loaded is not None and option.loaded.printer_id == 1
     assert [choice.spool_id for choice in built.suggested] == [3]
+
+
+def test_an_option_names_its_spools_preset_for_the_chosen_nozzle() -> None:
+    """#6262 Task 7 review R2: an option carries the preset its SB spool names for the H2C
+    and the chosen nozzle (0.4 by default), so the analyzers and profile matching read the
+    preset by name; another nozzle's preset, or another printer's, is never taken."""
+
+    def preset(model: str, size: str, name: str) -> EffectivePreset:
+        return EffectivePreset(
+            printer_model=model,
+            nozzle_diameter=size,
+            slicer_filament=name.replace(" ", ""),
+            slicer_filament_name=name,
+            overridden=False,
+        )
+
+    row = FilamentInventorySpool(
+        spool=sb_spool(3),
+        presets=[
+            preset("H2C", "0.4", "Bambu PLA Silk"),
+            preset("H2C", "0.6", "Bambu PLA Silk 0.6"),
+            preset("X1C", "0.2", "Elsewhere"),
+        ],
+    )
+
+    def named(nozzle: str | None = None) -> tuple[str | None, str | None]:
+        built = (
+            build_options(library_file_id=62, rows=[row], requirements=[])
+            if nozzle is None
+            else build_options(library_file_id=62, rows=[row], requirements=[], nozzle=nozzle)
+        )
+        [option] = built.spools
+        return option.slicer_filament, option.slicer_filament_name
+
+    assert named() == ("BambuPLASilk", "Bambu PLA Silk")
+    assert named("0.6") == ("BambuPLASilk0.6", "Bambu PLA Silk 0.6")
+    assert named("0.2") == (None, None)
 
 
 def test_a_translucent_sb_spool_is_no_match_for_an_opaque_slot_on_bambuddys_path() -> None:

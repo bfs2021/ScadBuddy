@@ -1567,11 +1567,14 @@ class RemoteFilamentTrays:
 
     async def rows(self, bb_assignments: Sequence[SpoolAssignment]) -> list[FilamentInventorySpool]:
         # Without each assignment's nested spool: the route reads where a spool is, and
-        # Bambuddy's whole spool row would only grow the body.
+        # Bambuddy's whole spool row would only grow the body. Only each spool's last
+        # row, the one `FilamentInventory.rows` reads: Bambuddy keeps history rows, which
+        # could pass the route's `MAX_ASSIGNMENTS` (#6262 Task 7 review M3).
+        last = {assignment.spool_id: assignment for assignment in bb_assignments}
         body = {
             "bb_assignments": [
                 assignment.model_dump(mode="json", exclude={"spool"})
-                for assignment in bb_assignments
+                for assignment in last.values()
             ]
         }
         response = await self._client.request("POST", f"{BASE}/filament/rows", json=body)

@@ -17,6 +17,7 @@ import pytest
 from psycopg.types.json import Jsonb
 
 from scadbuddy.api.crud_areas import CRUD_AREAS
+from scadbuddy.api.crud_print import MAX_ASSIGNMENTS
 from scadbuddy.auth.service_credentials import ServiceCredentialStore
 from scadbuddy.bambuddy.models import SpoolAssignment
 from scadbuddy.core.settings import Settings
@@ -209,6 +210,35 @@ async def test_the_rows_and_bb_links_answer_as_the_apis_own(
     assert row.loaded is not None and (row.loaded.ams_id, row.loaded.tray_id) == (0, 2)
     assert await remote.bb_to_sb([42, 43]) == {42: row.spool.number}
     assert await remote.bb_to_sb([]) == {}
+
+
+@pg
+async def test_bambuddys_history_rows_never_pass_the_routes_cap(
+    store: SettingsStore, crud: CrudClient
+) -> None:
+    """#6262 Task 7 review M3: Bambuddy keeps an assignment's history rows, so one spool
+    may have more than the route takes (`MAX_ASSIGNMENTS`); only its last is sent, which
+    is the one `FilamentInventory.rows` reads."""
+    linked = _spool(store)
+    now = datetime.now(UTC)
+    with store.pool.connection() as conn:
+        conn.execute(
+            "INSERT INTO filament_bb_links (spool_id, bb_spool_id, bb_updated_at, linked_at)"
+            " VALUES (%s, 42, %s, %s)",
+            (linked, now, now),
+        )
+    history = [
+        SpoolAssignment(
+            id=n, spool_id=42, printer_id=7, printer_name="H2C", ams_id=0, tray_id=n % 4
+        )
+        for n in range(1, MAX_ASSIGNMENTS + 3)
+    ]
+
+    rows = await RemoteFilamentTrays(crud).rows(history)
+
+    [row] = [r for r in rows if r.spool.id == linked]
+    assert row.loaded is not None
+    assert (row.loaded.ams_id, row.loaded.tray_id) == (0, history[-1].tray_id)
 
 
 @pg

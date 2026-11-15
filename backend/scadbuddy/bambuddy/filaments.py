@@ -59,7 +59,8 @@ from scadbuddy.bambuddy.models import (
     SlotMaterial,
     SpoolAssignment,
 )
-from scadbuddy.core.problems import ApiError
+from scadbuddy.core.problems import DATABASE_ERRORS, ApiError
+from scadbuddy.crud.client import CrudUnavailableError
 from scadbuddy.filament.colour import same_opacity
 from scadbuddy.filament.models import FilamentInventorySpool, HeldTrays
 from scadbuddy.print_library.reads import LibraryReads, reads_for, served_reads
@@ -146,8 +147,8 @@ class SpoolOption(BaseModel):
     subtype: str | None = None
     brand: str | None = None
     color_name: str | None = None
-    #: Normalised to ``#RRGGBB``. The inventory spells it ``RRGGBBAA`` without a ``#``,
-    #: ``available-filaments`` spells the same colour with one, and a plate's
+    #: Normalised to ``#RRGGBB``. An SB spool's ``rgba`` spells it ``#RRGGBBAA``,
+    #: ``available-filaments`` spells the same colour with the ``#`` too, and a plate's
     #: requirement spells it ``#RRGGBB`` — so everything is normalised on the way in.
     colour: str | None = None
     slicer_filament: str | None = None
@@ -458,17 +459,22 @@ def build_options(
     requirements: list[SlotNeed],
     printer: Printer | None = None,
     slot_materials: list[SlotMaterial] | None = None,
+    nozzle: str = "0.4",
 ) -> FilamentOptions:
     """Join everything already fetched into what the dialog renders: each unarchived SB
     spool of ``rows`` (`FilamentInventory.rows`, #6262 Task 7) under its number, filled as
     a native tray's spool is (`trays._from_spool`: its effective values, ``rgba`` and
-    ``needs_type``), at the tray it is in.
+    ``needs_type``), at the tray it is in, with the preset it names for the H2C and the
+    ``nozzle`` size (`presets.preset_for`, review R2), as the resolver reads it.
 
     Kept free of the client so the join — the part with the traps in it — is testable
     against recorded bodies without any HTTP at all.
     """
-    # Here, not at the top: `trays` builds its choices from this module's models.
+    # Here, not at the top: `trays` builds its choices from this module's models, and
+    # `filament.presets` reads the resolver's `PRINTER_MODEL`.
+    from scadbuddy.bambuddy.resolver import PRINTER_MODEL
     from scadbuddy.bambuddy.trays import _from_spool
+    from scadbuddy.filament.presets import preset_for
 
     by_slot = {(material.ams_id, material.tray_id): material for material in (slot_materials or [])}
     options: list[SpoolOption] = []
@@ -481,11 +487,14 @@ def build_options(
         # printer A's AMS 0 slot 1 state — it is a different spool.
         here = loaded is not None and (printer is None or loaded.bambuddy_printer_id == printer.id)
         slot_material = by_slot.get((loaded.ams_id, loaded.tray_id)) if here and loaded else None
+        preset = preset_for(row.presets, PRINTER_MODEL, nozzle)
         option = SpoolOption(
             spool_id=spool.number,
             material=spool.names.material or "",
             subtype=spool.names.subtype,
             colour=normalise_colour(spool.effective.rgba),
+            slicer_filament=preset.slicer_filament if preset else None,
+            slicer_filament_name=preset.slicer_filament_name if preset else None,
             storage_location=spool.names.location,
             loaded=(
                 LoadedAt(
@@ -943,9 +952,22 @@ async def read_inventory(client: BambuddyClient, reads: SbRows | None) -> Invent
     """The Bambuddy path's picker rows (#6262 Task 7): ScadBuddy's own spools, each in the
     tray a printer's report holds it in, else the one Bambuddy assigns its linked spool to
     (``/inventory/assignments``, read here). Without ``reads`` there are no SB spools to
-    offer, so there are no rows."""
+    offer, so there are no rows. A store that cannot be read (the API's database, or the
+    CRUD service from the print worker) is a 503, as a failed Bambuddy read is (#6262
+    Task 7 review M6)."""
     assignments = await client.spool_assignments()
-    return await reads.rows(assignments) if reads is not None else []
+    if reads is None:
+        return []
+    unread = ApiError(
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+        "ScadBuddy's spools could not be read; try again shortly.",
+    )
+    try:
+        return await reads.rows(assignments)
+    except DATABASE_ERRORS as error:
+        raise unread from error
+    except CrudUnavailableError as error:
+        raise unread from error
 
 
 async def sb_plan(plan: FilamentPlan, reads: SbRows | None) -> FilamentPlan:
@@ -1048,8 +1070,10 @@ async def gather_plate_options(
     trays_from: PrinterStatus | None = None,
     held: HeldTrays | None = None,
     reads: SbRows | None = None,
+    nozzle: str = "0.4",
 ) -> list[FilamentOptions]:
     """:func:`gather_options` for several plates of one file, in ``plate_ids`` order.
+    Each spool names its preset for the ``nozzle`` size (`build_options`).
 
     The spools and printer are the same for every plate, so they are read once (#480);
     only each plate's slots are read per plate, concurrently. The reads keep the
@@ -1114,6 +1138,7 @@ async def gather_plate_options(
             requirements=requirements,
             printer=printer,
             slot_materials=slot_materials,
+            nozzle=nozzle,
         )
         for requirements in per_plate
     ]

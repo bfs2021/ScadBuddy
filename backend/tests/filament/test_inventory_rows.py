@@ -13,9 +13,10 @@ import pytest
 from scadbuddy.bambuddy.models import SpoolAssignment
 from scadbuddy.filament.catalog import CatalogStore
 from scadbuddy.filament.inventory import FilamentInventory
-from scadbuddy.filament.models import Material, SpoolCreate, TrayPlace
+from scadbuddy.filament.models import Material, SpoolCreate, SpoolPresetCreate, TrayPlace
 from scadbuddy.filament.spools import FilamentSpoolStore
 from scadbuddy.printers.reports import PrinterReportStore
+from scadbuddy.spools.models import SeenTray
 from tests.conftest import PgPool
 
 pytestmark = pytest.mark.requires_postgres
@@ -174,3 +175,43 @@ def test_a_spool_is_found_by_its_number_with_its_bb_link(pg_pool: PgPool) -> Non
     assert inventory.by_number(_number(pg_pool, unlinked)) == (unlinked, None)
     FilamentSpoolStore(pg_pool).archive(unlinked, True, actor="ann")
     assert inventory.by_number(_number(pg_pool, unlinked)) is None
+
+
+def test_a_spool_placed_on_a_printer_with_no_report_is_in_that_tray(pg_pool: PgPool) -> None:
+    """#6262 Task 7 review I4: a registry printer with no stored report has no trays to
+    read, so a spool placed in one of its trays (`_Keys.placed`) is there, as last
+    linked, whatever Bambuddy assigns its linked spool to."""
+    spool = _spool(pg_pool)
+    _link_bb(pg_pool, spool, 90)
+    garage = _printer(pg_pool, "Garage", bambuddy_id=1, lan=True)
+    seen = SeenTray(ams_id=0, tray_id=1, material="PLA", colour="#FF0000FF")
+    FilamentInventory(pg_pool).link(garage, 0, 1, spool, seen, actor="ann")
+
+    [row] = [
+        r
+        for r in FilamentInventory(pg_pool).rows(
+            bb_assignments=[_assigned(90, printer_id=1, ams_id=1, tray_id=3)]
+        )
+        if r.spool.id == spool
+    ]
+    assert row.loaded == TrayPlace(
+        printer_id=str(garage), bambuddy_printer_id=1, printer_name="Garage", ams_id=0, tray_id=1
+    )
+
+
+def test_a_row_carries_its_spools_effective_presets(pg_pool: PgPool) -> None:
+    """#6262 Task 7 review R2: the picker names each spool's preset, so a row carries
+    the spool's effective presets (its own over its type's)."""
+    spool = _spool(pg_pool)
+    row = SpoolPresetCreate(
+        printer_model="H2C",
+        nozzle_diameter="0.4",
+        slicer_filament="GFL99",
+        slicer_filament_name="Generic PLA",
+    )
+    assert FilamentSpoolStore(pg_pool).set_presets(spool, [row], actor="ann") is not None
+
+    [found] = [r for r in FilamentInventory(pg_pool).rows() if r.spool.id == spool]
+    assert [(p.nozzle_diameter, p.slicer_filament_name) for p in found.presets] == [
+        ("0.4", "Generic PLA")
+    ]

@@ -15,6 +15,7 @@ from scadbuddy.bambuddy.part_settings import PartSettings
 from scadbuddy.bambuddy.print_run import PreparedPlates, PrintRunRequest, PrintRunResult, run_path
 from scadbuddy.bambuddy.resolver import NozzleChoice, PrintChoices
 from scadbuddy.bambuddy.runs import run_key
+from scadbuddy.operations.kinds import operation_key
 from scadbuddy.printers.models import PrinterRow
 from scadbuddy.printers.status import STALE_AFTER
 from scadbuddy.workflows.print_models import PrintRunInput, SourceSpec
@@ -102,6 +103,24 @@ def test_a_part_settings_requests_key_is_what_it_was_before_5627() -> None:
         run_key("o" * 32, sent)
         == "3c3db79c76bb5c29227a3696c3354f884f20e88d2bfb1f2eff8650493bc81d56"
     )
+
+
+def test_a_plans_bambuddy_ids_key_as_they_did_before_6262() -> None:
+    """#6262 Task 7 review I1: a plan's ``ids`` default (``"bb"``) is left out of both
+    keys, so a retry that spans the deploy joins its run; ``"sb"`` is a new key."""
+    slots = [{"slot_id": 1, "spool_id": 5}]
+    before = request(printer_id=1, filament_plan={"slots": slots})
+    bb = request(printer_id=1, filament_plan={"slots": slots, "ids": "bb"})
+    sb = request(printer_id=1, filament_plan={"slots": slots, "ids": "sb"})
+    assert run_key("o" * 32, bb) == run_key("o" * 32, before)
+    assert run_key("o" * 32, sb) != run_key("o" * 32, before)
+
+    def op(body: dict[str, object]) -> str:
+        return operation_key("print", "o" * 32, body, "r")
+
+    sent = {"printer_id": 1, "filament_plan": {"slots": slots}}
+    assert op({**sent, "filament_plan": {"slots": slots, "ids": "bb"}}) == op(sent)
+    assert op({**sent, "filament_plan": {"slots": slots, "ids": "sb"}}) != op(sent)
 
 
 def test_a_run_result_with_part_settings_crosses_the_converter_whole() -> None:
