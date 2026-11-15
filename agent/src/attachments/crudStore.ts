@@ -74,10 +74,13 @@ export class CrudAttachmentStore implements Attachments {
     })
     const byId = new Map(attachments.map((a) => [a.id, a]))
     const out: ResolvedAttachment[] = []
-    // Every image and preview at once: a send names at most IMAGES_MAX of them.
+    // Every attachment at once (its preview after its image): a send names at most IMAGES_MAX.
     const bytes = await Promise.all(
       refs.map((ref) =>
-        byId.has(ref.id) ? Promise.all([this.#bytes(owner, ref.id, 'image'), this.#bytes(owner, ref.id, 'preview')]) : Promise.resolve([undefined, undefined]),
+        // Each attachment's preview only once its image was read: an expired one costs one request.
+        byId.has(ref.id)
+          ? this.#bytes(owner, ref.id, 'image').then(async (image) => [image, image && (await this.#bytes(owner, ref.id, 'preview'))] as const)
+          : Promise.resolve([undefined, undefined] as const),
       ),
     )
     for (const [index, ref] of refs.entries()) {
