@@ -1429,6 +1429,7 @@ def build_print_deps(settings: Settings, crud: CrudClient | None = None) -> Prin
             # A run's next plate copy waits on the printer's report (#4541).
             reports=reports,
             native_spools=RemoteNativeSpools(blocking),
+            spools=spools,
         )
     )
     return PrintWorkerDeps(

@@ -409,11 +409,12 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   native run passes `client=None` (`bambuddy/client.py` `maybe_client`), reads printer
   state from the LAN report (`printers/reports.py`), and its filaments are the loaded
   trays plus the physical-spool overlay of cached provider records (`spools/`, refreshed
-  off the path): Bambuddy's inventory and ScadBuddy's own (`native_spools`,
-  `spools/native.py`, provider `native` in `spools/spool_providers.py`, routes
-  `api/native_spools.py`, #4643; each write re-caches it at once; a LAN start saves its
-  slots' grams in `native_spool_uses`, taken off once the run settles with that start
-  `done`, `native_use_hook`; the editor is Settings' `components/settings/NativeSpools.tsx`).
+  off the path): Bambuddy's inventory and ScadBuddy's own (`spools/native.py` over the
+  `filament_*` tables since #6261, provider `native` in `spools/spool_providers.py`,
+  routes `api/native_spools.py`, #4643; each write re-caches it at once; a LAN start
+  books its slots' grams as `print_started` estimates in `filament_spool_events`, and the
+  run's settle books each start's `print_ended` actual (`done`) or 0, `native_use_hook`;
+  the editor is Settings' `components/settings/NativeSpools.tsx`).
   `printers/ams_mapping.py` computes `ams_mapping`/`ams_mapping2` from the
   plan's trays and `printers/nozzle_mapping.py` an H2C rack print's `nozzle_mapping`
   (measured values in the spec's §2); `printers/lan.py` is the FTPS upload and MQTT
@@ -472,6 +473,17 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   the stored setting `lan_require_plate_clear`, behind `PLATE_CLEAR_PATCH`), shown from
   `PrintProgress.lan_run` and `PrinterNow.lan_run` by `components/print/LanRunControls.tsx`,
   and the agent's `stop_print_run` and `confirm_plate_clear`.
+- `backend/scadbuddy/filament/` — the filament data model (#6261, epic #6260, spec
+  2026-11-14): `catalog.py` (configurable catalogs, no code enums), `types.py`
+  (`effective()`: spool → type → subtype → material, the one resolver; a type links its
+  price-book row by identity, alpha included, and never rewrites a found row), `spools.py`
+  (instances and tag bindings; every writer locks the tag before the spool; archive closes
+  the open binding), `ledger.py` (`filament_spool_events`, the one source of grams left:
+  the newest absolute reading, then the deltas after it; events carry their physical time,
+  ordered by `(at, seq)`; a time-less event gets a clock-step guard because the WSL clock
+  steps back), `locations.py` (a spool moves only through `move()`; AMS trays are keyed by
+  printer, AMS and tray, never by name), `bambuddy_pull.py` (import and the scheduled pull,
+  read-only toward Bambuddy). Colour is `#RRGGBBAA` (`colour.py`). Routes: `api/filament.py`.
 - `backend/scadbuddy/store/` — the blob store. Phase 1: the directory-shaped `BlobStore`
   Protocol and `LocalBlobStore` (`local.py`, a piece in `data/blobs/<piece_key>/`),
   `BlobRefs` (`refs.py`, the `blob_refs` table that keeps a blob alive) and `sweep_blobs`
@@ -1430,7 +1442,9 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   A record's whole colour (#6209, migration `20261114T1607Z_filaments_alpha_effect.sql`):
   `colour` stays `#RRGGBB` (the render splits parts by it; a clear filament is its RGB with
   `alpha` 0), beside `alpha`, `extra_colours` (at most 8 stops) and `effect` (Bambuddy's
-  `effect_type` set), all on `Filament` and the storefront's `PublicFilament`.
+  `effect_type` set), all on `Filament` and the storefront's `PublicFilament`. The
+  identity index holds `alpha` too (#6261, `20261115T0154Z_filaments_identity_alpha.sql`):
+  a spool type's book row (`filament/types.py` `_link_price_book`) is one per alpha.
   `colour_source` is `import` or `manual`: a look sent by a person that differs from the
   record's makes it `manual`, and the import never sets a `manual` record's look;
   `colour_source: "import"` in a PATCH hands it back; the editor's "Use spool colour"
