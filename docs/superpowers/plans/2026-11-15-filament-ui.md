@@ -105,12 +105,14 @@ building (#6261)" bind this plan. Issues: #6262, #6316 (folded in). Epic #6260.
    nozzle `0.2, 0.4, 0.6, 0.8` (the H2C's nozzles, spec §9 step 7 lists them), then
    deleted, and a CHECK refuses `'*'` from then on. Readers ask only for
    `(printer_model, nozzle_diameter)`.
-5. **Native API retired, not redirected:** `/api/v1/native-spools*` and the four
+5. **Native API retired, not redirected (owner ruling, 2026-11-15: no aliases):** `/api/v1/native-spools*` and the four
    `native_spool_*` tools are removed. Each has a `filament_*` equivalent
    (`list`→`filament_spool_list`, `get`, `upsert`, `delete`), the native shape loses alpha
    (`#RRGGBB`, the defect §5.1 names), and a second write path would need its own
    tests for every rule the filament store enforces. A `NOT_A_TOOL` entry would describe a
-   route that no longer exists. The PR body names the removed tools for saved flows.
+   route that no longer exists. The four tools (`native_spool_list`, `native_spool_get`,
+   `native_spool_upsert`, `native_spool_delete`) are removed with no aliases; the PR body
+   (Task 20) names them, so a saved flow's author knows what to change.
 6. **Overlay removed with its tables.** Before the drop, one migration carries
    `tray_spool_links` into SB tray places (spool id = physical spool id, the #6261
    migration's rule) and `spool_record_links` of provider `bambuddy` into
@@ -135,10 +137,10 @@ building (#6261)" bind this plan. Issues: #6262, #6316 (folded in). Epic #6260.
 10. **Tabs shown now:** Spools, Types, Tags, Locations, Catalog, Ledger. Suppliers,
     Invoices, Shopping list and Metrics are in the tab registry with `available: false`
     and render nowhere until #6266/#6269 flip them.
-11. **Spools tab scope:** table and cards views, filters, columns picker, group by, bulk
-    archive/restore/delete/move/set type, summary tiles, CSV export. CSV import, labels
-    (QR, §7) and the forecast view need data other phases own; they go to #6270, #6264
-    and #6269 (owner question below).
+11. **Spools tab scope (owner ruling, 2026-11-15):** table and cards views, filters,
+    columns picker, group by, bulk archive/restore/delete/move/set type, summary tiles,
+    CSV export **and CSV import** (Task 15). Labels with QR codes (§7) go to #6264. The
+    forecast view (it needs the burn rate, §5.7) goes to #6269.
 12. **Picker colour matching:** a slot's colour is opaque unless its source carries alpha
     (OpenSCAD's alpha byte is ignored, CLAUDE.md). `colours_match` is false when one side
     is translucent (`alpha < FF`) and the other opaque; a person can still pick it.
@@ -485,9 +487,12 @@ fewer clicks; the builder cites the Bambu Studio source they compare against.
 - [ ] **Step 4:** Run them, `pnpm lint && pnpm typecheck` — PASS.
 - [ ] **Step 5:** Commit `feat(filament): the Filament section's frame and RGBA swatch (#6262)`.
 
-### Task 15: Spools tab
+### Task 15: Spools tab, with CSV export and import
 
 **Files:**
+- Create: `backend/scadbuddy/filament/csv_import.py`, `frontend/src/components/filament/SpoolImport.tsx`
+- Modify: `backend/scadbuddy/api/filament.py`, `agent/src/tools/filament.ts`
+- Test: `backend/tests/filament/test_csv_import.py`, `backend/tests/api/test_filament.py`, `agent/test/filament.test.ts`, `frontend/src/components/filament/SpoolImport.test.tsx`
 - Create: `frontend/src/pages/filament/SpoolsTab.tsx`, `frontend/src/components/filament/spoolsQuery.ts`, `SpoolsTable.tsx`, `SpoolCards.tsx`, `SpoolTiles.tsx`, `BulkBar.tsx`, `spoolsCsv.ts`
 - Test: `spoolsQuery.test.ts`, `spoolsCsv.test.ts`, `pages/filament/SpoolsTab.test.tsx`
 
@@ -498,12 +503,16 @@ fewer clicks; the builder cites the Bambu Studio source they compare against.
 - Bulk: select rows → Archive, Restore, Delete (only for rows with `in_use` false; others are named and skipped), Move to location, Set type. One request per spool; the bar reports each failure by spool number.
 - CSV export: `spoolsCsv(spools, columns): string` (RFC 4180 quoting), downloaded through `lib/embed.ts` `downloadBlob` (the Bambuddy iframe rule).
 - A row links to `/filament/spools/<id>`; "needs type" and `Unknown` material show a badge with "Set type".
+- CSV import (owner ruling): the same columns the export writes (`SPOOL_CSV_COLUMNS`, one list shared by `spoolsCsv` and the backend's `csv_import.COLUMNS`, pinned by a test that compares them). The browser parses the file and sends rows as JSON (no file bytes in text).
+  - Backend: `import_rows(store: Filament, rows: Sequence[CsvRow], *, dry_run: bool, actor: str) -> ImportPreview` with `ImportPreview(rows: list[ImportRowResult])`, `ImportRowResult(line: int, action: Literal["create", "update", "error"], number: int | None, changes: dict[str, list[Any]], error: str | None)`. A row with `number` updates that spool (only the fields that differ); an unknown `number` is an error; a row with no `number` creates a spool. Catalog names (material, subtype, brand, category, effect, insert type, location) resolve by `upper(name)` and are inserted when missing, as the pull does (`bambuddy_pull.py`); in a dry run a missing name is reported in `changes` as `"new": true` and nothing is inserted. `dry_run=false` writes every row in one transaction and refuses (422, nothing written) when any row is an error.
+  - Route `POST /filament/spools/import` (body `{rows: list[CsvRow], dry_run: bool}`) → `ImportPreview`; tool `filament_spool_import` (write; its handler always sends `dry_run: true` first and returns the preview when the caller asked for a preview only).
+  - UI: `SpoolImport` — choose a file, the preview table (create/update/error per line with its changes), "Import N spools" enabled only with no errors, then the tab reloads.
 
-- [ ] **Step 1: Failing tests:** `readQuery(writeQuery(q))` round-trips; `filterSpools` with `lowStock` keeps only the low ones by the summary's rule; the CSV quotes a name with a comma; the tab shows the 11 active seed spools, the translucent one's swatch `#…80`; bulk Delete skips an in-use spool and names it.
+- [ ] **Step 1: Failing tests:** backend `test_a_dry_run_writes_nothing` (two rows → one `create`, one `update`; spool count and catalog rows unchanged); `test_a_row_with_a_number_updates_only_what_differs` (one `edited` event naming only `note`); `test_an_unknown_number_is_an_error_and_blocks_the_import` (422, nothing written); `test_a_missing_catalog_name_is_inserted_once` (two rows naming brand "Sunlu" → one brand row, upper-case match with "SUNLU"); `test_import_reads_what_export_writes` (columns equal). Frontend: the preview lists an error line and disables Import; a clean preview's Import sends `dry_run: false`. Then `readQuery(writeQuery(q))` round-trips; `filterSpools` with `lowStock` keeps only the low ones by the summary's rule; the CSV quotes a name with a comma; the tab shows the 11 active seed spools, the translucent one's swatch `#…80`; bulk Delete skips an in-use spool and names it.
 - [ ] **Step 2:** Run — FAIL.
 - [ ] **Step 3:** Implement.
-- [ ] **Step 4:** Run, `pnpm lint && pnpm typecheck` — PASS.
-- [ ] **Step 5:** Commit `feat(filament): the Spools tab (#6262)`.
+- [ ] **Step 4:** Run the backend tests, agent `pnpm gen:api && pnpm test filament coverage && pnpm typecheck`, frontend `pnpm gen:api && pnpm lint && pnpm typecheck` and the vitest files — PASS.
+- [ ] **Step 5:** Commit `feat(filament): the Spools tab with CSV export and import (#6262)`.
 
 ### Task 16: Types tab with the price book
 
@@ -593,6 +602,6 @@ fewer clicks; the builder cites the Bambu Studio source they compare against.
 - [ ] **Step 2:** Run `pnpm build && pnpm exec playwright test e2e/filament.spec.ts e2e/hot-path.spec.ts e2e/print.spec.ts e2e/settings.spec.ts e2e/phone-width.spec.ts` — FAIL first, then PASS after fixes.
 - [ ] **Step 3:** Update the docs; grep each changed fact (`native-spools`, `overlay`, `NativeSpools.tsx`, `spool_provider`) across `CLAUDE.md` files and fix every copy.
 - [ ] **Step 4:** Whole-branch check: backend `uv run --frozen pytest -n auto`, ruff, mypy; frontend `pnpm lint && pnpm typecheck && pnpm test && pnpm build`; agent `pnpm test && pnpm typecheck`; `e2e-stack/run.sh --mode recorder`.
-- [ ] **Step 5:** Commit `docs(filament): notes for the Filament section and SB spools (#6262)`; open the PR `feat(filament): Filament section, spool edit page, SB spools everywhere (#6262)`, body `Closes #6262`, `Closes #6316`, the four parts and what each leaves working, the removed tools (`native_spool_list/get/upsert/delete`) for saved flows, the session marker and the footer.
+- [ ] **Step 5:** Commit `docs(filament): notes for the Filament section and SB spools (#6262)`; open the PR `feat(filament): Filament section, spool edit page, SB spools everywhere (#6262)`, body `Closes #6262`, `Closes #6316`, the four parts and what each leaves working, a section naming the removed tools `native_spool_list`, `native_spool_get`, `native_spool_upsert` and `native_spool_delete` with their `filament_*` replacements, so a saved flow's author knows what to change, the session marker and the footer.
 
 ## Decisions made while building (#6262)
