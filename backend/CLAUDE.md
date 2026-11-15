@@ -1488,6 +1488,34 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   edit (#6211 review). An item
   print's spools are matched the same way (`orders/spools.py` `_of`, the store's
   `spool_links`), so a hand-set colour still finds its spools.
+- Prepared colour combinations (#6237): `orders/storefront/prepare.py`, routes `GET`/`POST
+  /storefront/listings/{id}/prepare` (`api/storefront.py`). A combination is one colour per
+  offered colour parameter (the public listing's colours, in each spelling the page can
+  send: each offered filament's own `colour`, as `ParamField.tsx` sends it, and the effective
+  default when no filament spells it so, #6299 review); each is built by the visitor path's
+  `listing_values` and `listing_reference`, a colour at its effective default (same
+  spelling) left out as the page leaves it out, so a visitor's render reuses the prepared
+  job. The POST starts the workflow
+  `PrepareListing` (`workflows/prepare_listing.py`, `library` queue, id
+  `prepare-listing:<listing id>`, `USE_EXISTING`: a second POST joins it; AUTO_UPGRADE as
+  `VersionedPrepareListing`) and answers at once (`{count, started}`). The run submits by
+  index (activity `prepare_listing_submit`, `RenderService.submit_answer(...,
+  reuse_finished=True)` at the default priority, #6299 review: a visitor's render of the same
+  key joins the prepared execution, so a lower priority would hold the visitor up) and keeps
+  at most `PREPARE_IN_FLIGHT` (2) open, reading them with a backoff
+  (`prepare_listing_settled`). A done job is skipped, a full queue waited out, a failed
+  submit's index kept in the memo `failed_to_start` (a list; a run from before the patch
+  `prepare-failed-indices` keeps a count); it continues as new every 50 submits, carrying
+  the memo. Each render's claim (`request_id`) is `prepare:<listing>:<run id>:<key>`: a
+  retry of one submit joins it, a new run makes a new one, so "Prepare again" renders a
+  failed combination again (#6299 review). The POST's `started` comes from the start's own
+  answer (its run id against the open run's, or its chain's first run id). No
+  table: the GET reads the newest `render_jobs` row of each render key, and the run's state
+  (`running`, and `failed_to_start`: how many of the memo's indices have no done job) only
+  when `0 < count <= cap`; a failed Temporal read gives
+  `running: false`, not an error. Capped by `storefront_prepare_cap` (default 256; 422
+  `listing_combinations_over_cap` with `count` and `cap`, `listing_no_colours`, 409
+  `listing_not_published`). Prepared renders follow `job_ttl`; there is no keep mark.
 - A customer's own models (#6133, spec 2026-11-13; migration
   `20261113T1547Z_storefront_customer_models.sql`): `orders/storefront/model_requests.py`,
   CRUD area `models`, the edge's `POST /api/store/v1/uploads` and `…/draft/models`. The files

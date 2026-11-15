@@ -156,6 +156,13 @@ same way, `vite.config.ts`).
   dialog has "Storefront…" per image (`components/storefront/StorefrontPicture.tsx`),
   which sets the image on each listing of that template through `PUT
   /storefront/listings/{id}/media`; a published listing is published again at once.
+  Prepared colours (#6237): `components/storefront/PrepareColours.tsx`, under a published
+  listing's actions, shows the count (`GET …/prepare`), confirms, starts (`POST …/prepare`)
+  and shows "n of N ready", read again while the run is open (`running`) or renders are in
+  the queue (a failed read does not stop the reads; the next good one clears its error, a
+  failed start's message stays, #6299 review); renders that could not be started (`failed_to_start`) are named, with "Prepare
+  again"; over the cap it says the count and the cap. Mocks in
+  `src/mocks/features/storefront.ts` (`setPrepareCap`, `failNextPrepareStarts`).
 
 - The order lists (#6334): `pages/OrdersPage.tsx`'s views (`lib/orderViews.ts`
   `ORDER_VIEWS`, each a fixed set of URL filters; the active one is the one the URL holds)
