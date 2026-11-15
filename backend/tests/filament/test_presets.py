@@ -17,7 +17,7 @@ from scadbuddy.filament.models import (
     TypeKValue,
     TypePreset,
 )
-from scadbuddy.filament.presets import effective_presets, preset_for
+from scadbuddy.filament.presets import effective_k_values, effective_presets, preset_for
 from scadbuddy.filament.spools import FilamentSpoolStore
 from scadbuddy.filament.types import SpoolTypeStore, TypeRowsDuplicateError
 from tests.conftest import PgPool
@@ -160,3 +160,22 @@ def test_a_spool_k_value_overrides_its_types_and_resets(pg_pool: PgPool, pg_conn
             [own.model_copy(update={"printer_id": UUID(int=9)})],
             actor="ann",
         )
+
+
+def test_a_spool_only_k_key_shows_and_a_repeated_key_is_refused(
+    pg_pool: PgPool, pg_conninfo: str
+) -> None:
+    _, spools, _, spool_id = _type_with_spool(pg_pool)
+    printer = UUID(bambuddy_printer(pg_conninfo, 1))
+    own = SpoolKValueCreate(
+        printer_id=printer, extruder=0, nozzle_diameter="0.4", k_value=Decimal("0.03")
+    )
+    saved = spools.set_k_values(spool_id, [own], actor="ann")
+    assert saved is not None
+    assert [(k.printer_id, k.k_value, k.overridden) for k in saved] == [
+        (printer, Decimal("0.0300"), True)
+    ]
+    with pg_pool.connection() as conn:
+        assert effective_k_values(conn, spool_id) == saved
+    with pytest.raises(TypeRowsDuplicateError):
+        spools.set_k_values(spool_id, [own, own], actor="ann")

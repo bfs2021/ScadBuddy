@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from scadbuddy.api.filament import actor
 from scadbuddy.auth.models import ANONYMOUS, AuthSession, Person, PersonalToken, Service
 from tests.api.test_send import API, configure
+from tests.support.printers import bambuddy_printer
 
 pytestmark = pytest.mark.requires_postgres
 
@@ -221,6 +222,19 @@ def test_a_spool_has_its_own_presets_and_k_values(client: TestClient) -> None:
     assert client.put(f"{one}/k-values", json=[k]).status_code == 422
     assert client.put(f"{one}/k-values", json=[]).json() == []
     assert client.get(f"{one}/k-values").json() == []
+
+
+def test_a_k_value_is_set_and_read_back(client: TestClient, pg_conninfo: str) -> None:
+    one = f"{SPOOLS}/{_spool(client)['id']}"
+    printer = bambuddy_printer(pg_conninfo, 1)
+    k = {"printer_id": printer, "extruder": 0, "nozzle_diameter": "0.4", "k_value": "0.02"}
+    saved = client.put(f"{one}/k-values", json=[k])
+    assert saved.status_code == 200, saved.text
+    assert [(r["printer_id"], r["extruder"], r["overridden"]) for r in saved.json()] == [
+        (printer, 0, True)
+    ]
+    assert client.get(f"{one}/k-values").json() == saved.json()
+    assert client.put(f"{one}/k-values", json=[k, k]).status_code == 422
 
 
 def test_a_missing_spool_is_404(client: TestClient) -> None:
