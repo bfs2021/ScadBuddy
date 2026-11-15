@@ -11,8 +11,16 @@ import pytest
 
 from scadbuddy.filament.catalog import CatalogStore
 from scadbuddy.filament.ledger import basis, grams_left, record
-from scadbuddy.filament.models import Material, SpoolCreate, SpoolEvent, SpoolPatch
+from scadbuddy.filament.models import (
+    Material,
+    SpoolCreate,
+    SpoolEvent,
+    SpoolPatch,
+    SpoolTypeCreate,
+    SpoolTypePatch,
+)
 from scadbuddy.filament.spools import FilamentSpoolStore
+from scadbuddy.filament.types import SpoolTypeStore
 from tests.conftest import PgPool
 
 pytestmark = pytest.mark.requires_postgres
@@ -134,6 +142,13 @@ def test_events_page_by_at_and_seq(pg_pool: PgPool) -> None:
     assert pages == 2
     assert len(seen) == 3
     assert len(set(seen)) == 3
+    with pg_pool.connection() as conn:
+        booked = conn.execute(
+            "SELECT id FROM filament_spool_events WHERE spool_id = %s AND kind = 'print_ended'"
+            " ORDER BY seq DESC",
+            (spool_id,),
+        ).fetchall()
+    assert seen == [row["id"] for row in booked]
     everything = store.ledger(spool_id=spool_id, limit=500)
     assert [r.id for r in everything.events if r.kind == "print_ended"] == seen
     spool = store.get(spool_id)
@@ -207,3 +222,23 @@ def test_summary_counts(pg_pool: PgPool) -> None:
     assert summary.needs_type == 2
     assert summary.loaded == 0
     assert [(r.material, r.spools) for r in summary.by_material] == [("PLA", 2)]
+
+
+def test_a_types_label_weight_edit_moves_its_spools_stored_grams(pg_pool: PgPool) -> None:
+    types = SpoolTypeStore(pg_pool)
+    kind = types.create(
+        SpoolTypeCreate(
+            code="PLA-W", material_id=_material(pg_pool), label_weight_g=1000, rgba="#FFFFFFFF"
+        )
+    )
+    store = FilamentSpoolStore(pg_pool)
+    spool = store.create(SpoolCreate(type_id=kind.id), actor="ann")
+    with pg_pool.connection() as conn, conn.transaction():
+        record(conn, spool.id, "ams_reading", source="ams_remain", data={"remain_pct": 50})
+    before = store.get(spool.id)
+    assert before is not None
+    assert before.grams_left == 500
+    types.update(kind.id, SpoolTypePatch(label_weight_g=2000))
+    after = store.get(spool.id)
+    assert after is not None
+    assert after.grams_left == 1000

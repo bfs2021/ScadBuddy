@@ -198,7 +198,9 @@ class FilamentSpoolStore:
     def detail(self, spool_id: UUID) -> m.SpoolDetail | None:
         """The spool with its tags, effective presets and K values, the basis of its
         grams and whether it ever printed; ``None`` for no such spool."""
-        with self._pool.connection() as conn:
+        with self._pool.connection() as conn, conn.transaction():
+            # One snapshot, so the stored grams and the basis behind them agree.
+            conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
             spool = self._spool(conn, spool_id)
             if spool is None:
                 return None

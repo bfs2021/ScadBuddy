@@ -23,6 +23,24 @@ const kind = z
   ])
   .describe('Which catalog')
 
+const EVENT_KINDS = [
+  'created',
+  'loaded',
+  'unloaded',
+  'moved',
+  'print_started',
+  'print_ended',
+  'weighed',
+  'ams_reading',
+  'dried',
+  'edited',
+  'tag_bound',
+  'tag_unbound',
+  'archived',
+  'restored',
+  'synced_from_bb',
+] as const
+
 export const filamentTools: Tool[] = [
   defineTool({
     name: 'filament_catalog_list',
@@ -236,7 +254,8 @@ export const filamentTools: Tool[] = [
     label: 'List filament spools',
     description:
       "ScadBuddy's spools (one physical reel each) by number, each with its `effective` values (its own " +
-      "override, else its type's), the fields it `overridden`, and `grams_left` from its ledger. " +
+      "override, else its type's), the fields it `overridden`, the `names` behind its ids, `low_stock`, and " +
+      '`grams_left` from its ledger. ' +
       '`needs_type: true` lists only spools with no type yet, `false` only typed ones. Archived spools only ' +
       'with `include_archived`.',
     input: z.object({
@@ -544,7 +563,7 @@ export const filamentTools: Tool[] = [
       '`next_cursor` is set, pass it back as `cursor` for the next page.',
     input: z.object({
       spool_id: z.string().uuid().optional(),
-      kind: z.string().optional().describe('An event kind, such as `weighed`, `print_ended` or `moved`'),
+      kind: z.enum(EVENT_KINDS).optional().describe('An event kind'),
       source: z.enum(['ams_remain', 'scale', 'print_estimate', 'print_actual', 'person', 'bb']).optional(),
       since: z.string().optional(),
       cursor: z.string().optional(),
@@ -557,8 +576,7 @@ export const filamentTools: Tool[] = [
       json(
         await ok(
           backend.GET('/api/v1/filament/events', {
-            // The backend refuses an unknown kind with a 422 that names the kinds.
-            params: { query: query as never },
+            params: { query },
           }),
           'read the ledger',
         ),
