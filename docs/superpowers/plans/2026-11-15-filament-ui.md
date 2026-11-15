@@ -47,7 +47,7 @@ Postgres 18; React 19, Vite, shadcn/ui, msw, vitest, Playwright; TypeScript agen
 ## Global Constraints
 
 - **Database access (#5295):** only the CRUD service has SQL. The print worker reads SB
-  spools through a `crud_router("print")` route, area `spools`, with its service credential.
+  spools through a `crud_router("print")` route, area `filament`, with its service credential.
   No new pool, grant or cross-service table read. No untrusted code near a DB secret.
 - **Migrations (#491):** new files only, `backend/scadbuddy/migrations/$(date -u +%Y%m%dT%H%MZ)_<slug>.sql`.
   Never edit a merged file. A data migration guards each row it rewrites (`ON CONFLICT DO
@@ -102,7 +102,7 @@ Design
    an open tag binding by `tray_uuid`, then `tag_uid`; else, for an untagged tray, the
    spool placed at that tray whose `tray_fingerprint` still equals the tray's
    (`MATERIAL|#RRGGBBAA`). The print worker calls it through
-   `POST /api/v1/internal/crud/print/filament/trays` (area `spools`). A LAN start's
+   `POST /api/v1/internal/crud/print/filament/trays` (area `filament`). A LAN start's
    estimates and the settle move from `spools/native.py` to `filament/print_uses.py`
    (same ledger rows, same `ref_id` form), behind `…/filament/print-uses` CRUD routes with
    an `Idempotency-Key`. Cost: one more CRUD round trip per plan, as today.
@@ -205,7 +205,7 @@ Preflight rulings (`.superpowers/sdd/2026-11-15-filament-ui/preflight.md`)
 - F28: tasks name test files that exist (`tests/api/test_print.py`, `test_print_choices.py`, `test_print_destination_native.py`, `test_print_filaments.py`, `tests/orders/test_spools.py`, `agent/test/printers.test.ts`) or create the named ones. Cost: none.
 - F29: Task 11's grep covers `backend/scadbuddy`, `agent/src` and `frontend/src` (F9 moves its frontend consumers into it); Task 13 runs it again; Task 11 does not edit files that name no native tool. Cost: none.
 - F30 (as changed by the controller): the carry migrations stay in this PR with `ON CONFLICT DO NOTHING` on both keys, `WHERE record_id ~ '^[0-9]+$'`, and BB-only tray links resolved through the BB record link; the DROP leaves this plan (Decision 6). Cost: if wrong, one more small PR.
-- T6: `CRUD_AREAS` holds area names; `api/crud_areas.py`'s docstring lists the new paths. Cost: none.
+- T6: `CRUD_AREAS` holds area names; `api/crud_areas.py`'s docstring lists the new paths. The routes take a new area, `filament` (in `CRUD_AREAS["print"]` and `worker.PRINT_CRUD_AREAS`), so a new worker waits for an API that serves them (Task 6 review).
 
 SpoolRefresh replay conditions (preflight §4; Task 12)
 - `workflow.patched("spool-providers-gone")` is the **first** call in `run`, and its `not patched` branch keeps the exact old `LIST` → `PROVIDER`×n → `SEEN` sequence. Cost if wrong: a nondeterminism error on an open run.
@@ -384,7 +384,7 @@ frontend/e2e/filament.spec.ts                                        Task 20
 **Interfaces:**
 - Produces in `print_uses.py` (moved from `NativeSpoolStore`, same rules, same `ref_id = run_id/subtask/slot`): `record_uses(pool, run_id: str, subtask: str, uses: Sequence[SlotUse]) -> int`, `settle_uses(pool, run_id: str, stages: Sequence[str]) -> bool`, `settle_uses_in(conn, run_id, stages) -> bool`; `SlotUse(slot_id: int, spool_id: UUID, grams: float, plate_started_at: datetime)`.
 - `print_use_hook(uses: PrintUses) -> ReadHook` replaces `native_use_hook` (no recache step: there is no cache).
-- CRUD routes on `crud_router("print")`, area `spools`: `POST /filament/trays` (body `{printer_id, seen: list[SeenTray]}` → `TrayView`), `POST /filament/presets` (body `{numbers: list[int]}` → `dict[int, list[EffectivePreset]]`, F1), `POST /filament/print-uses` and `POST /filament/print-uses/settle` (both take `Idempotency-Key`). Clients in `crud/print.py`: `RemoteFilamentTrays`, `RemotePrintUses`.
+- CRUD routes on `crud_router("print")`, area `filament`: `POST /filament/trays` (body `{printer_id, seen: list[SeenTray]}` → `TrayView`), `POST /filament/presets` (body `{numbers: list[int]}` → `dict[int, list[EffectivePreset]]`, F1), `POST /filament/print-uses` and `POST /filament/print-uses/settle` (both take `Idempotency-Key`). Clients in `crud/print.py`: `RemoteFilamentTrays`, `RemotePrintUses`.
 - The worker's plan (`workflows/print_activities.py`) reads `RemoteFilamentTrays.trays` instead of `printer_overlay`.
 - The worker's tray read keeps the three rules of the deleted `PrintActivities._overlay` (Task 5 review): (a) it reads the printer's **stored report** (`printers/reports.py`), not `prepared.printer_status`, because the history's `AmsTray` drops `tray_uuid` and a tagged tray would hold nothing; (b) a failed read plans on the trays alone and never fails the run; (c) the plan's low-filament warnings (#4551) judge the held spool's grams. Each has a Step 1 test: `test_the_worker_reads_tags_from_the_stored_report`, `test_a_failed_trays_read_still_prints`, `test_a_native_plan_warns_on_the_held_spools_grams`.
 - The preview (`bambuddy/preview.py` `preview_run`, Task 5) reads its held trays and presets through the same `POST /filament/trays` and `/filament/presets` routes, as the run does, so the preview request carries nothing volatile. It still reads `request["sb"]` when present, for preview operations in flight across the deploy. Test: `test_the_preview_and_the_run_resolve_one_slice` (a run of the preview's choices reuses its slice).
@@ -716,3 +716,5 @@ fewer clicks; the builder cites the Bambu Studio source they compare against.
 - Task 5 (review): the dialog's background preview (`bambuddy/preview.py`) resolves with the held spools and SB presets, as `/check` does, so the slice shown is the one printed and Task 6's run can reuse it.
 - Task 5 (review): Task 6's worker read carries the deleted overlay reader's three rules, and Task 7 fills Bambuddy-path options through `trays._from_spool` and deletes the interim `preset_key` fallback (both written into those tasks).
 - Task 5 (re-review): the preview request's `sb` is unkeyed (`OperationKind.unkeyed`), so a re-send under one Idempotency-Key is its first answer whatever changed since (§4.2), and it carries only what the plan reads (per held tray its spool id, number and the effective fields `loaded_trays` and the low-filament warnings read; presets per SB number), never notes or timestamps, so it stays well under `MAX_REQUEST_BYTES`. Task 6 replaces it with the worker's own CRUD read; Task 9 gives the quote preview the same.
+- Task 6 (review ruling): the print worker's filament routes take a new CRUD area, `filament`, not `spools`. `spools` already exists on main's API, so with it a new worker started before an API that serves the routes, and a print in the roll lost its SB-spool booking silently. The legacy `/native-spools/uses` routes stay as delegates for an old worker against a new API until Task 12.
+- Task 6: estimates are booked at the plate's start (the ledger's named-time rule); print events name the actor `print`.
