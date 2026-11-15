@@ -26,10 +26,10 @@ from scadbuddy.filament.models import (
     SpoolTypeCreate,
 )
 from scadbuddy.filament.presets import PoolSpoolPresets
+from scadbuddy.filament.print_uses import SlotUse, record_uses, settle_uses
 from scadbuddy.filament.spools import FilamentSpoolStore
 from scadbuddy.filament.types import SpoolTypeStore
 from scadbuddy.library.settings_store import StoredSettings
-from scadbuddy.spools.native import NativeSpoolStore, SpoolUse
 from tests.conftest import PgPool
 
 pytestmark = pytest.mark.requires_postgres
@@ -551,6 +551,11 @@ def _lan_run(pool: PgPool, *names: str) -> None:
         )
 
 
+def _use(spool_id: UUID, grams: float) -> list[SlotUse]:
+    """Slot 1's use of ``spool_id``, its plate started now."""
+    return [SlotUse(slot_id=1, spool_id=spool_id, grams=grams, plate_started_at=datetime.now(UTC))]
+
+
 def _now_in_bb() -> str:
     """Bambuddy's time for now (naive UTC), after every event booked so far."""
     return datetime.now(UTC).replace(tzinfo=None).isoformat()
@@ -560,14 +565,13 @@ def test_a_pull_between_two_plates_counts_each_plate_once(pg_pool: PgPool) -> No
     """BB deducts plate ``a`` as it ends; a pull then anchors on a value that holds it,
     and the run's settle at its end takes off plate ``b`` only."""
     f = _filament(pg_pool)
-    native = NativeSpoolStore(pg_pool)
     (made,) = pull(f, [bb(updated_at=_bb_time(-3))], now=NOW).created_ids
     _lan_run(pg_pool, "a", "b")
-    native.record_uses(RUN, "a", [SpoolUse(slot_id=1, spool_id=made, grams=50)])
+    record_uses(pg_pool, RUN, "a", _use(made, 50))
     # Plate a ends, BB takes its 50 g off, and the pull reads that before plate b.
     pull(f, [bb(weight_used=150.0, updated_at=_now_in_bb())], now=NOW)
-    native.record_uses(RUN, "b", [SpoolUse(slot_id=1, spool_id=made, grams=30)])
-    native.settle_uses(RUN, ["done", "done"])
+    record_uses(pg_pool, RUN, "b", _use(made, 30))
+    settle_uses(pg_pool, RUN, ["done", "done"])
     spool = f.spools.get(made)
     assert spool is not None
     assert spool.grams_left == 1000 - 150 - 30
@@ -575,12 +579,11 @@ def test_a_pull_between_two_plates_counts_each_plate_once(pg_pool: PgPool) -> No
 
 def test_a_bb_update_before_the_settle_counts_the_plate_once(pg_pool: PgPool) -> None:
     f = _filament(pg_pool)
-    native = NativeSpoolStore(pg_pool)
     (made,) = pull(f, [bb(updated_at=_bb_time(-3))], now=NOW).created_ids
     _lan_run(pg_pool, "a")
-    native.record_uses(RUN, "a", [SpoolUse(slot_id=1, spool_id=made, grams=50)])
+    record_uses(pg_pool, RUN, "a", _use(made, 50))
     pull(f, [bb(weight_used=150.0, updated_at=_now_in_bb())], now=NOW)
-    native.settle_uses(RUN, ["done"])
+    settle_uses(pg_pool, RUN, ["done"])
     spool = f.spools.get(made)
     assert spool is not None
     assert spool.grams_left == 850

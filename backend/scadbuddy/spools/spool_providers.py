@@ -8,11 +8,8 @@ as every provider's are, and a write through ``/api/v1/native-spools`` refreshes
 once (`api/native_spools.py`), so the overlay never shows an edit late. It reads
 Postgres only: a shop with no Bambuddy has shelf spools and remaining grams with it.
 
-A native print takes what it used off these records (#4643 part 2): each LAN start
-books its slots' grams against the native record the overlay put in each tray
-(`native.spool_uses`, ``lan_print``) as an estimate that comes off at once, and re-caches
-the records; :func:`native_use_hook`, a read hook of the print follow, settles them once
-the run's print settles, then re-caches the records.
+What a native print uses comes off the SB spool in each tray (`filament/print_uses.py`,
+#6262 Task 6), never off these cached records; the next refresh copies the grams left.
 
 It is first (priority 10, Bambuddy's is 100): a tray's remaining weight is the first
 fresh record's (`SpoolProvider.priority`), and the shop's own count is the one it keeps.
@@ -40,8 +37,6 @@ from scadbuddy.spools.providers import (
 )
 
 if TYPE_CHECKING:
-    from scadbuddy.bambuddy.follow import ReadHook
-    from scadbuddy.bambuddy.progress import PrintProgress
     from scadbuddy.core.components import Core
     from scadbuddy.spools.component import Spools
 
@@ -94,37 +89,9 @@ async def recache(spools: Spools) -> None:
             logger.warning("could not record the native spools' failed refresh")
 
 
-def native_use_hook(spools: Spools) -> ReadHook:
-    """The print follow's read hook for what a native print used (#4643): a start's
-    estimate came off its native spools as it started (`NativeSpoolStore.record_uses`);
-    once a LAN run's print has settled, the settle books each start's ``print_ended``
-    actual (its sliced grams when it ended ``done``, else 0, which drops the estimate;
-    `NativeSpoolStore.settle_uses`), once whichever reader settles it first, and the
-    records are re-cached for the overlay. Advisory: a failure is logged,
-    never raised into the follow. Reads and writes ScadBuddy's Postgres only: on the print
-    worker through the API's CRUD routes (`crud/print.py` `RemoteNativeSpools`, #5298)."""
-
-    async def hook(run_subject: str, progress: PrintProgress) -> None:
-        if progress.route != "lan" or not progress.settled or progress.run_id is None:
-            return
-        stages = [copy.stage for copy in progress.copies_detail] or [progress.stage]
-        store = native_provider(spools).store
-        try:
-            changed = await asyncio.to_thread(store.settle_uses, progress.run_id, stages)
-        except Exception as error:
-            logger.warning(
-                "could not take a native print's filament off its spools",
-                extra={"run_id": progress.run_id, "error": type(error).__name__},
-            )
-            return
-        if changed:
-            await recache(spools)
-
-    return hook
-
-
 def _build(core: ProviderCore, components: Components | None) -> SpoolProvider:
-    # The print worker's spools are its CRUD routes' (#5298 Task 31); the API's are SQL.
+    # A core with no pool reads them through the CRUD routes (#5298 Task 31); the API's
+    # are SQL.
     if isinstance(core, SettingsOnly):
         return NativeProvider(core.native_spools)
     return NativeProvider(NativeSpoolStore(cast("Core", core).settings_store.pool))

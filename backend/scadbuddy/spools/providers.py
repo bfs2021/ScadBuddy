@@ -66,8 +66,9 @@ class ProviderSettings(Protocol):
 
 class ProviderCore(Protocol):
     """What a provider's build may read of the core services: `Core` is one, and so is
-    :class:`SettingsOnly`, so the print worker, which has no `Core`, finds the same
-    providers (#4551: a run's plan reads the overlay there)."""
+    :class:`SettingsOnly`, so a process with no `Core` finds the same providers. The
+    print worker built them for a run's plan (#4551) and its LAN starts' re-cache; since
+    #6262 Task 6 it reads the SB spools through its CRUD routes and builds none."""
 
     @property
     def settings_store(self) -> ProviderSettings: ...
@@ -75,10 +76,11 @@ class ProviderCore(Protocol):
 
 @dataclass(frozen=True)
 class SettingsOnly:
-    """The :class:`ProviderCore` of a process with no `Core` (the print worker): the
-    settings read through the API's CRUD route, and ScadBuddy's own spools through its
-    CRUD routes (`crud/print.py` `RemoteNativeSpools`, #5298 Task 31), so a provider's
-    build there opens no pool."""
+    """The :class:`ProviderCore` of a process with no `Core`: the settings read through
+    the API's CRUD route, and ScadBuddy's own spools through its CRUD routes
+    (`crud/print.py` `RemoteNativeSpools`, #5298 Task 31), so a provider's build there
+    opens no pool. No process builds one since #6262 Task 6 (the print worker was the
+    one); #6262 Task 12 drops it with the overlay."""
 
     settings_store: ProviderSettings
     native_spools: NativeSpoolStore

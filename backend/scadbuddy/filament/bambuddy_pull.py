@@ -34,8 +34,8 @@ catalog entry that has no SB insert type yet, so the insert type is not pulled.
 
 A pulled weight is an absolute reading at the BB row's ``updated_at``, not at the pull:
 BB's state is as of its last write (the ``created`` and every ``synced_from_bb`` event
-take that time; with none sent, the pull's). SB books a native print's ``print_ended`` at
-its plate's start (`spools/native.py` `settle_uses_in`), so a plate that started before
+take that time; with none sent, the pull's). SB books a native print's ``print_started``
+and ``print_ended`` at its plate's start (`filament/print_uses.py`), so a plate that started before
 BB's write is under BB's anchor and is not taken off again, and one that started after is
 (§8.2, "Consumption is counted once"; the rule is `ledger.py`'s). That holds when BB
 deducts a plate as it ends, which it does per plate. It does not hold when BB's row moved

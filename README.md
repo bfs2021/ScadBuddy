@@ -1293,10 +1293,10 @@ clusters. It serves `/healthz` (`{"ok": true, "build_id": …, "task_queue": …
   printer's with a 503 (#5298 Task 33). The rack hotends' usage
   goes through them too (`…/rack`; a LAN start's picks, a queue item's picks, a settled print's rows and a LAN
   start's settles take an `Idempotency-Key`), so the worker holds no rack pool. Through
-  them too go the spools a native run's overlay reads and the native provider re-caches, ScadBuddy's
-  own spools and what a LAN start uses of them, the kept copy of Bambuddy's local presets
-  and a native slice's start (`…/spools`, `…/native-spools`, `…/held-presets`,
-  `…/native-slices`; a provider's records and a run's settle take an `Idempotency-Key`).
+  them too go the SB spool in each of a native run's trays and their presets, what a LAN
+  start uses of them, the kept copy of Bambuddy's local presets and a native slice's start
+  (`…/filament/trays`, `…/filament/presets`, `…/filament/print-uses`, `…/held-presets`,
+  `…/native-slices`; a start's uses and a run's settle take an `Idempotency-Key`).
   A LAN print reads a native slice's sliced 3MF by a URL the API mints for it
   (`…/transfer-urls`, #5298 Task 32): the internal blob route's, its token signed under
   the API's KEK and good for 10 minutes, on every `store_backend`, so the pod reaches the

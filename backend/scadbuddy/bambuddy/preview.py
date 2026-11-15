@@ -122,10 +122,10 @@ async def _planned(
     Bambuddy call (``client`` is ``None``, D3): its copy goes where the run's would with
     no folder chosen, the ``title``'s template folder, so a run of the same choices
     queues this slice (#2169). ``sb`` is the SB spool in each tray and their presets
-    (#6262), read by the route that started this slice, so it resolves as `/check`
-    judges; until #6262 Task 6 the run plans on the bare trays, so a held spool with its
-    own preset is sliced again at Print. A request with no ``sb`` (one from before it)
-    plans on the trays alone."""
+    (#6262), read as the run's plan reads them (`filament/inventory.py`
+    `read_sb_spools`), so it resolves as `/check` judges and as the run will. With no
+    ``sb`` (a read that failed, or a quote's preview until #6262 Task 9) it plans on the
+    trays alone."""
     if source.is_sliced:
         raise ApiError(
             status.HTTP_422_UNPROCESSABLE_CONTENT,

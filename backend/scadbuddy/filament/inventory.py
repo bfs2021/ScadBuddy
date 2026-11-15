@@ -17,9 +17,10 @@ The shelf is every unarchived spool that no printer's latest report resolves as 
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import Protocol
 from uuid import UUID
 
 from psycopg import Connection
@@ -32,26 +33,27 @@ from scadbuddy.filament import models as m
 from scadbuddy.filament.colour import normalise_rgba
 from scadbuddy.filament.locations import LocationStore
 from scadbuddy.filament.models import SbSpools, TrayFoundBy, TrayHolder, TrayView
+from scadbuddy.filament.presets import PoolSpoolPresets
 from scadbuddy.filament.spools import FilamentSpoolStore
 from scadbuddy.printers.models import PrinterRow
 from scadbuddy.printers.reports import PrinterReportStore, report_status
 from scadbuddy.printers.store import PrinterStore
 from scadbuddy.spools.models import SeenTray, clean_tag_uid, clean_tray_uuid
 
-if TYPE_CHECKING:
-    from scadbuddy.bambuddy.print_run import RunRoute
-    from scadbuddy.filament.presets import SpoolPresetSource
-
 __all__ = [
     "FilamentInventory",
+    "PoolSbSpoolReads",
+    "SbSpoolReads",
     "TrayHolder",
     "TrayNotFilledError",
     "TrayTagClashError",
     "TrayView",
-    "route_sb_spools",
+    "read_sb_spools",
     "route_trays",
     "tray_fingerprint",
 ]
+
+logger = logging.getLogger(__name__)
 
 Conn = Connection[DictRow]
 FoundBy = TrayFoundBy
@@ -307,21 +309,56 @@ async def route_trays(
     return await asyncio.to_thread(inventory.trays, UUID(row.id), seen_trays(status))
 
 
-async def route_sb_spools(
-    inventory: FilamentInventory, source: SpoolPresetSource, route: RunRoute | None
+class SbSpoolReads(Protocol):
+    """What a native plan reads of SB spools (#6262 Task 6): the SB spool in each tray a
+    printer reports, and spools' presets by number. The API's from Postgres
+    (:class:`PoolSbSpoolReads`); the print worker's over its CRUD routes (`crud/print.py`
+    `RemoteFilamentTrays`, #5295), so both read them alike."""
+
+    async def trays(self, printer_id: UUID, seen: Sequence[SeenTray]) -> TrayView: ...
+
+    async def presets(self, numbers: Sequence[int]) -> dict[int, list[m.EffectivePreset]]: ...
+
+
+class PoolSbSpoolReads:
+    """:class:`SbSpoolReads` over a pool whose connections autocommit and return dict
+    rows (the settings store's): each read in a thread."""
+
+    def __init__(self, pool: ConnectionPool[Conn]) -> None:
+        self._inventory = FilamentInventory(pool)
+        self._presets = PoolSpoolPresets(pool)
+
+    async def trays(self, printer_id: UUID, seen: Sequence[SeenTray]) -> TrayView:
+        return await asyncio.to_thread(self._inventory.trays, printer_id, seen)
+
+    async def presets(self, numbers: Sequence[int]) -> dict[int, list[m.EffectivePreset]]:
+        return await self._presets.presets(numbers)
+
+
+async def read_sb_spools(
+    reads: SbSpoolReads | None, row: PrinterRow | None, status: PrinterStatus | None
 ) -> SbSpools | None:
-    """What a native ``route``'s plan reads of SB spools, for a plan made where no
-    database is (the dialog's background slice, #6262): the SB spool in each tray and
-    their own presets for the H2C (`resolver.PRINTER_MODEL`, all the plan reads). No
-    shelf: a plan's choices are the trays. ``None`` off a native route, or with no report
-    to read the trays from."""
+    """What a native plan reads of SB spools (#6262): the SB spool in each tray
+    ``status`` shows and the held spools' own presets for the H2C
+    (`resolver.PRINTER_MODEL`, all the plan reads). No shelf: a plan's choices are the
+    trays. ``status`` must be read from the printer's stored report: a tray's RFID keys,
+    which find its spool, never cross a workflow's history (`AmsTray` drops
+    ``tray_uuid``). ``None`` without all three, and ``None`` when a read fails, which is
+    logged by its type: the plan is then made on the trays alone, never failed."""
     from scadbuddy.bambuddy.resolver import PRINTER_MODEL
 
-    if route is None or not route.native:
+    if reads is None or row is None or status is None:
         return None
-    held = await route_trays(inventory, route.row, route.status)
-    if held is None:
+    try:
+        held = await reads.trays(UUID(row.id), seen_trays(status))
+        numbers = sorted({tray.spool.number for tray in held.trays if tray.spool is not None})
+        presets = await reads.presets(numbers) if numbers else {}
+    except Exception as error:
+        # Its type only: on the print worker it is a CRUD call's error, whose text is
+        # never logged (spec 2026-10-01 §7).
+        logger.warning(
+            "a native plan could not read the SB spools; planning on the trays alone",
+            extra={"printer": row.id, "error": type(error).__name__},
+        )
         return None
-    numbers = sorted({tray.spool.number for tray in held.trays if tray.spool is not None})
-    presets = await source.presets(numbers) if numbers else {}
     return SbSpools.of(held, presets, PRINTER_MODEL)

@@ -18,7 +18,7 @@ import logging
 import uuid
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import psycopg
@@ -71,6 +71,8 @@ from scadbuddy.bambuddy.uploads import BambuddyUploadStore, DestinationKind
 from scadbuddy.core.heartbeat import heartbeating
 from scadbuddy.core.problems import ApiError
 from scadbuddy.crud.client import CrudRefusedError, CrudUnavailableError
+from scadbuddy.filament.inventory import SbSpoolReads, read_sb_spools
+from scadbuddy.filament.models import SbSpools
 from scadbuddy.library.output_prints import OutputPrintStore
 from scadbuddy.library.outputs import LanPlateSend, PlateSend
 from scadbuddy.library.settings_store import PrintSettings, SettingsReader, StoredSettings
@@ -78,7 +80,7 @@ from scadbuddy.print_library.copies import NATIVE_PROJECT_REFUSAL
 from scadbuddy.print_library.ids import is_native_id
 from scadbuddy.print_library.reads import NativeCopies, reads_for
 from scadbuddy.printers.hot_path import hot_path_native, native_backends
-from scadbuddy.printers.reports import PrinterReportStore
+from scadbuddy.printers.reports import PrinterReportStore, report_status
 from scadbuddy.printers.store import PrinterStore
 from scadbuddy.rack.usage import RackUsage
 from scadbuddy.slicing.catalogue import catalogue_for
@@ -170,6 +172,10 @@ class PrintDeps:
     #: check names the run's row and chooses its path. ``None`` runs as before it.
     printers: PrinterStore | None = None
     reports: PrinterReportStore | None = None
+    #: The SB spool in each tray of a native run's printer and their presets (#6262
+    #: Task 6): the API's Postgres in-process, the CRUD routes on the print worker
+    #: (#5295). ``None`` plans on the trays alone.
+    sb_spools: SbSpoolReads | None = None
 
 
 def lan_plates(result: PrintRunResult) -> list[LanPlateSend]:
@@ -439,9 +445,9 @@ class PrintActivities:
         try:
             async with maybe_client(settings, native=native) as client:
                 source = await self._source(client, input.accepted.source, settings)
-                # A native run plans on the trays alone until #6262 Task 6 reads the SB
-                # spool in each (`plan_run`'s ``held``) and their presets (``presets``)
-                # through the print worker's CRUD routes.
+                # The SB spool in each tray and their presets (#6262), as the dialog and
+                # its background slice read them: ``None`` off a native run.
+                sb = await heartbeating(self._sb_spools(input.accepted.prepared))
                 planned = await heartbeating(
                     plan_run(
                         client,
@@ -451,11 +457,42 @@ class PrintActivities:
                         input.accepted.prepared,
                         native=self.d.native,
                         title=await self._title(input.accepted.source) if native else None,
+                        held=sb,
+                        presets=sb,
                     )
                 )
         except ApiError as error:
             raise raised_as(error, FAILED) from None
         return await asyncio.to_thread(plate_clear_of, planned, self.d.settings_store, settings)
+
+    async def _sb_spools(self, prepared: PreparedPlates) -> SbSpools | None:
+        """The SB spool in each of a native run's trays and their presets (#6262), so its
+        low-filament warnings judge the held spool's grams (#4551) and a start books
+        against it; none for a run on Bambuddy's path, which plans on Bambuddy's
+        inventory. Read from the printer's stored report, not the check's status: a
+        tray's RFID keys, which find its spool, never cross the history
+        (`AmsTray.tray_uuid` is excluded). Read now, deliberately: a spool weighed since
+        the dialog read it may give the run a warning the dialog did not show, and the
+        run's warnings are what is left to print with. One that cannot be read plans on
+        the trays alone, as before: never the run's failure (`read_sb_spools`)."""
+        reads, printers, reports = self.d.sb_spools, self.d.printers, self.d.reports
+        if not prepared.lan_start or reads is None or printers is None or reports is None:
+            return None
+        try:
+            row = await asyncio.to_thread(printers.get, prepared.printer)
+            report = await asyncio.to_thread(reports.get, prepared.printer)
+        except Exception as error:
+            # Its type only: on the print worker it is a CRUD call's error, whose text is
+            # never logged (spec §7).
+            logger.warning(
+                "a native run's printer could not be read; planning on the trays alone",
+                extra={"printer": prepared.printer, "error": type(error).__name__},
+            )
+            return None
+        if row is None or report is None:
+            return None
+        status = report_status(row, report, now=datetime.now(UTC))
+        return await read_sb_spools(reads, row, status)
 
     @activity.defn(name="print_slice_start")
     async def slice_start(self, input: SliceStartInput) -> SliceStarted:

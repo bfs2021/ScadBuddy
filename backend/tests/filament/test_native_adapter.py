@@ -1,20 +1,22 @@
 """The native spool store over the filament tables (#6261, Task 8): a native spool is a
-filament spool, and a native print's uses are ledger events."""
+filament spool, and a native print's uses are ledger events (`filament/print_uses.py`
+since #6262 Task 6)."""
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
 from psycopg.types.json import Jsonb
 
+from scadbuddy.filament.print_uses import SlotUse, record_uses, settle_uses
 from scadbuddy.filament.spools import FilamentSpoolStore, SpoolInUseError
 from scadbuddy.spools.native import (
     NativeSpoolCreate,
     NativeSpoolExistsError,
     NativeSpoolPatch,
     NativeSpoolStore,
-    SpoolUse,
 )
 from tests.conftest import PgPool
 
@@ -31,6 +33,12 @@ def _run(pool: PgPool, *subtasks: str) -> None:
             " VALUES (%s, 'out', 'k', 'succeeded', %s)",
             (RUN, Jsonb({"lan": [{"subtask_name": s} for s in subtasks]})),
         )
+
+
+def _use(slot_id: int, spool_id: UUID, grams: float) -> list[SlotUse]:
+    """A slot's use, its plate started now (`filament/print_uses.py`, #6262 Task 6)."""
+    started = datetime.now(UTC)
+    return [SlotUse(slot_id=slot_id, spool_id=spool_id, grams=grams, plate_started_at=started)]
 
 
 def _kinds(spools: FilamentSpoolStore, spool_id: UUID) -> list[tuple[str, str | None]]:
@@ -72,11 +80,11 @@ def test_a_native_spool_is_a_filament_spool(pg_pool: PgPool) -> None:
     assert found is not None and found["n"] == 1
 
     _run(pg_pool, "a", "b")
-    native.record_uses(RUN, "a", [SpoolUse(slot_id=1, spool_id=made.id, grams=12.5)])
-    native.record_uses(RUN, "b", [SpoolUse(slot_id=2, spool_id=made.id, grams=30)])
+    record_uses(pg_pool, RUN, "a", _use(1, made.id, 12.5))
+    record_uses(pg_pool, RUN, "b", _use(2, made.id, 30))
     # The estimates come off while the print runs.
     assert native.get(made.id).remaining_g == 57.5  # type: ignore[union-attr]
-    assert native.settle_uses(RUN, ["done", "failed"]) == {made.id}
+    assert settle_uses(pg_pool, RUN, ["done", "failed"]) is True
     spool = spools.get(made.id)
     assert spool is not None and spool.grams_left == 87.5
     events = spools.events(made.id)
@@ -90,7 +98,7 @@ def test_a_native_spool_is_a_filament_spool(pg_pool: PgPool) -> None:
         ("print_estimate", "print_run", -12.5),
         ("print_estimate", "print_run", -30.0),
     }
-    assert native.settle_uses(RUN, ["done", "done"]) == set()
+    assert settle_uses(pg_pool, RUN, ["done", "done"]) is False
 
 
 def test_a_migrated_estimate_is_closed_by_a_native_settle(pg_pool: PgPool) -> None:
@@ -104,7 +112,7 @@ def test_a_migrated_estimate_is_closed_by_a_native_settle(pg_pool: PgPool) -> No
             " VALUES (%s, 'print_started', 'print_estimate', -5, 'print_run', %s)",
             (made.id, f"{RUN}/p1/3"),
         )
-    assert native.settle_uses(RUN, ["done"]) == {made.id}
+    assert settle_uses(pg_pool, RUN, ["done"]) is True
     assert native.get(made.id).remaining_g == 45  # type: ignore[union-attr]
     assert ("print_ended", f"{RUN}/p1/3") in _kinds(spools, made.id)
 
@@ -143,8 +151,8 @@ def test_a_spool_that_printed_is_not_deleted(pg_pool: PgPool) -> None:
     native = NativeSpoolStore(pg_pool)
     made = native.create(NativeSpoolCreate(material="PLA", remaining_g=100))
     _run(pg_pool, "a")
-    native.record_uses(RUN, "a", [SpoolUse(slot_id=1, spool_id=made.id, grams=1)])
-    native.settle_uses(RUN, ["done"])
+    record_uses(pg_pool, RUN, "a", _use(1, made.id, 1))
+    settle_uses(pg_pool, RUN, ["done"])
     with pytest.raises(SpoolInUseError):
         native.delete(made.id)
     assert native.get(made.id) is not None
@@ -167,8 +175,8 @@ def test_a_slot_sent_again_with_another_spool_books_once(pg_pool: PgPool) -> Non
     native, spools = NativeSpoolStore(pg_pool), FilamentSpoolStore(pg_pool)
     red = native.create(NativeSpoolCreate(material="PLA", remaining_g=100))
     blue = native.create(NativeSpoolCreate(material="PLA", remaining_g=100))
-    native.record_uses(RUN, "a", [SpoolUse(slot_id=1, spool_id=red.id, grams=10)])
-    native.record_uses(RUN, "a", [SpoolUse(slot_id=1, spool_id=blue.id, grams=10)])
+    record_uses(pg_pool, RUN, "a", _use(1, red.id, 10))
+    record_uses(pg_pool, RUN, "a", _use(1, blue.id, 10))
     assert ("print_started", f"{RUN}/a/1") in _kinds(spools, red.id)
     assert [kind for kind, _ in _kinds(spools, blue.id)] == ["created"]
     assert native.get(blue.id).remaining_g == 100  # type: ignore[union-attr]

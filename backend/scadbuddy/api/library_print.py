@@ -65,7 +65,6 @@ from scadbuddy.api.printing import (
     native_filaments,
     newest_run,
     opening_route,
-    preview_sb_spools,
     remembered_printer,
 )
 from scadbuddy.api.prints import MEDIA_RESPONSES, _proxy
@@ -1553,15 +1552,11 @@ async def post_library_preview_slice(
     body: PrintRunRequest,
     response: Response,
     ops: OperationsDep,
-    store: SettingsStoreDep,
-    printers: PrintersDep,
-    filament: FilamentDep,
     idempotency_key: IdempotencyKey = None,
     fresh: FreshQuery = False,
 ) -> PreviewStarted | JSONResponse:
     """As ``/print/outputs/{id}/preview-slice``, for a file in Bambuddy's library (#2169),
     ``fresh`` included (#4433), and the SB spool in each tray on a native route (#6262)."""
-    sb = await preview_sb_spools(store.load(), printers, filament, body)
     result = await run_operation(
         ops,
         response,
@@ -1571,7 +1566,6 @@ async def post_library_preview_slice(
             "library_file_id": file_id,
             "request": body.model_dump(mode="json"),
             **({"fresh": True} if fresh else {}),
-            **sb,
         },
         idempotency_key=idempotency_key,
     )

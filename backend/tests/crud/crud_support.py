@@ -71,6 +71,9 @@ from scadbuddy.crud.render import (
     RemoteGeometryIndex,
     RemoteJobProjection,
 )
+from scadbuddy.filament.component import FILAMENT
+from scadbuddy.filament.inventory import FilamentInventory
+from scadbuddy.filament.presets import PoolSpoolPresets
 from scadbuddy.flows.component import FLOWS
 from scadbuddy.flows.store import FlowStore
 from scadbuddy.library.assets import AssetStore
@@ -603,7 +606,8 @@ def print_crud_app(
     print records go to the watcher's store on ``store``'s pool, matched against
     ``catalogue`` (none when not given), and the rack hotends' usage goes through
     ``rack`` (no rack route answers without one), and the spools, native spools, kept
-    presets and native slices through the API's own stores on ``store``'s pool; the
+    presets, native slices and a native run's SB spools through the API's own stores on
+    ``store``'s pool; the
     exchange too, of the proofs ``bootstrap`` takes, when given (#5298 Task 33)."""
     app = FastAPI(dependencies=[Depends(auth_check)])
     parts: dict[Any, Any] = {
@@ -629,6 +633,10 @@ def print_crud_app(
         ),
         SLICING: SimpleNamespace(
             store=NativeSliceStore(store.pool), held=HeldPresetStore(store.pool)
+        ),
+        # A native run's SB spools (#6262 Task 6): the API's own reads on ``store``'s pool.
+        FILAMENT: SimpleNamespace(
+            inventory=FilamentInventory(store.pool), presets=PoolSpoolPresets(store.pool)
         ),
     }
     app.state.scadbuddy = SimpleNamespace(

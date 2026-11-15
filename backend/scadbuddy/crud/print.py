@@ -52,18 +52,24 @@ API's (the rack usage route).
 `RemoteSpoolStore`, `RemoteNativeSpools`, `RemoteHeldPresets` and `RemoteNativeSlices`
 are `spools/store.py` `SpoolStore`, `spools/native.py` `NativeSpoolStore`,
 `slicing/held_presets.py` `HeldPresetStore` and `slicing/store.py` `NativeSliceStore`
-(Q28-Q30, #5298 Task 31) for the methods the print worker calls: the native provider's
-recache after a print (``replace_records``, ``failed``; ``overlay`` has had no caller
-since #6262), the shelf, a LAN start's uses and their settle (``list``, ``any``,
-``record_uses``, ``settle_uses``), the kept presets a native run reads (``rows``,
-``documents``) and a native slice's ``start``. None holds a pool, and none is called in
-the printer watch. Each SQL write is one transaction, under the spools' advisory lock,
-the uses' row locks or the slice key's lock, so each is one route run whole on the API
-(plan D6). ``failed``, ``record_uses`` and ``start`` are natural (an upsert, ``ON CONFLICT
-DO NOTHING``, and the key's newest row). ``replace_records`` and ``settle_uses`` take an
-``Idempotency-Key`` of their own, a new UUID per call, sent again on the client's
-retries: a refresh's body carries its time, and a settle runs in the follow's one long
-activity. The refresh, the tray links and the shelf's edits are the API's.
+(Q28-Q30, #5298 Task 31) for the methods the print worker calls: the kept presets a
+native run reads (``rows``, ``documents``) and a native slice's ``start``. Since #6262
+Task 6 the worker calls none of `RemoteSpoolStore` (the native provider's recache after
+a print, ``replace_records`` and ``failed``) or `RemoteNativeSpools` (the shelf,
+``list`` and ``any``): nothing reads the overlay they cached, and #6262 Task 12 drops
+them with it. None holds a pool, and none is called in the printer watch. Each SQL write
+is one transaction, under the spools' advisory lock or the slice key's lock, so each is
+one route run whole on the API (plan D6). ``failed`` and ``start`` are natural (an upsert
+and the key's newest row). ``replace_records`` takes an ``Idempotency-Key`` of its own,
+a new UUID per call, sent again on the client's retries: a refresh's body carries its
+time. The refresh, the tray links and the shelf's edits are the API's.
+
+`RemoteFilamentTrays` and `RemotePrintUses` (area ``spools``, #6262 Task 6) are a native
+run's reads of the SB spools in its printer's trays and their presets
+(`filament/inventory.py` `SbSpoolReads`, natural reads), and a LAN start's uses and their
+settle (`filament/print_uses.py` `PrintUses`), each of which takes an
+``Idempotency-Key`` of its own, a new UUID per call: each answers what that call
+booked.
 
 `RemoteReprints` records the queue item ScadBuddy's reprint queued (#3741), so the Prints
 page marks it; sent again, the first record stays.
@@ -161,6 +167,8 @@ from scadbuddy.crud.guard import PREFIX
 from scadbuddy.crud.idempotency import KEY_PROBLEM
 from scadbuddy.crud.render import WriteKeys
 from scadbuddy.crud.wire import NOT_CONFIGURED
+from scadbuddy.filament.models import EffectivePreset, TrayView
+from scadbuddy.filament.print_uses import SlotUse
 from scadbuddy.library.output_prints import OutputPrintStore
 from scadbuddy.library.outputs import LanPlateSend, PlateSend
 from scadbuddy.library.settings_store import PrintSettings
@@ -182,7 +190,7 @@ from scadbuddy.rack.usage import PickedHotend, RackUsageStore
 from scadbuddy.slicing.held_presets import HeldPresetStore, HeldRow
 from scadbuddy.slicing.store import NativeSlice, NativeSliceStore, SliceSubjectError
 from scadbuddy.spools.models import Overlay, SeenTray, SpoolSnapshot
-from scadbuddy.spools.native import NativeSpool, NativeSpoolStore, SpoolUse
+from scadbuddy.spools.native import NativeSpool, NativeSpoolStore
 from scadbuddy.spools.store import SpoolStore
 
 logger = logging.getLogger(__name__)
@@ -1380,10 +1388,10 @@ SPOOLS_API_ONLY = ("seen", "refreshes", "link", "unlink", "replace_records_in", 
 
 class RemoteSpoolStore(SpoolStore):
     """`spools/store.py` `SpoolStore` (Q28) over ``…/print/spools`` (area ``spools``).
-    Async, as the SQL store is. No pool. The print worker calls it for the native
+    Async, as the SQL store is. No pool. The print worker called it for the native
     provider's recache after a print took its grams (`spools/spool_providers.py`
-    `recache`); a native run's plan no longer reads the overlay (#6262), so ``overlay``
-    has no caller until Task 12 drops it. Every SQL write is one transaction
+    `recache`) and for a native run's overlay; since #6262 Task 6 it calls neither, and
+    Task 12 drops it with the overlay. Every SQL write is one transaction
     under the store's advisory lock, so each is one route, run whole on the API (plan
     D6)."""
 
@@ -1495,15 +1503,15 @@ _refuse(RemoteSpoolStore, "SpoolStore", SPOOLS_API_ONLY)
 
 
 #: The `NativeSpoolStore` methods only the API calls: the shelf's routes
-#: (`api/native_spools.py`), and the ``_in`` settle, which runs on the API's connection.
-NATIVE_SPOOLS_API_ONLY = ("get", "create", "update", "delete", "settle_uses_in")
+#: (`api/native_spools.py`).
+NATIVE_SPOOLS_API_ONLY = ("get", "create", "update", "delete")
 
 
 class RemoteNativeSpools(NativeSpoolStore):
     """`spools/native.py` `NativeSpoolStore` (Q29) over ``…/print/native-spools`` (area
     ``spools``). Blocking, as the SQL store is: callers on the loop use a thread. No
-    pool. The worker reads the shelf (the native provider), saves what a LAN start uses
-    and settles a run's uses once its print settles."""
+    pool. The worker reads the shelf (the native provider); a LAN start's uses and their
+    settle are `RemotePrintUses`' (#6262)."""
 
     def __init__(self, client: CrudSyncClient) -> None:
         self._client = client
@@ -1520,34 +1528,74 @@ class RemoteNativeSpools(NativeSpoolStore):
     def any(self) -> bool:
         return bool(self._client.request("GET", f"{BASE}/native-spools/any").json()["any"])
 
-    def record_uses(self, run_id: str, subtask_name: str, uses: Sequence[SpoolUse]) -> None:
-        """Natural: ``ON CONFLICT DO NOTHING`` on the start's slot, so a resend keeps the
-        rows one send wrote."""
+
+_refuse(RemoteNativeSpools, "NativeSpoolStore", NATIVE_SPOOLS_API_ONLY)
+
+
+class RemoteFilamentTrays:
+    """`filament/inventory.py` `SbSpoolReads` over ``…/print/filament`` (area ``spools``,
+    #6262 Task 6): the SB spool in each tray a native run's printer reports, and the held
+    spools' presets, as the API's own inventory reads them. Both are reads, natural, sent
+    again on the client's retries; the trays as a ``POST`` so their RFID keys stay out
+    of the URL (spec 2026-10-01 §7)."""
+
+    def __init__(self, client: CrudClient) -> None:
+        self._client = client
+
+    async def trays(self, printer_id: UUID, seen: Sequence[SeenTray]) -> TrayView:
+        body = {
+            "printer_id": str(printer_id),
+            "seen": [tray.model_dump(mode="json") for tray in seen],
+        }
+        response = await self._client.request("POST", f"{BASE}/filament/trays", json=body)
+        return TrayView.model_validate(response.json())
+
+    async def presets(self, numbers: Sequence[int]) -> dict[int, list[EffectivePreset]]:
+        if not numbers:
+            return {}
+        response = await self._client.request(
+            "POST", f"{BASE}/filament/presets", json={"numbers": list(numbers)}
+        )
+        return {
+            int(number): [EffectivePreset.model_validate(row) for row in rows]
+            for number, rows in response.json().items()
+        }
+
+
+class RemotePrintUses:
+    """`filament/print_uses.py` `PrintUses` over ``…/print/filament/print-uses`` (area
+    ``spools``, #6262 Task 6): a LAN start's uses and their settle, each one route, one
+    transaction on the API, its row locks included (plan D6). Each answer is what that
+    call booked, which a resend would not repeat (the rows read booked then), so each
+    takes an ``Idempotency-Key`` of its own, a new UUID per call, sent again on the
+    client's retries: a start's booking runs in ``lan_print``, which an attempt that
+    starts again books nothing new from, and the follow's read hook settles a run from
+    one long activity, whose ordinals would not name one settle."""
+
+    def __init__(self, client: CrudClient) -> None:
+        self._client = client
+
+    async def record_uses(self, run_id: str, subtask: str, uses: Sequence[SlotUse]) -> int:
         if not uses:
-            return
+            return 0
         body = {
             "run_id": run_id,
-            "subtask_name": subtask_name,
+            "subtask": subtask,
             "uses": [use.model_dump(mode="json") for use in uses],
         }
-        self._client.request("POST", f"{BASE}/native-spools/uses", json=body)
+        response = await self._client.request(
+            "POST", f"{BASE}/filament/print-uses", json=body, idempotency_key=uuid.uuid4().hex
+        )
+        return int(response.json()["recorded"])
 
-    def settle_uses(self, run_id: str, stages: Sequence[str]) -> set[UUID]:
-        """One route, one transaction on the API, its row locks included (plan D6). The
-        answer is the spools this settle changed, which a resend would not repeat (the
-        rows read settled then), so an ``Idempotency-Key`` of its own, a new UUID per
-        call, sent again on the client's retries: the follow's read hook settles a run
-        from one long activity, whose ordinals would not name one settle."""
-        response = self._client.request(
+    async def settle_uses(self, run_id: str, stages: Sequence[str]) -> bool:
+        response = await self._client.request(
             "POST",
-            f"{BASE}/native-spools/uses/settle",
+            f"{BASE}/filament/print-uses/settle",
             json={"run_id": run_id, "stages": list(stages)},
             idempotency_key=uuid.uuid4().hex,
         )
-        return {UUID(spool_id) for spool_id in response.json()["changed"]}
-
-
-_refuse(RemoteNativeSpools, "NativeSpoolStore", NATIVE_SPOOLS_API_ONLY)
+        return bool(response.json()["settled"])
 
 
 #: The `HeldPresetStore` methods only the API calls: the copy's refresh, on the

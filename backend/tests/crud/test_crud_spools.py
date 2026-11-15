@@ -53,12 +53,14 @@ from scadbuddy.crud.print import (
     RemoteNativeSpools,
     RemoteSpoolStore,
 )
+from scadbuddy.filament.print_uses import SlotUse, record_uses
+from scadbuddy.filament.spools import FilamentSpoolStore
 from scadbuddy.library.settings_store import SettingsStore
 from scadbuddy.slicing.held_presets import HeldPresetStore
 from scadbuddy.slicing.store import NativeSliceStore, SliceSubjectError
 from scadbuddy.spools.component import SPOOLS
 from scadbuddy.spools.models import SeenTray, SpoolSnapshot
-from scadbuddy.spools.native import NativeSpoolCreate, NativeSpoolStore, SpoolUse
+from scadbuddy.spools.native import NativeSpoolCreate, NativeSpoolStore
 from scadbuddy.spools.store import SpoolStore
 from scadbuddy.worker import PRINT_CRUD_AREAS
 from tests.conftest import UNUSED_TEMPORAL_ADDRESS
@@ -154,7 +156,6 @@ async def test_nothing_to_ask_asks_nothing() -> None:
     client, blocking = _stand_in(answer)
     try:
         assert await RemoteHeldPresets(client).documents([]) == {}
-        RemoteNativeSpools(blocking).record_uses(RUN, "p1", [])
     finally:
         await client.aclose()
         blocking.close()
@@ -417,11 +418,15 @@ async def test_natural_writes_sent_twice_leave_what_one_left(
     assert _rows(store, "spool_provider_refreshes") == once
     assert [(row["provider"], row["failure"]) for row in once] == [("bambuddy", "ConnectError")]
 
-    uses = [SpoolUse(slot_id=1, spool_id=spool.id, grams=12.5)]
-    remote_native = RemoteNativeSpools(blocking)
-    await asyncio.to_thread(remote_native.record_uses, RUN, "p1", uses)
+    # A print worker's from before #6262 Task 6, across the deploy: its uses booked once.
+    body = {
+        "run_id": RUN,
+        "subtask_name": "p1",
+        "uses": [{"slot_id": 1, "spool_id": str(spool.id), "grams": 12.5}],
+    }
+    blocking.request("POST", f"{BASE}/native-spools/uses", json=body)
     once = _rows(store, "filament_spool_events")
-    await asyncio.to_thread(remote_native.record_uses, RUN, "p1", uses)
+    blocking.request("POST", f"{BASE}/native-spools/uses", json=body)
     assert _rows(store, "filament_spool_events") == once
     assert [row["kind"] for row in once].count("print_started") == 1
 
@@ -461,9 +466,13 @@ async def test_a_providers_records_are_written_once_per_key(
 async def test_a_runs_settle_answers_once_per_key(
     store: SettingsStore, crud: CrudClient, blocking: CrudSyncClient
 ) -> None:
+    """A print worker's settle from before #6262 Task 6, across the deploy: settled as
+    ``…/filament/print-uses/settle`` settles it, naming no spool."""
     native = NativeSpoolStore(store.pool)
     spool = native.create(NativeSpoolCreate(material="PLA", remaining_g=100))
-    native.record_uses(RUN, "p1", [SpoolUse(slot_id=1, spool_id=spool.id, grams=12.5)])
+    started = datetime.now(UTC)
+    use = SlotUse(slot_id=1, spool_id=spool.id, grams=12.5, plate_started_at=started)
+    record_uses(store.pool, RUN, "p1", [use])
     with store.pool.connection() as conn:
         conn.execute(
             "INSERT INTO print_runs (id, output_id, idempotency_key, status, result)"
@@ -477,11 +486,11 @@ async def test_a_runs_settle_answers_once_per_key(
     assert keyless.value.status == 428
     first = await crud.request("POST", url, json=body, idempotency_key="settle-1")
     again = await crud.request("POST", url, json=body, idempotency_key="settle-1")
-    assert first.json() == again.json() == {"changed": [str(spool.id)]}
+    assert first.json() == again.json() == {"changed": []}
     after = native.get(spool.id)
     assert after is not None and after.remaining_g == 87.5
-    # A new settle of a settled run changes nothing, as the SQL store's.
-    assert await asyncio.to_thread(RemoteNativeSpools(blocking).settle_uses, RUN, ["done"]) == set()
+    ended = [e for e in FilamentSpoolStore(store.pool).events(spool.id) if e.kind == "print_ended"]
+    assert len(ended) == 1
 
 
 @pytest.mark.requires_postgres

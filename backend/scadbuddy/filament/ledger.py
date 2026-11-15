@@ -15,8 +15,8 @@ with no actual known (``delta_g`` null) drops its estimate.
 The order is when things physically happened, so a print two sources both booked is
 counted once (§8.2, "Consumption is counted once"). An event that names its time (``at``)
 keeps it: a BB weighing or drying at BB's time, BB's state (``synced_from_bb``) at the BB
-row's ``updated_at``, a print's ``print_ended`` at its plate's start (`spools/native.py`
-`settle_uses_in`). A reading taken after a plate started is therefore read as holding that
+row's ``updated_at``, a print's ``print_started`` and ``print_ended`` at its plate's start
+(`filament/print_uses.py`). A reading taken after a plate started is therefore read as holding that
 plate, and the plate's actual is not taken off it again. An event with no ``at`` is
 booked now: the clock's time, but never earlier than a microsecond after the spool's
 newest event, so a clock that steps back (WSL's does) cannot put an event before the one
@@ -33,7 +33,7 @@ from __future__ import annotations
 import base64
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Any
+from typing import Any, Final
 from uuid import UUID
 
 from psycopg import Connection
@@ -44,6 +44,15 @@ from pydantic_core import to_jsonable_python
 from scadbuddy.filament import models as m
 
 Conn = Connection[DictRow]
+
+#: A print run's events (`filament/print_uses.py`): ``ref_kind`` `PRINT_RUN`, ``ref_id``
+#: ``run/subtask/slot``. A start books a `PRINT_STARTED` event of source
+#: `PRINT_ESTIMATE`; its settle a `PRINT_ENDED` one of source `PRINT_ACTUAL`.
+PRINT_RUN = "print_run"
+PRINT_STARTED: Final = "print_started"
+PRINT_ENDED: Final = "print_ended"
+PRINT_ESTIMATE: Final = "print_estimate"
+PRINT_ACTUAL: Final = "print_actual"
 
 _COLUMNS = ", ".join(m.SpoolEvent.model_fields)
 _ABSOLUTE = frozenset({"scale", "person", "bb", "ams_remain"})

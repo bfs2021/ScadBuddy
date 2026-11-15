@@ -37,7 +37,10 @@ from scadbuddy.crud.guard import CrudCaller, crud_router
 #: reads, a printer's access code, a virtual printer's sync) and ``…/print/reports``
 #: (#5298 Task 29). Its ``rack`` area is ``…/print/rack``, the rack hotends' usage
 #: (#5298 Task 30). Its ``spools`` area is ``…/print/spools``, ``…/print/native-spools``,
-#: ``…/print/held-presets`` and ``…/print/native-slices`` (#5298 Task 31). Its
+#: ``…/print/held-presets`` and ``…/print/native-slices`` (#5298 Task 31), and
+#: ``…/print/filament/trays``, ``…/filament/presets``, ``…/filament/print-uses`` and
+#: ``…/filament/print-uses/settle``, a native run's SB spools and what it uses of them
+#: (#6262 Task 6). Its
 #: ``transfer-urls`` area is ``…/print/transfer-urls``, a LAN print's read URL of a
 #: native slice's file (#5298 Task 32). Its ``access-codes`` area is
 #: ``…/print/access-codes`` and ``…/access-codes/virtual-printer``: whether the API opens

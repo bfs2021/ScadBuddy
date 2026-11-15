@@ -91,6 +91,8 @@ from scadbuddy.core.tracing import configure_tracing
 from scadbuddy.crud import idempotency
 from scadbuddy.crud import listener as crud_listener
 from scadbuddy.filament.component import FILAMENT
+from scadbuddy.filament.inventory import PoolSbSpoolReads
+from scadbuddy.filament.print_uses import PoolPrintUses
 from scadbuddy.flow_triggers.component import FLOW_TRIGGERS
 from scadbuddy.flow_triggers.events import listen_for_triggers
 from scadbuddy.flow_triggers.fire import TriggerFires, reconcile_trigger_schedules
@@ -147,7 +149,6 @@ from scadbuddy.slicing.held_presets import HeldPresetStore, held_presets_activit
 from scadbuddy.slicing.start import stop_lost_native_slices, sweep_native_slices
 from scadbuddy.spools.activities import filament_pull_activity, spool_activities
 from scadbuddy.spools.component import SPOOLS
-from scadbuddy.spools.native import NativeSpoolStore
 from scadbuddy.store import sweep_blobs
 from scadbuddy.store.assets import RemoteAssets
 from scadbuddy.store.backends import UnrecordedSweeper
@@ -1617,6 +1618,7 @@ async def _run_print_worker(state: AppState, stop: asyncio.Event) -> None:
         native=state.components.get(SLICING).starter,
         printers=state.components.get(PRINTERS).store,
         reports=state.components.get(PRINTERS).reports,
+        sb_spools=PoolSbSpoolReads(state.settings_store.pool),
     )
     ops = state.components.get(OPERATIONS)
     registry = state.components.get(PRINTERS)
@@ -1645,8 +1647,7 @@ async def _run_print_worker(state: AppState, stop: asyncio.Event) -> None:
         rack=state.components.get(RACK_USAGE),
         # A run's next plate copy waits on the printer's report (#4541).
         reports=registry.reports,
-        native_spools=NativeSpoolStore(state.settings_store.pool),
-        spools=state.components.get(SPOOLS),
+        uses=PoolPrintUses(state.settings_store.pool),
     )
     auto_imports = state.components.get(AUTO_IMPORTS)
     activities = [

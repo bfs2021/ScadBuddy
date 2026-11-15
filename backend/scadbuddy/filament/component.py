@@ -13,6 +13,7 @@ from scadbuddy.filament.catalog import CatalogStore
 from scadbuddy.filament.inventory import FilamentInventory
 from scadbuddy.filament.locations import LocationStore
 from scadbuddy.filament.presets import PoolSpoolPresets
+from scadbuddy.filament.print_uses import PoolPrintUses, print_use_hook
 from scadbuddy.filament.spools import FilamentSpoolStore
 from scadbuddy.filament.types import SpoolTypeStore
 
@@ -33,6 +34,9 @@ FILAMENT: Key[Filament] = Key("filament")
 
 def _build(core: Core, components: Components) -> Filament:
     pool = core.settings_store.pool
+    # What a native print used is settled on its SB spools as the follow reads it settled
+    # (#4643, #6262 Task 6); the follow is a core service and imports no feature.
+    core.print_follower.on_read.append(print_use_hook(PoolPrintUses(pool)))
     return Filament(
         catalog=CatalogStore(pool),
         types=SpoolTypeStore(pool),

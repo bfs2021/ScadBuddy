@@ -415,14 +415,19 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   state from the LAN report (`printers/reports.py`), and its filaments are the loaded
   trays, each with the SB spool it holds (#6262: `FilamentInventory.trays`, found by its
   tag or a person's tray link; its presets by `sb_number`, `filament/presets.py`). The
-  print worker's plan has no SB view until #6262 Task 6, so its LAN start books no use
-  meanwhile. The spool providers' overlay (`spools/`, refreshed off the path) still
-  caches Bambuddy's inventory and ScadBuddy's own (`spools/native.py` over the
-  `filament_*` tables since #6261, provider `native` in `spools/spool_providers.py`,
-  routes `api/native_spools.py`, #4643; each write re-caches it at once; a LAN start
-  books its slots' grams as `print_started` estimates in `filament_spool_events`, and the
-  run's settle books each start's `print_ended` actual (`done`) or 0, `native_use_hook`;
-  the editor is Settings' `components/settings/NativeSpools.tsx`).
+  run's plan and the dialog's background slice read them alike where they run
+  (`filament/inventory.py` `read_sb_spools`: the API's Postgres, or the print worker's
+  CRUD routes `…/print/filament/trays` and `…/filament/presets`, `RemoteFilamentTrays`),
+  the run from the printer's stored report; a failed read plans on the trays alone. A
+  LAN start books its slots' grams as `print_started` estimates at the plate's start in
+  `filament_spool_events`, and the run's settle books each start's `print_ended` actual
+  (`done`) or 0 (`filament/print_uses.py`, `print_use_hook`; on the worker through
+  `…/filament/print-uses`, `RemotePrintUses`). The spool providers' overlay (`spools/`,
+  refreshed off the path) still caches Bambuddy's inventory and ScadBuddy's own
+  (`spools/native.py` over the `filament_*` tables since #6261, provider `native` in
+  `spools/spool_providers.py`, routes `api/native_spools.py`, #4643; each write re-caches
+  it at once), which nothing on the print path reads; the editor is Settings'
+  `components/settings/NativeSpools.tsx`.
   `printers/ams_mapping.py` computes `ams_mapping`/`ams_mapping2` from the
   plan's trays and `printers/nozzle_mapping.py` an H2C rack print's `nozzle_mapping`
   (measured values in the spec's §2); `printers/lan.py` is the FTPS upload and MQTT

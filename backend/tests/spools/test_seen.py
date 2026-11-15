@@ -178,5 +178,5 @@ def test_the_component_reads_the_printer_registry() -> None:
     built = spools_component._build(cast(Core, core), cast(Components, components))
     assert isinstance(built.trays, ReportTrays)
     assert built.trays.registry is printers
-    # What a native print used comes off its spools from the follow's reads (#4643).
-    assert len(core.print_follower.on_read) == 1
+    # What a native print used is settled by the filament component's hook (#6262 Task 6).
+    assert core.print_follower.on_read == []

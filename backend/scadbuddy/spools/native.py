@@ -6,7 +6,7 @@ spool is a ``filament_spools`` row, read with its effective values, and its weig
 ledger's grams left (`filament/ledger.py`). A person keeps them
 (``/api/v1/native-spools``, `api/native_spools.py`), and a native print's uses are ledger
 events: ``print_started`` as the printer takes the plate (its estimate comes off at
-once), ``print_ended`` when the run settles (:meth:`NativeSpoolStore.settle_uses`). A
+once), ``print_ended`` when the run settles (`filament/print_uses.py`, #6262). A
 record's RFID keys are cleaned as the overlay cleans a tray's
 (`spools.models.clean_tray_uuid`, `clean_tag_uid`), so a record a person types from a
 tray's report finds that tray's spool; one unarchived spool holds a tag (an open
@@ -16,9 +16,9 @@ binding).
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import Annotated, Any
 from uuid import UUID
 
 from psycopg import Connection, errors
@@ -32,10 +32,6 @@ from scadbuddy.filament.colour import normalise_rgba
 from scadbuddy.filament.presets import any_printer_keys
 from scadbuddy.filament.spools import FilamentSpoolStore
 from scadbuddy.spools.models import SpoolSnapshot, clean_tag_uid, clean_tray_uuid
-
-if TYPE_CHECKING:
-    from scadbuddy.bambuddy.filaments import SpoolOption
-
 
 Conn = Connection[DictRow]
 
@@ -131,31 +127,6 @@ class NativeSpool(BaseModel):
         )
 
 
-class SpoolUse(BaseModel):
-    """What one slot of a LAN start uses of a native spool: its ``print_started``
-    estimate in ``filament_spool_events`` (`NativeSpoolStore.record_uses`)."""
-
-    slot_id: int
-    spool_id: UUID
-    grams: float
-
-
-def spool_uses(spools: Mapping[int, SpoolOption], grams: Mapping[int, float]) -> list[SpoolUse]:
-    """Each slot's use of the SB spool in its tray, by slot: the slot's chosen tray's
-    ``sb_spool_id`` (#6262, `trays.loaded_trays`: found by its tag or a person's tray
-    link), and the grams the sliced plate gives the slot
-    (`slicing.slice_info.plate_grams`). A slot whose tray holds no SB spool, or that
-    prints nothing, uses none."""
-    uses: list[SpoolUse] = []
-    for slot_id in sorted(spools):
-        spool_id = spools[slot_id].sb_spool_id
-        used = grams.get(slot_id, 0.0)
-        if spool_id is None or used <= 0:
-            continue
-        uses.append(SpoolUse(slot_id=slot_id, spool_id=spool_id, grams=used))
-    return uses
-
-
 class NativeSpoolExistsError(ValueError):
     """An unarchived spool already carries the tag."""
 
@@ -224,17 +195,6 @@ def _shown(conn: Conn, spool_id: UUID) -> DictRow | None:
 
 #: A native field and the `filament_spools` column it is kept in.
 _COLUMN_OF = {"name": "colour_name", "label_weight_g": "label_weight_g", "note": "note"}
-
-
-def _like_prefix(text: str) -> str:
-    """A ``LIKE`` pattern for the strings that start with ``text``."""
-    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"{escaped}%"
-
-
-def _ref(run_id: str, subtask_name: str, slot_id: int) -> str:
-    """A use's ``ref_id``, as the 1302Z migration writes it."""
-    return f"{run_id}/{subtask_name}/{slot_id}"
 
 
 def _catalog_id(conn: Conn, table: str, name: str) -> UUID:
@@ -417,7 +377,7 @@ class NativeSpoolStore:
 
     @property
     def pool(self) -> ConnectionPool[Conn]:
-        """The pool a CRUD route runs a settle and its ledger row on (`settle_uses_in`)."""
+        """The pool a CRUD route runs a write and its ledger row on."""
         return self._pool
 
     def list(self, *, include_archived: bool = False) -> list[NativeSpool]:
@@ -540,118 +500,6 @@ class NativeSpoolStore:
         keeps a finished print. Its cached copy
         goes at the provider's next refresh, as an archived one's does."""
         return FilamentSpoolStore(self._pool).delete(spool_id, refusing=("print_ended",))
-
-    # -- what native prints use ------------------------------------------------------
-
-    def record_uses(self, run_id: str, subtask_name: str, uses: Sequence[SpoolUse]) -> None:
-        """What a LAN start uses, as the printer takes it: a ``print_started`` event with
-        its ``print_estimate`` per slot (``ref_id`` ``run/subtask/slot``), which the ledger
-        takes off at once. A slot recorded already (an attempt that starts again) keeps
-        its event; a spool deleted since is left out."""
-        if not uses:
-            return
-        with self._pool.connection() as conn, conn.transaction():
-            for use in sorted(uses, key=lambda u: (u.spool_id, u.slot_id)):
-                ref = _ref(run_id, subtask_name, use.slot_id)
-                # One event per slot, whichever spool: what the old table's key held.
-                conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (ref,))
-                taken = conn.execute(
-                    "SELECT 1 FROM filament_spool_events WHERE kind = 'print_started'"
-                    " AND ref_kind = 'print_run' AND ref_id = %s",
-                    (ref,),
-                ).fetchone()
-                spool = conn.execute(
-                    "SELECT 1 FROM filament_spools WHERE id = %s", (use.spool_id,)
-                ).fetchone()
-                if taken is not None or spool is None:
-                    continue
-                ledger.record(
-                    conn,
-                    use.spool_id,
-                    "print_started",
-                    source="print_estimate",
-                    delta_g=-use.grams,
-                    ref_kind="print_run",
-                    ref_id=ref,
-                    actor=ACTOR,
-                )
-
-    def settle_uses(self, run_id: str, stages: Sequence[str]) -> set[UUID]:
-        """Settle ``run_id``'s uses once its print has settled: ``stages`` is how each of
-        its LAN starts ended, in the order its result lists them
-        (``print_runs.result.lan``, as the follow's progress reads them). A start that
-        ended ``done`` books its sliced grams as the actual (``print_ended``,
-        ``print_actual``, ``data.basis`` ``sliced``); every other start books 0 (``basis``
-        ``not_applied``), which drops its estimate. A ``print_ended`` is booked at its
-        ``print_started``'s time, so a reading after the plate started (a BB pull between
-        two plates, or before the settle) is not taken off again. Each use is settled
-        once: the ledger keeps one ``print_ended`` per ``ref_id``. The spools whose weight
-        changed, or that a done start took grams off (a spool whose weight is not kept
-        takes none)."""
-        with self._pool.connection() as conn, conn.transaction():
-            return self.settle_uses_in(conn, run_id, stages)
-
-    @staticmethod
-    def settle_uses_in(conn: Conn, run_id: str, stages: Sequence[str]) -> set[UUID]:
-        """`settle_uses` on ``conn``, in its caller's transaction: the CRUD route runs it
-        there whole, row locks included, with its ledger row (#5298, plans D5, D6)."""
-        prefix = f"{run_id}/"
-        # By `filament_spool_events_print_ref`: a prefix match, the run id escaped.
-        pending = conn.execute(
-            "SELECT e.spool_id, e.ref_id, e.delta_g, e.at FROM filament_spool_events e"
-            " WHERE e.kind = 'print_started' AND e.ref_kind = 'print_run'"
-            " AND e.ref_id LIKE %s AND NOT EXISTS (SELECT 1 FROM filament_spool_events d"
-            " WHERE d.spool_id = e.spool_id AND d.kind = 'print_ended'"
-            " AND d.ref_kind = 'print_run' AND d.ref_id = e.ref_id)",
-            (_like_prefix(prefix),),
-        ).fetchall()
-        if not pending:
-            return set()
-        spools = sorted({use["spool_id"] for use in pending})
-        before = {
-            row["id"]: row["grams_left"]
-            for row in conn.execute(
-                "SELECT id, grams_left FROM filament_spools WHERE id = ANY(%s)"
-                " ORDER BY id FOR UPDATE",
-                (spools,),
-            ).fetchall()
-        }
-        row = conn.execute(
-            "SELECT result->'lan' AS lan FROM print_runs WHERE id = %s", (run_id,)
-        ).fetchone()
-        starts = row["lan"] if row is not None and isinstance(row["lan"], list) else []
-        done = {
-            start.get("subtask_name")
-            for start, stage in zip(starts, stages, strict=False)
-            if isinstance(start, dict) and stage == "done"
-        }
-        changed: set[UUID] = set()
-        for use in pending:
-            subtask_name = use["ref_id"][len(prefix) :].rsplit("/", 1)[0]
-            applied = subtask_name in done
-            grams = -(use["delta_g"] or 0.0)
-            ended = ledger.record(
-                conn,
-                use["spool_id"],
-                "print_ended",
-                source="print_actual",
-                delta_g=-grams if applied else 0.0,
-                ref_kind="print_run",
-                ref_id=use["ref_id"],
-                actor=ACTOR,
-                # At the plate's start: no end time is kept per plate (`LanStarted` has
-                # none), and a reading taken after the start is read as holding the
-                # plate, as BB's is once BB deducts it (`ledger.py`).
-                at=use["at"],
-                data={"basis": "sliced" if applied else "not_applied"},
-            )
-            if ended is not None and applied and before.get(use["spool_id"]) is not None:
-                changed.add(use["spool_id"])
-        after = conn.execute(
-            "SELECT id, grams_left FROM filament_spools WHERE id = ANY(%s)", (spools,)
-        ).fetchall()
-        changed |= {r["id"] for r in after if r["grams_left"] != before.get(r["id"])}
-        return changed
 
     # -- internals --------------------------------------------------------------------
 
