@@ -14,8 +14,8 @@ print draws from that tray.
 
 On a native run (#3818 tier A, plan 2026-10-18 D1) there is no inventory to pick from:
 every filled tray is a choice of its own (:func:`loaded_trays`), with the SB spool it
-holds (#6262, `filament/inventory.py` `FilamentInventory.trays`, which reads
-:func:`seen_trays`).
+holds (#6262: `filament/inventory.py` `FilamentInventory.trays`, which reads
+:func:`seen_trays`, or the background slice's `SbSpools`).
 """
 
 from __future__ import annotations
@@ -327,7 +327,8 @@ def loaded_trays(
 ) -> list[SpoolOption]:
     """The native run's filament choices (#3818 tier A, plan 2026-10-18 D1): every filled
     tray as itself, under its :func:`tray_spool_id`, with the SB spool ``held`` says it
-    holds (#6262, `FilamentInventory.trays`). ``slicer_filament`` is the tray's
+    holds (#6262: the inventory's `TrayView`, or the background slice's `SbSpools`).
+    ``slicer_filament`` is the tray's
     ``tray_info_idx`` (the BBL preset's ``filament_id``, `resolver._by_filament_id`); the
     brand, colour name, grams left, label weight and ``rgba`` are the held spool's
     effective values (:func:`_from_spool`), else the tray's own ``rgba`` and nothing
