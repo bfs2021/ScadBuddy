@@ -4,6 +4,7 @@ shows what they saw (`filament/inventory.py`)."""
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -168,6 +169,54 @@ def test_a_tag_bound_elsewhere_refuses_the_link(pg_pool: PgPool) -> None:
         inventory.link(printer, 0, 1, a, _seen(tray_uuid=UUID_A), actor="ann")
     # The tag's own spool may be placed there.
     assert inventory.link(printer, 0, 1, b, _seen(tray_uuid=UUID_A), actor="ann").id == b
+
+
+def test_a_tag_uid_bound_elsewhere_refuses_the_link(pg_pool: PgPool) -> None:
+    """Both keys are checked: the tray_uuid's tag is on no spool, the tag_uid's on C."""
+    a, c, printer = _spool(pg_pool), _spool(pg_pool), _printer(pg_pool)
+    spools = FilamentSpoolStore(pg_pool)
+    spools.bind_tag(a, tray_uuid=UUID_A, kind="bambu_mifare", actor="ann")
+    tag = next(t for t in spools.tags() if t.tray_uuid == UUID_A)
+    spools.unbind_tag(tag.id, actor="ann")
+    spools.bind_tag(c, tag_uid="0102030405060708", kind="other", actor="ann")
+    with pytest.raises(TrayTagClashError):
+        FilamentInventory(pg_pool).link(
+            printer, 0, 1, a, _seen(tray_uuid=UUID_A, tag_uid="0102030405060708"), actor="ann"
+        )
+
+
+@pytest.mark.parametrize("known", [False, True])
+def test_a_link_binds_the_trays_free_tag(pg_pool: PgPool, known: bool) -> None:
+    """A tagged tray whose tag no spool holds (seen before or not): the link binds the tag
+    to the spool in the same transaction, so the tray resolves by its tag."""
+    a, b, printer = _spool(pg_pool), _spool(pg_pool), _printer(pg_pool)
+    spools = FilamentSpoolStore(pg_pool)
+    if known:
+        spools.bind_tag(b, tray_uuid=UUID_A, kind="bambu_mifare", actor="ann")
+        tag = next(t for t in spools.tags() if t.tray_uuid == UUID_A)
+        spools.unbind_tag(tag.id, actor="ann")
+    inventory = FilamentInventory(pg_pool)
+    inventory.link(printer, 0, 1, a, _seen(tray_uuid=UUID_A), actor="ann")
+    held = _holder(inventory.trays(printer, [_seen("#00FF00FF", tray_uuid=UUID_A)]))
+    assert (held.spool.id if held.spool else None, held.found_by) == (a, "tag")
+    assert spools.open_binding(a) is not None
+    assert [e.kind for e in spools.events(a)].count("tag_bound") == 1
+
+
+def test_two_links_to_one_tray_serialise(pg_pool: PgPool) -> None:
+    """The tray's advisory lock: links racing for one tray leave one holder."""
+    spools = [_spool(pg_pool) for _ in range(4)]
+    printer = _printer(pg_pool)
+    inventory = FilamentInventory(pg_pool)
+    with ThreadPoolExecutor(4) as workers:
+        list(workers.map(lambda s: inventory.link(printer, 0, 1, s, _seen(), actor="ann"), spools))
+    with pg_pool.connection() as conn:
+        placed = conn.execute(
+            "SELECT count(*) AS n FROM filament_spools s JOIN filament_locations l"
+            " ON l.id = s.location_id WHERE l.printer_id = %s",
+            (printer,),
+        ).fetchone()
+    assert placed is not None and placed["n"] == 1
 
 
 def test_an_unfilled_tray_refuses_the_link(pg_pool: PgPool) -> None:

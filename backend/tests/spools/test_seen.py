@@ -102,9 +102,17 @@ async def test_each_printers_latest_report_gives_its_filled_trays(pg_pool: PgPoo
             material="PLA",
             colour="#FF0000",
             tray_info_idx="GFA00",
+            rgba="#FF0000FF",
         ),
-        SeenTray(ams_id=0, tray_id=1, material="PETG", colour="#00FF00", tray_info_idx="GFA00"),
-        SeenTray(ams_id=255, tray_id=0, material="TPU", colour="#0000FF"),
+        SeenTray(
+            ams_id=0,
+            tray_id=1,
+            material="PETG",
+            colour="#00FF00",
+            tray_info_idx="GFA00",
+            rgba="#00FF00FF",
+        ),
+        SeenTray(ams_id=255, tray_id=0, material="TPU", colour="#0000FF", rgba="#0000FFFF"),
     ]
 
 

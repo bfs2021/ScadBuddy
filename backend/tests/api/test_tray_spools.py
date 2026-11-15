@@ -186,6 +186,23 @@ def test_a_link_held_until_the_trays_colour_changes(client: TestClient, lan_prin
     assert _held(client, lan_printer) is None
 
 
+def test_a_reported_trays_alpha_is_part_of_its_fingerprint(
+    client: TestClient, lan_printer: str
+) -> None:
+    """Spec §5.1: the report's ``tray_color`` alpha reaches the fingerprint, so an opaque
+    link does not hold a translucent refill of the same hue."""
+    spool = _sb_spool(client)
+    assert client.put(_path(lan_printer), json={"spool_id": str(spool)}).status_code == 200
+    assert _held(client, lan_printer) == spool
+    _printers(client).reports.put(lan_printer, _report(white="FFFFFF80"), datetime.now(UTC))
+    row = _printers(client).store.require(lan_printer)
+    report = _printers(client).reports.get(lan_printer)
+    assert report is not None
+    tray = seen_trays(report_status(row, report, now=datetime.now(UTC)))[1]
+    assert (tray.colour, tray.rgba) == ("#FFFFFF", "#FFFFFF80")
+    assert _held(client, lan_printer) is None
+
+
 def test_an_rfid_tray_resolves_by_its_tag(client: TestClient, lan_printer: str) -> None:
     _bambuddy_record(client, "3", tray_uuid=UUID_A, colour="#000000")
     tray = _tray(_overlay(client, lan_printer), 0, 0)

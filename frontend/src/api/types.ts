@@ -308,9 +308,8 @@ export type BatchQueueProgress = Schemas['BatchQueueProgress']
 export type TrayAssigned = Schemas['TrayAssigned']
 /** #3818 — a provider's record of a spool, as the overlay keeps it (Task 6c). */
 export type SpoolSnapshot = Schemas['SpoolSnapshot']
-/** #3818 — the native manual link's body: a physical spool, or one provider's record. */
+/** #3818, #6262 — the native manual link's body: the SB spool (`spool_id`). */
 export type TraySpoolLink = Schemas['TraySpoolLink']
-export type TraySpool = Schemas['TraySpool']
 /** #6261 — a ScadBuddy spool (`GET /filament/spools/{id}`). */
 export type FilamentSpool = Schemas['Spool']
 export type RackSentPick = Schemas['RackSentPick']

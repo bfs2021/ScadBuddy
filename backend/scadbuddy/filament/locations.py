@@ -1,7 +1,8 @@
 """Locations (#6261, epic #6260, spec §5.2): the tree of places a spool sits in (room,
 shelf, bin) and the AMS trays, which are places too. A spool's move writes a ``moved``
-ledger event (`filament/ledger.py`) in the transaction that changes its ``location_id``,
-and clears its ``tray_fingerprint``: a spool in a tray place holds that tray only while
+ledger event (`filament/ledger.py`) in the transaction that changes its ``location_id``;
+a move through `LocationStore.move`/`move_on` clears its ``tray_fingerprint`` (a printer
+merge, which keeps the tray, keeps it): a spool in a tray place holds that tray only while
 the tray shows what it showed when the spool was linked (`filament/inventory.py`).
 
 "Removing" a place archives it (``archived_at``), which frees its name and its tray.
@@ -202,8 +203,10 @@ class LocationStore:
         conn: Conn, spool_id: UUID, location_id: UUID | None, *, actor: str
     ) -> m.SpoolEvent | None:
         """`move` on ``conn``, in the caller's transaction (`filament/inventory.py`
-        `FilamentInventory.link`). A move clears the spool's ``tray_fingerprint``: what a
-        tray showed when the spool was placed there says nothing of its new place."""
+        `FilamentInventory.link`). A move through `move`/`move_on` clears the spool's
+        ``tray_fingerprint``: what a tray showed when the spool was placed there says
+        nothing of its new place. A printer merge (`repoint_printer_locations`) keeps it,
+        since the spool stays in the same tray."""
         spool = conn.execute(
             "SELECT location_id FROM filament_spools WHERE id = %s FOR UPDATE", (spool_id,)
         ).fetchone()

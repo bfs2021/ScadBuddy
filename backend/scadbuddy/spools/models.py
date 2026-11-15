@@ -105,6 +105,10 @@ class SeenTray(BaseModel):
     material: str | None = None
     colour: str | None = None
     tray_info_idx: str | None = None
+    #: The tray's ``tray_color`` as ``#RRGGBBAA``, alpha kept (#6262, spec §5.1), for
+    #: the SB tray fingerprint (`filament/inventory.py`); ``colour`` stays ``#RRGGBB``
+    #: for the overlay and the slicer.
+    rgba: str | None = None
 
     @property
     def fingerprint(self) -> str:

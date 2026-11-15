@@ -7,8 +7,8 @@ spool whose tag the tray reports, by an open binding of its ``tray_uuid``, then 
 ``location_id`` is the tray's place, a location with ``printer_id`` set) whose
 ``tray_fingerprint`` still equals the tray's. A tray refilled with another material or
 colour then holds no spool, and the dialog asks about it again (plan Review Focus 3).
-The fingerprint keeps the alpha byte, so a translucent tray never holds an opaque spool
-(spec §5.1).
+The fingerprint keeps the alpha byte (`SeenTray.rgba`, from the report's
+``tray_color``), so a translucent tray never holds an opaque spool (spec §5.1).
 
 The shelf is every unarchived spool that no printer's latest report resolves as held
 (plan F6): a spool placed at a tray whose report no longer matches is on the shelf.
@@ -33,7 +33,7 @@ from scadbuddy.filament.locations import LocationStore
 from scadbuddy.filament.spools import FilamentSpoolStore
 from scadbuddy.printers.reports import PrinterReportStore, report_status
 from scadbuddy.printers.store import PrinterStore
-from scadbuddy.spools.models import SeenTray
+from scadbuddy.spools.models import SeenTray, clean_tag_uid, clean_tray_uuid
 
 Conn = Connection[DictRow]
 FoundBy = Literal["tag", "link"]
@@ -115,7 +115,7 @@ class _Keys:
             return self.by_tag_uid[tray.tag_uid], "tag"
         if tray.tray_uuid is not None or tray.tag_uid is not None:
             return None, None
-        fingerprint = tray_fingerprint(tray.material, tray.colour)
+        fingerprint = tray_fingerprint(tray.material, tray.rgba or tray.colour)
         for spool_id, stored in self.placed.get((printer_id, tray.ams_id, tray.tray_id), []):
             if stored == fingerprint:
                 return spool_id, "link"
@@ -173,10 +173,19 @@ class FilamentInventory:
         tray's previous holder moves to no place first, then the spool moves to the
         tray's place (`LocationStore.ensure_ams`), each with one ``moved`` event.
 
+        A tagged tray whose tag is on no spool (or not yet known) gets that tag bound to
+        the spool in the same transaction (`FilamentSpoolStore.bind_on`), so the tray
+        then resolves by its tag.
+
         `TrayNotFilledError` when ``seen`` is not that tray filled; `TrayTagClashError`
-        when the tray's tag is bound to another spool; `LookupError` for no such printer,
-        or no such unarchived spool. Locks the tag before the spools (#6261), as every
-        writer of bindings does, then the spools by id."""
+        when either of the tray's tags is bound to another spool; `LookupError` for no
+        such printer, or no such unarchived spool.
+
+        Locks, in this order: the tray's advisory lock (`_tray_lock`), so two links or
+        unlinks of one tray take turns; the tray's tags (#6261: every writer of bindings
+        takes the tag first); the spools by id; then the place, ``FOR SHARE`` in
+        `LocationStore.move_on`, after its spool, as `LocationStore.move` does. The
+        place's row is never locked ``FOR UPDATE`` here, which would invert that order."""
         material = (seen.material or "").strip()
         if (seen.ams_id, seen.tray_id) != (ams_id, tray_id) or not material:
             raise TrayNotFilledError()
@@ -190,6 +199,7 @@ class FilamentInventory:
             printer_id, ams_id, tray_id, label=f"{printer['name']} {tray_label(ams_id, tray_id)}"
         )
         with self._pool.connection() as conn, conn.transaction():
+            _tray_lock(conn, printer_id, ams_id, tray_id)
             self._no_tag_clash(conn, seen, spool_id)
             rows = conn.execute(
                 "SELECT id, location_id, archived_at FROM filament_spools"
@@ -203,9 +213,13 @@ class FilamentInventory:
                 if row["id"] != spool_id:
                     LocationStore.move_on(conn, row["id"], None, actor=actor)
             LocationStore.move_on(conn, spool_id, place.id, actor=actor)
+            uid, tray = clean_tag_uid(seen.tag_uid), clean_tray_uuid(seen.tray_uuid)
+            if uid is not None or tray is not None:
+                kind: m.TagKind = "bambu_mifare" if tray is not None else "other"
+                FilamentSpoolStore.bind_on(conn, spool_id, uid, tray, kind, False, actor)
             conn.execute(
                 "UPDATE filament_spools SET tray_fingerprint = %s WHERE id = %s",
-                (tray_fingerprint(material, seen.colour), spool_id),
+                (tray_fingerprint(material, seen.rgba or seen.colour), spool_id),
             )
             linked = FilamentSpoolStore.read(conn, spool_id)
         assert linked is not None
@@ -213,8 +227,10 @@ class FilamentInventory:
 
     def unlink(self, printer_id: UUID, ams_id: int, tray_id: int, *, actor: str) -> None:
         """Move every spool in the tray's place to no place, each with a ``moved``
-        event. Nothing is written for a tray with no place or no spool."""
+        event. Nothing is written for a tray with no place or no spool. Takes the tray's
+        advisory lock first, then the spools, as `link` does."""
         with self._pool.connection() as conn, conn.transaction():
+            _tray_lock(conn, printer_id, ams_id, tray_id)
             rows = conn.execute(
                 "SELECT s.id FROM filament_spools s JOIN filament_locations l"
                 " ON l.id = s.location_id WHERE l.printer_id = %s AND l.ams_id = %s"
@@ -240,8 +256,9 @@ class FilamentInventory:
 
     @staticmethod
     def _no_tag_clash(conn: Conn, seen: SeenTray, spool_id: UUID) -> None:
-        """`TrayTagClashError` when the tag the tray reports (by ``tray_uuid``, then
-        ``tag_uid``) is bound to a spool other than ``spool_id``. The tag is locked."""
+        """`TrayTagClashError` when a tag the tray reports (its ``tray_uuid``'s or its
+        ``tag_uid``'s, both checked, as `_Keys.hold` reads both) is bound to a spool other
+        than ``spool_id``. Each tag found is locked."""
         for column, key in (("tray_uuid", seen.tray_uuid), ("tag_uid", seen.tag_uid)):
             if key is None:
                 continue
@@ -257,4 +274,11 @@ class FilamentInventory:
             ).fetchone()
             if holder is not None and holder["spool_id"] != spool_id:
                 raise TrayTagClashError()
-            return
+
+
+def _tray_lock(conn: Conn, printer_id: UUID, ams_id: int, tray_id: int) -> None:
+    """The transaction's advisory lock on one printer's tray, taken before any row lock."""
+    conn.execute(
+        "SELECT pg_advisory_xact_lock(hashtext(%s))",
+        (f"filament_tray:{printer_id}:{ams_id}:{tray_id}",),
+    )

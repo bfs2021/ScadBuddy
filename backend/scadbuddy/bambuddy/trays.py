@@ -33,6 +33,7 @@ from scadbuddy.bambuddy.filaments import (
     normalise_colour,
 )
 from scadbuddy.bambuddy.models import AmsTray, PrinterStatus
+from scadbuddy.filament.colour import normalise_rgba
 from scadbuddy.spools.models import (
     Overlay,
     SeenTray,
@@ -294,7 +295,8 @@ def _sorted_trays(status: PrinterStatus) -> list[tuple[int, AmsTray]]:
 def seen_trays(status: PrinterStatus) -> list[SeenTray]:
     """Every filled tray as the spool overlay reads it (`SpoolStore.overlay`): its RFID
     keys (cleaned there, so zeros are no key), material, colour and ``tray_info_idx``;
-    its fingerprint is `spools.models.tray_fingerprint`, never its state."""
+    its fingerprint is `spools.models.tray_fingerprint`, never its state. ``rgba`` keeps
+    the alpha the report gives (`tray_rgba`) for the SB tray fingerprint."""
     return [
         SeenTray(
             ams_id=ams_id,
@@ -304,9 +306,21 @@ def seen_trays(status: PrinterStatus) -> list[SeenTray]:
             material=(tray.tray_type or "").strip(),
             colour=normalise_colour(tray.tray_color),
             tray_info_idx=(tray.tray_info_idx or "").strip() or None,
+            rgba=tray_rgba(tray.tray_color),
         )
         for ams_id, tray in _sorted_trays(status)
     ]
+
+
+def tray_rgba(raw: str | None) -> str | None:
+    """A report's ``tray_color`` (``RRGGBBAA``) as ``#RRGGBBAA`` (`normalise_rgba`; six
+    digits read as opaque), or ``None`` for no colour or one that is not hex."""
+    if not raw:
+        return None
+    try:
+        return normalise_rgba(raw)
+    except ValueError:
+        return None
 
 
 def loaded_trays(
