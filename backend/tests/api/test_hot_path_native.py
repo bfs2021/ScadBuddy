@@ -26,9 +26,10 @@ import trimesh
 from fastapi.testclient import TestClient
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from scadbuddy.api import printing
 from scadbuddy.bambuddy import preview, print_run
 from scadbuddy.bambuddy.catalogue import stop_refreshes
-from scadbuddy.bambuddy.print_run import run_route
+from scadbuddy.bambuddy.print_run import PrintRunRequest, run_route
 from scadbuddy.bambuddy.trays import tray_spool_id
 from scadbuddy.core.paths import DataPaths
 from scadbuddy.core.settings import Settings
@@ -38,6 +39,7 @@ from scadbuddy.filament.models import (
     Spool,
     SpoolCreate,
     SpoolEventAdd,
+    SpoolPatch,
     SpoolPresetCreate,
 )
 from scadbuddy.library.settings_store import S3Settings
@@ -364,24 +366,8 @@ def _a_colour_a_plate(paths: DataPaths, output: str) -> None:
     write_plates_3mf(plates, colours, output_3mf, thumbnails=None)
 
 
-def test_the_preview_slices_with_the_held_spools_own_preset(
-    native_app: TestClient,
-    model: str,
-    fake_lan: FakeLan,
-    slicer: FakeSlicer,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """#6262: the background slice resolves as `/check` judges, with the SB spool in each
-    tray and its presets. The tagged tray's spool names its own H2C 0.4 preset, over the
-    tray's ``tray_info_idx``; the preview's plan slices with that one, so a run of the
-    same choices queues this slice rather than slicing again."""
-    row = lan_row(native_app, fake_lan)
-    spool = held_spool(native_app)
-    filament: Filament = _state(native_app).components.get(FILAMENT)
-    own = SpoolPresetCreate(
-        printer_model="H2C", nozzle_diameter="0.4", slicer_filament="Generic PLA @BBL H2C"
-    )
-    assert filament.spools.set_presets(spool.id, [own], actor="test") is not None
+def _preview_plans(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    """Each plan the background slice makes, as `preview._planned` gets it back."""
     planned: list[Any] = []
     plan = print_run.plan_run
 
@@ -391,21 +377,141 @@ def test_the_preview_slices_with_the_held_spools_own_preset(
         return result
 
     monkeypatch.setattr(preview, "plan_run", plan_spy)
+    return planned
+
+
+def _own_preset(client: TestClient, spool: Spool) -> None:
+    """The spool's own H2C 0.4 preset, over its tray's ``tray_info_idx``."""
+    filament: Filament = _state(client).components.get(FILAMENT)
+    own = SpoolPresetCreate(
+        printer_model="H2C", nozzle_diameter="0.4", slicer_filament="Generic PLA @BBL H2C"
+    )
+    assert filament.spools.set_presets(spool.id, [own], actor="test") is not None
+
+
+def _preview(client: TestClient, output: str, body: dict[str, Any]) -> dict[str, Any]:
+    url = f"/api/v1/print/outputs/{output}/preview-slice"
+    started = client.post(url, json=body, headers=press())
+    assert started.status_code == 202, started.text
+    op = follow_operation(client, started.json(), timeout=60, poll=0.1)
+    assert op["status"] == "succeeded", op
+    return op
+
+
+def test_the_preview_slices_with_the_held_spools_own_preset(
+    native_app: TestClient,
+    model: str,
+    fake_lan: FakeLan,
+    slicer: FakeSlicer,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#6262: the background slice resolves as `/check` judges, with the SB spool in each
+    tray and its presets. The tagged tray's spool names its own H2C 0.4 preset, over the
+    tray's ``tray_info_idx``; the preview's plan slices with that one. (The run still
+    plans on the bare trays until #6262 Task 6 makes it match.)"""
+    row = lan_row(native_app, fake_lan)
+    _own_preset(native_app, held_spool(native_app))
+    planned = _preview_plans(monkeypatch)
     output = make_output(native_app, model)
     filaments = native_app.get(f"/api/v1/print/outputs/{output}/filaments", params={"printer": row})
     assert filaments.status_code == 200, filaments.text
-    body = run_body(row, filaments.json())
 
-    started = native_app.post(
-        f"/api/v1/print/outputs/{output}/preview-slice", json=body, headers=press()
-    )
-    assert started.status_code == 202, started.text
-    op = follow_operation(native_app, started.json(), timeout=60, poll=0.1)
-    assert op["status"] == "succeeded", op
+    _preview(native_app, output, run_body(row, filaments.json()))
 
     (run,) = planned
     presets = [ref.id for ref in run.plates[0].plan.filament_presets]
     assert presets[0] == "Generic PLA @BBL H2C", presets
+
+
+def test_a_preview_request_with_no_spool_hint_slices_with_the_trays_presets(
+    native_app: TestClient,
+    model: str,
+    fake_lan: FakeLan,
+    slicer: FakeSlicer,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A request recorded before the ``sb`` hint (in flight across a deploy) still
+    slices: on the trays' own presets, as before #6262."""
+    row = lan_row(native_app, fake_lan)
+    _own_preset(native_app, held_spool(native_app))
+    planned = _preview_plans(monkeypatch)
+
+    async def no_hint(*_: Any, **__: Any) -> dict[str, Any]:
+        return {}
+
+    monkeypatch.setattr(printing, "preview_sb_spools", no_hint)
+    output = make_output(native_app, model)
+    filaments = native_app.get(f"/api/v1/print/outputs/{output}/filaments", params={"printer": row})
+
+    _preview(native_app, output, run_body(row, filaments.json()))
+
+    (run,) = planned
+    presets = [ref.id for ref in run.plates[0].plan.filament_presets]
+    assert presets[0] == "Bambu PLA Basic @BBL H2C", presets
+
+
+def test_a_repeat_under_one_key_is_the_first_answer_after_a_spool_changes(
+    native_app: TestClient, model: str, fake_lan: FakeLan, slicer: FakeSlicer
+) -> None:
+    """§4.2: a repeat is its first answer whatever has changed since. The ``sb`` hint is
+    the API's read, not the client's request, so it is not in the operation's key: a
+    held spool weighed between two sends of one ``Idempotency-Key`` starts nothing new."""
+    row = lan_row(native_app, fake_lan)
+    spool = held_spool(native_app)
+    filament: Filament = _state(native_app).components.get(FILAMENT)
+    output = make_output(native_app, model)
+    filaments = native_app.get(f"/api/v1/print/outputs/{output}/filaments", params={"printer": row})
+    body = run_body(row, filaments.json())
+    key = press()
+    url = f"/api/v1/print/outputs/{output}/preview-slice"
+
+    first = native_app.post(url, json=body, headers=key)
+    assert first.status_code == 202, first.text
+    filament.spools.add_event(spool.id, SpoolEventAdd(kind="weighed", grams=120), actor="test")
+    again = native_app.post(url, json=body, headers=key)
+
+    assert again.status_code in (200, 202), again.text
+    assert again.json()["id"] == first.json()["id"]
+    follow_operation(native_app, first.json(), timeout=60, poll=0.1)
+
+
+def test_the_spool_hint_carries_only_what_the_plan_reads(
+    native_app: TestClient, fake_lan: FakeLan
+) -> None:
+    """The hint is in the operation's request, under its size cap: each held tray's spool
+    by id and number with the values the picker row and the warnings read, and its
+    presets. Never a note, a timestamp or the shelf."""
+    row = lan_row(native_app, fake_lan)
+    spool = held_spool(native_app)
+    filament: Filament = _state(native_app).components.get(FILAMENT)
+    long_note = "Ünïcødé ✓ " * 200
+    assert filament.spools.update(spool.id, SpoolPatch(note=long_note[:2000]), actor="test")
+    state = _state(native_app)
+
+    hint = _call(
+        native_app,
+        printing.preview_sb_spools,
+        state.settings_store.load(),
+        _printers(native_app),
+        filament,
+        PrintRunRequest.model_validate(run_body(row, {"slots": []})),
+    )
+
+    text = json.dumps(hint)
+    assert "Ünïcødé" not in text and "note" not in text
+    assert "updated_at" not in text and "shelf" not in text
+    (tray,) = hint["sb"]["trays"]
+    assert (tray["ams_id"], tray["tray_id"]) == (0, 0)
+    assert tray["spool"] == {
+        "id": str(spool.id),
+        "number": spool.number,
+        "needs_type": True,
+        "brand": None,
+        "colour_name": "Hot Pink",
+        "rgba": "#F5547CFF",
+        "grams_left": 640.0,
+        "label_weight_g": None,
+    }
 
 
 def test_one_plate_of_several_slices_with_only_its_own_slots(

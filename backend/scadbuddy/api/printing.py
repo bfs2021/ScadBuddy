@@ -1513,7 +1513,9 @@ async def post_preview_slice(
     and never queued. Follow ``GET /print/preview-slices/{job_id}``. A run of the same
     choices queues this slice rather than slicing again. ``fresh`` (the dialog's
     Reslice, #4433) slices again even when a finished slice of the same choices exists.
-    On a native route it resolves with the SB spool in each tray, as `/check` does."""
+    On a native route it resolves with the SB spool in each tray and its presets, as
+    `/check` does (#6262). The native run still plans on the bare trays until #6262
+    Task 6 makes it match, so a held spool with its own preset slices again at Print."""
     require_output(outputs, output_id)
     sb = await preview_sb_spools(store.load(), printers, filament, body)
     result = await run_operation(

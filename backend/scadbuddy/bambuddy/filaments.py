@@ -62,7 +62,7 @@ from scadbuddy.bambuddy.models import (
 )
 from scadbuddy.core.problems import ApiError
 from scadbuddy.filament.colour import same_opacity
-from scadbuddy.filament.models import TrayView
+from scadbuddy.filament.models import HeldTrays
 from scadbuddy.print_library.reads import LibraryReads, reads_for, served_reads
 
 logger = logging.getLogger(__name__)
@@ -1008,7 +1008,7 @@ async def gather_plate_options(
     known: Callable[[int | None], FilamentRequirements] | None = None,
     native: LibraryReads | None = None,
     trays_from: PrinterStatus | None = None,
-    held: TrayView | None = None,
+    held: HeldTrays | None = None,
 ) -> list[FilamentOptions]:
     """:func:`gather_options` for several plates of one file, in ``plate_ids`` order.
 
@@ -1091,7 +1091,7 @@ async def _tray_plate_options(
     known: Callable[[int | None], FilamentRequirements] | None,
     native: LibraryReads | None,
     status: PrinterStatus,
-    held: TrayView | None,
+    held: HeldTrays | None,
 ) -> list[FilamentOptions]:
     # Here, not at the top: `trays` builds its choices from this module's models.
     from scadbuddy.bambuddy.trays import loaded_trays, tray_questions

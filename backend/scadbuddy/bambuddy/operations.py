@@ -470,8 +470,17 @@ def bambuddy_kinds_over(
         # start) routinely outlasts the command deadline (#2462). A rerun slices nothing
         # twice (`preview_run`), so a run Temporal timed out on its heartbeat is tried
         # again rather than recorded failed (#4635). A fresh start's rerun (Reslice,
-        # #4433) can slice again: that costs one slice and queues nothing.
-        OperationKind("preview_slice", no_check, preview_run, run_attempts=3, answers_running=True),
+        # #4433) can slice again: that costs one slice and queues nothing. ``sb`` (#6262)
+        # is the route's read of the SB spools, not the client's request: out of the key,
+        # so a repeat is its first answer whatever has changed since (§4.2).
+        OperationKind(
+            "preview_slice",
+            no_check,
+            preview_run,
+            run_attempts=3,
+            answers_running=True,
+            unkeyed=frozenset({"sb"}),
+        ),
         # Only ever a prelude (`output_delete`); a copy already gone counts as deleted,
         # so a retry deletes nothing twice.
         OperationKind(

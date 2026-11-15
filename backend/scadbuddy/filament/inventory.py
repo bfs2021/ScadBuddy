@@ -320,7 +320,4 @@ async def route_sb_spools(
     if held is None:
         return None
     numbers = sorted({tray.spool.number for tray in held.trays if tray.spool is not None})
-    return SbSpools(
-        held=held.model_copy(update={"shelf": []}),
-        spool_presets=await source.presets(numbers) if numbers else {},
-    )
+    return SbSpools.of(held, await source.presets(numbers) if numbers else {})

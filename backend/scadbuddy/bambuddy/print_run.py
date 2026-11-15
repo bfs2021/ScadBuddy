@@ -162,7 +162,7 @@ from scadbuddy.bambuddy.trays import (
 )
 from scadbuddy.bambuddy.uploads import BambuddyUploadStore
 from scadbuddy.core.problems import ApiError
-from scadbuddy.filament.models import EffectivePreset, TrayView
+from scadbuddy.filament.models import EffectivePreset, HeldTrays
 from scadbuddy.library.catalogue import PrintSequence
 from scadbuddy.library.outputs import OutputMeta, OutputStore
 from scadbuddy.library.settings_store import StoredSettings
@@ -554,7 +554,7 @@ async def filament_options(
     plate_ids: Sequence[int] | None = None,
     status: asyncio.Future[PrinterStatus | None] | None = None,
     trays_from: PrinterStatus | None = None,
-    held: TrayView | None = None,
+    held: HeldTrays | None = None,
 ) -> FilamentOptions:
     """The filament step's whole payload for one output (#87).
 
@@ -648,7 +648,7 @@ async def _tray_options(
     printer_id: int | None,
     asked: Sequence[int] | None,
     status: PrinterStatus,
-    held: TrayView | None,
+    held: HeldTrays | None,
 ) -> FilamentOptions:
     """:func:`filament_options` on a native run: the plates' slots from the file itself
     (or the native library's copy), the trays from ``status``."""
@@ -1148,7 +1148,7 @@ async def _slot_errors(
     *,
     inventory: Inventory | None = None,
     native: bool = False,
-    held: TrayView | None = None,
+    held: HeldTrays | None = None,
     presets: SpoolPresetSource | None = None,
 ) -> list[str]:
     """The run's slot refusals for ``request``, judged before anything is uploaded for it
@@ -3131,7 +3131,7 @@ async def plan_run(
     reuse_slices: bool = True,
     native: NativeSliceStarter | None = None,
     title: str | None = None,
-    held: TrayView | None = None,
+    held: HeldTrays | None = None,
     presets: SpoolPresetSource | None = None,
 ) -> PlannedRun:
     """Upload, then resolve every plate, before anything is sliced (spec §4).

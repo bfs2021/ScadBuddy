@@ -35,7 +35,7 @@ from scadbuddy.bambuddy.filaments import (
 )
 from scadbuddy.bambuddy.models import AmsTray, PrinterStatus
 from scadbuddy.filament.colour import normalise_rgba, same_opacity
-from scadbuddy.filament.models import Spool, TrayView
+from scadbuddy.filament.models import HeldSpool, HeldTrays, Spool
 from scadbuddy.spools.models import SeenTray, clean_tag_uid, clean_tray_uuid
 
 #: A tray's ``state`` is a bitfield, not an enum (ha-bambulab ``pybambu/const.py:321-328``
@@ -323,7 +323,7 @@ def loaded_trays(
     status: PrinterStatus,
     printer_id: int,
     printer_name: str | None,
-    held: TrayView | None = None,
+    held: HeldTrays | None = None,
 ) -> list[SpoolOption]:
     """The native run's filament choices (#3818 tier A, plan 2026-10-18 D1): every filled
     tray as itself, under its :func:`tray_spool_id`, with the SB spool ``held`` says it
@@ -360,19 +360,20 @@ def loaded_trays(
     return options
 
 
-def _from_spool(spool: Spool) -> dict[str, Any]:
+def _from_spool(spool: Spool | HeldSpool) -> dict[str, Any]:
     """What a picker row says of SB spool ``spool``: its effective values (its own over
-    its type's) and the names behind them (`Spool.names`), with the ledger's grams."""
-    effective = spool.effective
+    its type's) and the names behind them (`Spool.names`), with the ledger's grams, as
+    :class:`HeldSpool` keeps them."""
+    held = HeldSpool.of(spool) if isinstance(spool, Spool) else spool
     return {
-        "sb_spool_id": spool.id,
-        "sb_number": spool.number,
-        "brand": spool.names.brand,
-        "color_name": effective.colour_name,
-        "remaining_g": spool.grams_left,
-        "label_weight_g": effective.label_weight_g,
-        "rgba": effective.rgba,
-        "needs_type": spool.type_id is None,
+        "sb_spool_id": held.id,
+        "sb_number": held.number,
+        "brand": held.brand,
+        "color_name": held.colour_name,
+        "remaining_g": held.grams_left,
+        "label_weight_g": held.label_weight_g,
+        "rgba": held.rgba,
+        "needs_type": held.needs_type,
     }
 
 
@@ -392,7 +393,7 @@ def shelf_options(shelf: Sequence[Spool]) -> list[SpoolOption]:
 
 
 def tray_questions(
-    status: PrinterStatus, held: TrayView | None
+    status: PrinterStatus, held: HeldTrays | None
 ) -> tuple[list[UnknownTray], list[SpoolOption]]:
     """A native run's questions (#4504): each filled, untagged tray that holds no SB spool
     (``held``, #6262), with the shelf's spools it may hold (:func:`close_spools`: its

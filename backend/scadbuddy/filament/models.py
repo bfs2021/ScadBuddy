@@ -742,16 +742,72 @@ class TrayView(BaseModel):
     shelf: list[Spool]
 
 
+class HeldSpool(BaseModel):
+    """What a tray's picker row and its low-filament warnings read of the SB spool in it
+    (`bambuddy/trays.py` `loaded_trays`): its id and number, its effective brand and
+    colour names, ``rgba`` and label weight, and the ledger's grams. Nothing else, so
+    the background slice's request stays small (#6262, ``MAX_REQUEST_BYTES``)."""
+
+    id: UUID
+    number: int
+    needs_type: bool
+    brand: str | None = None
+    colour_name: str | None = None
+    rgba: str | None = None
+    grams_left: float | None = None
+    label_weight_g: int | None = None
+
+    @classmethod
+    def of(cls, spool: Spool) -> HeldSpool:
+        effective = spool.effective
+        return cls(
+            id=spool.id,
+            number=spool.number,
+            needs_type=spool.type_id is None,
+            brand=spool.names.brand,
+            colour_name=effective.colour_name,
+            rgba=effective.rgba,
+            grams_left=spool.grams_left,
+            label_weight_g=effective.label_weight_g,
+        )
+
+
+class HeldTray(BaseModel):
+    """One reported tray and the SB spool in it, as :class:`HeldSpool`."""
+
+    ams_id: int
+    tray_id: int
+    spool: HeldSpool
+
+
 class SbSpools(BaseModel):
     """What a native run's plan reads of ScadBuddy's own spools, read on the API and
     carried where no database is (#6262): the dialog's background slice runs on the print
     worker (`bambuddy/operations.py` `preview_run`), so its route reads these first and
-    sends them in the operation's request. ``spool_presets`` are the held spools' own, by
-    SB number. It is a `filament/presets.py` `SpoolPresetSource` itself; a native plan
-    has no Bambuddy client, so it names no Bambuddy spool."""
+    sends them in the operation's request, out of its key (``unkeyed``: the API's read,
+    not the client's request). ``trays`` are the trays that hold one; ``spool_presets``
+    the held spools' own, by SB number. It is a held view itself (:data:`HeldTrays`,
+    with no shelf: a plan's choices are the trays) and a `filament/presets.py`
+    `SpoolPresetSource`; a native plan has no Bambuddy client, so it names no Bambuddy
+    spool."""
 
-    held: TrayView | None = None
+    trays: list[HeldTray] = Field(default_factory=list)
     spool_presets: dict[int, list[EffectivePreset]] = Field(default_factory=dict)
+
+    @property
+    def shelf(self) -> list[Spool]:
+        return []
+
+    @classmethod
+    def of(cls, view: TrayView, spool_presets: dict[int, list[EffectivePreset]]) -> SbSpools:
+        return cls(
+            trays=[
+                HeldTray(ams_id=tray.ams_id, tray_id=tray.tray_id, spool=HeldSpool.of(tray.spool))
+                for tray in view.trays
+                if tray.spool is not None
+            ],
+            spool_presets=spool_presets,
+        )
 
     async def presets(self, numbers: Sequence[int]) -> dict[int, list[EffectivePreset]]:
         rows = self.spool_presets
@@ -759,6 +815,11 @@ class SbSpools(BaseModel):
 
     async def bb_spools(self, numbers: Sequence[int]) -> dict[int, int]:
         return {}
+
+
+#: The SB spool in each tray as the print dialog's modules read it: the inventory's
+#: full view, or the background slice's :class:`SbSpools`.
+HeldTrays = TrayView | SbSpools
 
 
 # -- tags, bindings, the ledger -------------------------------------------------------
