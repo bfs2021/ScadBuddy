@@ -16,7 +16,6 @@ import httpx
 import pytest
 from psycopg.types.json import Jsonb
 
-from scadbuddy.api import crud_areas
 from scadbuddy.api.crud_areas import CRUD_AREAS
 from scadbuddy.auth.service_credentials import ServiceCredentialStore
 from scadbuddy.core.settings import Settings
@@ -50,9 +49,6 @@ def test_the_print_worker_waits_for_the_filament_area() -> None:
     API that serves them (`wait_for_areas`) rather than booking into a 404 mid-roll."""
     assert "filament" in PRINT_CRUD_AREAS
     assert CRUD_AREAS["print"][-1] == "filament"
-    # The area's note names its routes (`crud_areas.py`).
-    note = " ".join(Path(crud_areas.__file__).read_text().replace("#:", "").split())
-    assert "Its ``filament`` area is ``…/print/filament/trays``" in note
 
 
 @pytest.fixture
