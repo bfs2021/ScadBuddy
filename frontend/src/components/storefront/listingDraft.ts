@@ -399,7 +399,19 @@ export function previewListing(
     // #6152: never a support material, as the public listing (`customer_filaments`).
     colours: draft.colours.flatMap((id) => {
       const filament = customerFilaments(filaments).find((f) => f.id === id)
-      return filament ? [{ id, colour: filament.colour, colour_name: filament.colour_name, material: filament.material }] : []
+      return filament
+        ? [
+            {
+              id,
+              colour: filament.colour,
+              colour_name: filament.colour_name,
+              material: filament.material,
+              alpha: filament.alpha,
+              extra_colours: filament.extra_colours,
+              effect: filament.effect,
+            },
+          ]
+        : []
     }),
     one_material: draft.one_material,
     media: draft.media_ids.flatMap((id) => {

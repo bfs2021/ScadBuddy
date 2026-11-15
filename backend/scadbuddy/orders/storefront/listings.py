@@ -1255,6 +1255,9 @@ async def public_listing(
                 colour=f.colour,
                 colour_name=f.colour_name,
                 material=f.material,
+                alpha=f.alpha,
+                extra_colours=f.extra_colours,
+                effect=f.effect,
                 subtype=f.subtype,
                 brand=f.brand,
             )
