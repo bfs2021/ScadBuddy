@@ -310,7 +310,9 @@ export type TrayAssigned = Schemas['TrayAssigned']
 export type SpoolSnapshot = Schemas['SpoolSnapshot']
 /** #3818 — the native manual link's body: a physical spool, or one provider's record. */
 export type TraySpoolLink = Schemas['TraySpoolLink']
-export type TraySpool = Schemas['TraySpool-Output']
+export type TraySpool = Schemas['TraySpool']
+/** #6261 — a ScadBuddy spool (`GET /filament/spools/{id}`). */
+export type FilamentSpool = Schemas['Spool']
 export type RackSentPick = Schemas['RackSentPick']
 export type RackAlgorithm = NonNullable<Schemas['ChoicesView']['rack_algorithm']>
 export type PrinterRackAlgorithm = Schemas['PrinterRackAlgorithm']

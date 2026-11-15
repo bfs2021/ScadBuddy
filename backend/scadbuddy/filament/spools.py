@@ -247,14 +247,14 @@ class FilamentSpoolStore:
 
     def summary(self) -> m.InventorySummary:
         """The unarchived spools in total; a spool's value is its grams left at its
-        effective cost per kg."""
+        effective cost per kg. A spool is loaded when its place is a printer's tray
+        (``printer_id`` set, `filament/inventory.py`)."""
         spools = self.list()
         with self._pool.connection() as conn:
-            ams = {
+            trays = {
                 row["id"]
                 for row in conn.execute(
-                    "SELECT l.id FROM filament_locations l JOIN filament_location_kinds k"
-                    " ON k.id = l.kind_id WHERE k.ams"
+                    "SELECT id FROM filament_locations WHERE printer_id IS NOT NULL"
                 ).fetchall()
             }
         value: Decimal | None = None
@@ -276,7 +276,7 @@ class FilamentSpoolStore:
                     stock.items(), key=lambda item: (item[0] is None, item[0] or "")
                 )
             ],
-            loaded=sum(1 for s in spools if s.location_id in ams),
+            loaded=sum(1 for s in spools if s.location_id in trays),
             low_stock=sum(1 for s in spools if s.low_stock),
             needs_type=sum(1 for s in spools if s.type_id is None),
         )

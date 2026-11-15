@@ -56,14 +56,14 @@ test.describe('native hot path (msw)', () => {
     await expect(dialog.getByText(/project/i)).toHaveCount(0)
     await expect(dialog.getByText('Filed under:')).toContainText('the template’s folder')
 
-    // The untagged tray's question links Bambuddy's unlinked record through ScadBuddy's route.
+    // The untagged tray's question places the shelf's SB spool through ScadBuddy's route.
     const question = dialog.getByTestId('tray-question-0-1')
     await expect(question).toContainText('AMS-A slot 2 has pink PLA, but no spool record is linked to it.')
     const link = page.waitForRequest(
       (request) => request.method() === 'PUT' && /\/printers\/[^/]+\/trays\/0\/1\/spool$/.test(request.url()),
     )
     await question.getByRole('button', { name: 'Yes, that one' }).click()
-    expect((await link).postDataJSON()).toEqual({ provider: 'bambuddy', record_id: '27' })
+    expect((await link).postDataJSON()).toEqual({ spool_id: '7a2c1f0e-0000-4000-8000-000000000002' })
     await expect(question).toHaveCount(0)
     await expect(dialog.getByTestId('filament-slot-2')).toContainText('Bambuddy: Elegoo Pink · 640 g')
 

@@ -982,7 +982,7 @@ class InventorySummary(BaseModel):
     #: Grams left at each spool's effective cost per kg; ``None`` when none has a cost.
     value_left: Decimal | None
     by_material: list[MaterialStock]
-    #: Spools in an AMS tray place.
+    #: Spools whose place is a printer's tray (a location with ``printer_id`` set).
     loaded: int
     low_stock: int
     needs_type: int

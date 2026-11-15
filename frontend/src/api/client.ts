@@ -138,8 +138,8 @@ import type {
   PreviewStarted,
   SlicePreview,
   TrayAssigned,
-  TraySpool,
   TraySpoolLink,
+  FilamentSpool,
   PrintRun,
   FlowDecided,
   FlowProposal,
@@ -2424,11 +2424,12 @@ export const api = {
     request<PrinterRow>(`/printers/${seg(id)}/lan`, { method: 'PUT', body: JSON.stringify(body) }),
   unlinkPrinterLan: (id: string) => request<PrinterRow>(`/printers/${seg(id)}/lan`, { method: 'DELETE' }),
   /**
-   * #3818 — the native path's manual link: which physical spool, or which provider's
-   * record, is in an untagged tray. Writes ScadBuddy only, never Bambuddy's assignment.
+   * #3818, #6262 Task 4 — the native path's manual link: which SB spool is in an untagged
+   * tray; the answer is the spool, now in the tray's place. Writes ScadBuddy only, never
+   * Bambuddy's assignment.
    */
   linkTraySpool: (printer: string, amsId: number, trayId: number, body: TraySpoolLink) =>
-    request<TraySpool>(`/printers/${seg(printer)}/trays/${amsId}/${trayId}/spool`, {
+    request<FilamentSpool>(`/printers/${seg(printer)}/trays/${amsId}/${trayId}/spool`, {
       method: 'PUT',
       body: JSON.stringify(body),
     }),

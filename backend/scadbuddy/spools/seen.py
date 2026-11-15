@@ -10,6 +10,9 @@ material, colour and ``tray_info_idx``; its fingerprint is `spools.models.tray_f
 never the tray's ``state``. A report older than `printers.status.STALE_AFTER` is left
 out: `SpoolStore.seen` stamps ``last_seen_at`` with now, and a printer not heard from
 for that long shows nothing now.
+
+`report_status` lives in `printers/reports.py` (#6262 Task 4); it is re-exported here
+for the overlay's readers until #6262 Task 12 deletes this module.
 """
 
 from __future__ import annotations
@@ -17,26 +20,15 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Protocol
 
-from scadbuddy.bambuddy.models import PrinterStatus
 from scadbuddy.bambuddy.trays import seen_trays
-from scadbuddy.printers.lan_models import LanReport
-from scadbuddy.printers.models import PrinterRow
-from scadbuddy.printers.reports import PrinterReportStore
-from scadbuddy.printers.status import is_fresh, status_from_report
+from scadbuddy.printers.reports import PrinterReportStore, report_status
+from scadbuddy.printers.status import is_fresh
 from scadbuddy.printers.store import PrinterStore
 from scadbuddy.spools.models import SeenTray
 
-
-def report_status(
-    row: PrinterRow, report: tuple[dict[str, Any], datetime], *, now: datetime
-) -> PrinterStatus:
-    """``row``'s status from its stored report (`PrinterReportStore.get`)."""
-    data, seen_at = report
-    return status_from_report(
-        row, LanReport(serial=row.serial, received_at=seen_at, print=data), now=now
-    )
+__all__ = ["Registry", "ReportTrays", "report_status"]
 
 
 class Registry(Protocol):

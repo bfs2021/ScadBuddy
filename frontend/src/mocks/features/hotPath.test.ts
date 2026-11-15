@@ -71,10 +71,13 @@ describe('hot-path mock (#3818, plan 2026-10-18 Task 11)', () => {
     expect(options.shelf).toEqual([])
   })
 
-  it('links the untagged tray, after which it carries the record', async () => {
+  it('links the untagged tray to the shelf spool, after which it carries the record', async () => {
     setHotPath(true)
-    const linked = await api.linkTraySpool(HOT_PRINTER.id, 0, 1, { provider: 'bambuddy', record_id: '27' })
-    expect(linked).toMatchObject({ ams_id: 0, tray_id: 1, linked_by: 'manual', records: { bambuddy: { name: 'Pink' } } })
+    const shelf = (await api.getFilaments('out-1')).shelf?.[0]
+    expect(shelf?.physical_spool_id).toBeTruthy()
+    const linked = await api.linkTraySpool(HOT_PRINTER.id, 0, 1, { spool_id: shelf?.physical_spool_id ?? '' })
+    expect(linked).toMatchObject({ id: shelf?.physical_spool_id, colour_name: 'Pink' })
+    expect(linked.location_id).toBeTruthy()
     const options = await api.getFilaments('out-1')
     expect(options.trays).toEqual([])
     expect(options.spools?.find((spool) => spool.spool_id === UNTAGGED_TRAY)?.records?.['bambuddy']).toBeTruthy()

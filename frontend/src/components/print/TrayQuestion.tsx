@@ -26,9 +26,9 @@ function providersOf(spool: SpoolOption, labels?: Readonly<Record<string, string
 /**
  * The printer the answer is recorded for: a Bambuddy printer, whose assignment it writes,
  * or (#3818, plan 2026-10-18 D1) a native run's registry printer, which has no Bambuddy
- * id. There its candidates are the spool providers' records no tray holds, and "yes"
- * links one through ScadBuddy's own `PUT /printers/{printer}/trays/{ams}/{tray}/spool`,
- * never Bambuddy's assignment.
+ * id. There its candidates are the spools no tray holds, and "yes" places the SB spool
+ * (`{spool_id}`, `linkOf`) through ScadBuddy's own
+ * `PUT /printers/{printer}/trays/{ams}/{tray}/spool`, never Bambuddy's assignment.
  */
 type Target = { printerId: number; native?: undefined } | { native: { printer: string }; printerId?: undefined }
 
@@ -59,7 +59,7 @@ export function TrayQuestion({ tray, spools, onAssigned, onDecline, providerLabe
     .filter((spool): spool is SpoolOption => spool !== undefined && (!native || linkOf(spool) !== null))
   /**
    * What a candidate is picked by: natively its link's identity (`linkKey`), since a
-   * shelf row's `spool_id` is positional and a re-read may move the record to another;
+   * shelf row's `spool_id` is positional and a re-read may move it to another spool;
    * on the Bambuddy path the spool's own id.
    */
   // Every candidate has a link natively (filtered above); the index only keeps keys apart.

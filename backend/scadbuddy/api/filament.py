@@ -691,8 +691,8 @@ async def list_events(
     description=(
         "The unarchived spools in total: their number, grams left, the value of those "
         "grams at each spool's cost per kg (`null` when none has a cost), the stock by "
-        "material, how many sit in an AMS tray, how many are low on stock, and how many "
-        "still need a type."
+        "material, how many sit in a printer's tray (a place with `printer_id` set), how "
+        "many are low on stock, and how many still need a type."
     ),
 )
 async def get_summary(filament: FilamentDep) -> m.InventorySummary:

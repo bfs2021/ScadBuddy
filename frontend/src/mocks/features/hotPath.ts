@@ -11,7 +11,7 @@ import type {
   ProjectChoices,
   SlicePreview,
   SpoolOption,
-  TraySpool,
+  FilamentSpool,
   TraySpoolLink,
   UnknownTray,
 } from '../../api/types'
@@ -198,18 +198,63 @@ function trayOptions(): SpoolOption[] {
       label: 'AMS-A slot 2',
       colour_word: 'pink',
       remain_percent: null,
-      physical_spool_id: state.linked ? '7a2c1f0e-0000-4000-8000-000000000002' : null,
+      physical_spool_id: state.linked ? SHELF_SPOOL : null,
       records: linked,
     },
   ]
   return trays
 }
 
-/** The overlay's linking list (D1, #4506's `shelf`): a Bambuddy record of a spool no tray holds. */
+/** The shelf spool: the SB spool the untagged tray's answer places (#6262 Task 4). */
+const SHELF_SPOOL = '7a2c1f0e-0000-4000-8000-000000000002'
+
+/** `PUT …/trays/{ams}/{tray}/spool`'s answer: the SB spool, now in the tray's place. */
+function shelfSpool(): FilamentSpool {
+  return {
+    id: SHELF_SPOOL,
+    number: 2,
+    type_id: null,
+    brand_id: null,
+    material_id: null,
+    subtype_id: null,
+    category_id: null,
+    effect_id: null,
+    colour_name: 'Pink',
+    rgba: '#FF1493FF',
+    extra_colours: null,
+    diameter_mm: null,
+    density_g_cm3: null,
+    nozzle_temp_min: null,
+    nozzle_temp_max: null,
+    bed_temp_min: null,
+    bed_temp_max: null,
+    label_weight_g: 1000,
+    insert_type_id: null,
+    low_stock_pct: null,
+    cost_per_kg: null,
+    location_id: '7a2c1f0e-0000-4000-8000-0000000000a2',
+    weight_locked: false,
+    note: null,
+    grams_left: 640,
+    last_weighed_g: null,
+    last_weighed_at: null,
+    last_dried_at: null,
+    last_dried_temp_c: null,
+    last_dried_hours: null,
+    last_used_at: null,
+    archived_at: null,
+    created_at: '2026-11-15T07:00:00Z',
+    updated_at: '2026-11-15T07:00:00Z',
+    low_stock: false,
+  }
+}
+
+/** The overlay's linking list (D1, #4506's `shelf`): a spool no tray holds, with its Bambuddy record. */
 function shelfOptions(): SpoolOption[] {
   if (state.stale || state.linked) return []
   const shelf: SpoolOption = {
     spool_id: UNLINKED_RECORD,
+    physical_spool_id: SHELF_SPOOL,
     material: 'PLA',
     colour: '#FF1493',
     brand: 'Elegoo',
@@ -423,14 +468,9 @@ const routes: Route[] = [
     answer: async (match, request) => {
       if (match[1] !== HOT_PRINTER.id) return problem(404, `no printer ${match[1]}`)
       const body = (await request.json()) as TraySpoolLink
+      if (body.spool_id !== SHELF_SPOOL) return problem(404, `no spool ${body.spool_id}`)
       state.linked = true
-      return HttpResponse.json({
-        ams_id: Number(match[2]),
-        tray_id: Number(match[3]),
-        linked_by: 'manual',
-        physical_spool_id: body.physical_spool_id ?? '7a2c1f0e-0000-4000-8000-000000000002',
-        records: trayOptions().find((spool) => spool.spool_id === UNTAGGED_TRAY)?.records ?? {},
-      } satisfies TraySpool)
+      return HttpResponse.json(shelfSpool())
     },
   },
   { method: 'GET', path: /^\/print\/(?:outputs|library)\/[^/]+\/choices$/, answer: () => HttpResponse.json(hotChoices()) },

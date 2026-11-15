@@ -695,8 +695,8 @@ export const TOUCHES_NOTHING: ReadonlySet<string> = new Set([
   // #2686: a library folder is no recorded resource kind.
   'create_library_folder',
   'update_library_folder',
-  // #3818: a tray's spool link is no recorded resource kind either (ScadBuddy's
-  // tray_spool_links; the spool and its providers' records are unchanged).
+  // #3818, #6262: a tray's spool link is no recorded resource kind either (it moves the
+  // SB spool to the tray's place, a `moved` ledger event; nothing else changes).
   'link_tray_spool',
   'unlink_tray_spool',
   // ScadBuddy's own spools (#4643, filament_spools rows since #6261) are no recorded resource kind: the

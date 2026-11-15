@@ -16,6 +16,7 @@ from scadbuddy.bambuddy.models import Spool as BbSpool
 from scadbuddy.filament.bambuddy_pull import pull, read_and_pull, scheduled_pull
 from scadbuddy.filament.catalog import CatalogStore
 from scadbuddy.filament.component import Filament
+from scadbuddy.filament.inventory import FilamentInventory
 from scadbuddy.filament.locations import LocationStore
 from scadbuddy.filament.models import (
     InsertTypeCreate,
@@ -43,6 +44,7 @@ def _filament(pool: PgPool) -> Filament:
         types=SpoolTypeStore(pool),
         spools=FilamentSpoolStore(pool),
         locations=LocationStore(pool),
+        inventory=FilamentInventory(pool),
     )
 
 
