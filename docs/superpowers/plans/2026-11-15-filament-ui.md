@@ -691,3 +691,18 @@ fewer clicks; the builder cites the Bambu Studio source they compare against.
   value from a person's own H2C/0.4 row when one exists. Accepted: short-lived.
 - Task 3: the model rule lives in `filament/presets.py` and in the migration's SQL, linked
   by comments, with no parity test: the merged migration cannot change.
+- Task 4: the summary's `loaded` counts unarchived spools whose location has `printer_id`
+  set (the tray place), replacing Task 2's interim `ams`-kind count.
+- Task 4: `SeenTray` gains `rgba` (from `tray_color`, `#RRGGBBAA`); `colour` stays
+  `#RRGGBB` for the overlay and the slicer. The tray fingerprint uses `rgba`, so a
+  translucent refill of one hue is a different tray (spec §5.1). No other task changed
+  `seen_trays`.
+- Task 4: a link to a tagged tray binds the tray's free tag to the spool; a tag held by an
+  archived spool counts as free (as `bambuddy_pull._bind` reads it); a spool that holds
+  another tag is rebound to the tray's (the tray's reading is the physical tag, one tag per
+  spool).
+- Task 4: `link`/`unlink` take a per-tray advisory lock, then the tag rows, then spools by
+  id, then the place `FOR SHARE`. Two theoretical lock-order bends stay: the archived
+  holder's spool and the spool's own old tag are locked after the link's spools; every path
+  that could invert them takes the tag lock first, which the link already holds.
+- Task 4: `link` refuses an archived spool.
