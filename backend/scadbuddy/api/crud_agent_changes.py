@@ -14,8 +14,8 @@ backend's ``events`` log (`agent_changes/hub.py` has the design). Frames:
   dropped, or the reader fell behind), and the log after the place was replayed before it;
 - a ``: keepalive`` comment every 15 s.
 
-A ``Last-Event-ID`` that is not an event id (`hub.py` ``EVENT_ID``) or ``0`` names no place: the stream starts
-with ``resync``, never a guess. A credential may hold `STREAMS_PER_CREDENTIAL` streams and the
+A ``Last-Event-ID`` that is not an event id (`hub.py` ``EVENT_ID``) or ``0`` names no place:
+the stream starts with ``resync``, never a guess. A credential may hold `STREAMS_PER_CREDENTIAL` streams and the
 process `STREAMS_MAX`; one more is 429.
 """
 
