@@ -98,7 +98,25 @@ export class PgRelayRows implements RelayRows {
 }
 
 /** The CRUD routes' bound on an idle window (backend api/crud_agent_mcp.py `IDLE_SECONDS_MAX`). */
-const IDLE_SECONDS_MAX = 7 * 24 * 3600
+export const RELAY_IDLE_SECONDS_MAX = 7 * 24 * 3600
+
+/**
+ * The API's JSON gate (backend api/limits.py `MAX_TEXT_BODY_BYTES`). A relayed request is at
+ * most the MCP SDK's 4 MiB, but the row escapes it once more, so quotes, backslashes and
+ * control characters can take it past this.
+ */
+export const RELAY_SEND_MAX_BYTES = 8 * 1024 * 1024
+
+/** A relay message too large for the API's JSON gate: refused here, before it is sent. */
+export class RelayBodyTooLargeError extends Error {
+  readonly bytes: number
+
+  constructor(bytes: number) {
+    super(`an MCP relay message of ${bytes} bytes is past the API's ${RELAY_SEND_MAX_BYTES}`)
+    this.bytes = bytes
+    this.name = 'RelayBodyTooLargeError'
+  }
+}
 
 /** `RelayRows` over the backend's CRUD routes (area `mcp-relay`). Every id travels in the body. */
 export class CrudRelayRows implements RelayRows {
@@ -132,12 +150,15 @@ export class CrudRelayRows implements RelayRows {
 
   async counts(callerKey: string, idleSeconds: number): Promise<{ total: number; caller: number }> {
     return await this.#call('the open MCP sessions', '/mcp-relay/counts', {
-      body: { caller_key: callerKey, idle_seconds: Math.min(idleSeconds, IDLE_SECONDS_MAX) },
+      body: { caller_key: callerKey, idle_seconds: idleSeconds },
     })
   }
 
   async send(header: object, body?: { row: string; value: unknown }): Promise<void> {
-    await this.#call('an MCP relay message', '/mcp-relay/send', { body: body ? { header, body: body.value } : { header } })
+    const sent = body ? { header, body: body.value } : { header }
+    const bytes = Buffer.byteLength(JSON.stringify(sent), 'utf8')
+    if (bytes > RELAY_SEND_MAX_BYTES) throw new RelayBodyTooLargeError(bytes)
+    await this.#call('an MCP relay message', '/mcp-relay/send', { body: sent })
   }
 
   async take(row: string): Promise<unknown> {
@@ -150,6 +171,6 @@ export class CrudRelayRows implements RelayRows {
   }
 
   async sweep(idleSeconds: number): Promise<void> {
-    await this.#call("the MCP relay's sweep", '/mcp-relay/sweep', { body: { idle_seconds: Math.min(idleSeconds, IDLE_SECONDS_MAX) } })
+    await this.#call("the MCP relay's sweep", '/mcp-relay/sweep', { body: { idle_seconds: idleSeconds } })
   }
 }

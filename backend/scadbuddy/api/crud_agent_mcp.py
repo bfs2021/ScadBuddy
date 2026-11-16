@@ -1,6 +1,6 @@
 """The agent's /mcp session relay behind CRUD routes (#5299 step 11): under
 ``/api/v1/internal/crud/agent/``, for the ``agent`` credential only (`crud_router`). Each route is
-one statement, or one transaction, of the agent's ``mcp/sessionRelay.ts`` ``PgRelayRows``, so the
+one statement, or one transaction, of the agent's ``mcp/relayRows.ts`` ``PgRelayRows``, so the
 relay keeps its design (#2086) and only its storage moves (#5299 D2). The agent uses them once
 ``…/areas`` lists ``mcp-relay``, and its own SQL until then (D9).
 
@@ -22,8 +22,11 @@ A session id is a credential: the directory and every message carry its SHA-256 
 every id is in the body, never the path. A header is checked against the relay's own shapes and
 refused 422 at the size Postgres refuses a NOTIFY payload, so nothing NOTIFYed here is one the
 agent would not have sent. A body row is bounded by the API's JSON gate (`api/limits.py`
-``MAX_TEXT_BODY_BYTES``, 8 MiB, refused before it is read): a relayed request is at most the MCP
-SDK's 4 MiB body (``DEFAULT_MAX_REQUEST_BODY_SIZE``), escaped once more in the row.
+``MAX_TEXT_BODY_BYTES``, 8 MiB, refused before it is read). A relayed request is at most the MCP
+SDK's 4 MiB body (``DEFAULT_MAX_REQUEST_BODY_SIZE``), but the row escapes it once more, so one
+heavy in quotes, backslashes or control characters can pass 8 MiB. The agent measures the
+encoded body first and answers such a request 413 itself (``relayRows.ts``
+``RelayBodyTooLargeError``), so it never reaches this gate.
 """
 
 from __future__ import annotations
@@ -272,7 +275,11 @@ class Send(_Body):
 
 def _payload(header: Any) -> str:
     """The header as the agent's relay reads it (``HeaderSchema``), ids as text."""
-    return json.dumps(header.model_dump(mode="json", exclude_none=True), separators=(",", ":"))
+    # ensure_ascii=False: the agent sizes an inline chunk by its UTF-8 JSON, which is what
+    # Postgres counts too; \uXXXX escapes would make that chunk too large here.
+    return json.dumps(
+        header.model_dump(mode="json", exclude_none=True), separators=(",", ":"), ensure_ascii=False
+    )
 
 
 @router.post("/mcp-relay/send", name="crud_agent_mcp_relay_send")
