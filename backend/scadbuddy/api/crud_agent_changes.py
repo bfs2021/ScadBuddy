@@ -15,8 +15,8 @@ backend's ``events`` log (`agent_changes/hub.py` has the design). Frames:
 - a ``: keepalive`` comment every 15 s.
 
 A ``Last-Event-ID`` that is not an event id (`hub.py` ``EVENT_ID``) or ``0`` names no place:
-the stream starts with ``resync``, never a guess. A credential may hold `STREAMS_PER_CREDENTIAL` streams and the
-process `STREAMS_MAX`; one more is 429.
+the stream starts with ``resync``, never a guess. A credential may hold
+`STREAMS_PER_CREDENTIAL` streams and the process `STREAMS_MAX`; one more is 429.
 """
 
 from __future__ import annotations
