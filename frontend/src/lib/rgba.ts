@@ -17,7 +17,7 @@ export const CLEAR_MAX_ALPHA = 0x20
  * opaque (`FF`). `null` for anything else. Mirrors `normalise_rgba`.
  */
 export function parseRgba(value: string): string | null {
-  const match = HEX.exec(value.trim())
+  const match = HEX.exec(value)
   if (!match) return null
   return `#${match[1]}${match[2] ?? 'FF'}`.toUpperCase()
 }

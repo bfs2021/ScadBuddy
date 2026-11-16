@@ -180,6 +180,58 @@ function identity(f: Pick<Filament, 'material' | 'subtype' | 'brand' | 'colour'>
 }
 
 /**
+ * #6262 — a spool type's price book row (`filament/types.py` `_link_price_book`), for the
+ * filament mock: the unarchived row of its names and `#RRGGBBAA` takes the type's cost,
+ * else a new row is made with its alpha, colour stops and effect. Its id is the type's
+ * `filament_id`.
+ */
+export function linkTypeFilament(type: {
+  material: string
+  subtype: string | null
+  brand: string | null
+  effect: string | null
+  colour_name: string | null
+  rgba: string
+  extra_colours: string[] | null
+  cost_per_kg: string
+}): string {
+  const colour = type.rgba.slice(0, 7)
+  const alpha = Number.parseInt(type.rgba.slice(7, 9), 16)
+  const cost = Number(type.cost_per_kg).toFixed(4)
+  const key = identity({ material: type.material, subtype: type.subtype, brand: type.brand, colour, alpha })
+  const found = state.filaments.find((f) => !f.archived_at && identity(f) === key)
+  if (found) {
+    if (Number(found.cost_per_kg) !== Number(cost)) Object.assign(found, { cost_per_kg: cost, updated_at: now() })
+    return found.id
+  }
+  const effect = type.effect?.trim().toLowerCase().replace(/ /g, '-') ?? null
+  const made: Filament = {
+    id: newId('f'),
+    material: type.material,
+    subtype: type.subtype,
+    brand: type.brand,
+    colour_name: type.colour_name,
+    colour,
+    alpha,
+    extra_colours: (type.extra_colours ?? []).slice(0, 8),
+    effect: BOOK_EFFECTS.has(effect ?? '') ? (effect as Filament['effect']) : null,
+    colour_source: 'manual',
+    spool_linked: false,
+    cost_per_kg: cost,
+    density_g_cm3: null,
+    density_profile: null,
+    archived_at: null,
+    created_at: now(),
+    updated_at: now(),
+  }
+  state.filaments.push(made)
+  return made.id
+}
+
+/** The price book's `effect` values (`orders/models.py` `FilamentEffect`). */
+const BOOK_EFFECTS = new Set(['sparkle', 'wood', 'marble', 'glow', 'matte', 'silk', 'galaxy', 'rainbow', 'metal', 'translucent', 'gradient', 'dual-color', 'tri-color', 'multicolor'])
+
+/**
  * `orders/pricing.py` over `plates`: each slot's grams at the filament of the item's colour
  * slot, the plates' seconds at the machine rate, a setup fee per plate. `support` prices a
  * slot that is no colour slot as its own `Support, …` filament line (#4625 §6.3), and

@@ -8,12 +8,12 @@ describe('parseRgba', () => {
     ['#ff8800', '#FF8800FF'],
     ['ff8800', '#FF8800FF'],
     ['#ff880080', '#FF880080'],
-    ['  #FF880010 ', '#FF880010'],
   ])('reads %s as %s', (value, rgba) => {
     expect(parseRgba(value)).toBe(rgba)
   })
 
-  it.each(['', '#fff', '#ff88', '#ff88001', 'red', '#gg8800', '#ff8800ff00', '##ff8800'])('refuses %j', (value) => {
+  // `fullmatch` with no strip: spaces around a colour are refused, as the backend does.
+  it.each(['', '#fff', '#ff88', '#ff88001', 'red', '#gg8800', '#ff8800ff00', '##ff8800', '  #FF880010 ', '#ff8800 '])('refuses %j', (value) => {
     expect(parseRgba(value)).toBeNull()
   })
 })

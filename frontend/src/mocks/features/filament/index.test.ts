@@ -1,9 +1,47 @@
 import { describe, expect, it } from 'vitest'
-import { archiveSpool, getInventory, getSpool, getSummary, getTag, listEvents, listLocations, listSpools, listTags, patchSpool } from '../../../api/filament'
+import { ApiError, api } from '../../../api/client'
+import {
+  archiveSpool,
+  bindTag,
+  createSpool,
+  deleteSpool,
+  getInventory,
+  getSpool,
+  getSummary,
+  getTag,
+  getType,
+  listEvents,
+  listLocations,
+  listSpools,
+  listTags,
+  moveSpool,
+  patchSpool,
+  unbindTag,
+  upsertCatalog,
+  upsertLocation,
+  upsertType,
+  type SpoolCreate,
+  type SpoolPatch,
+  type SpoolTypeCreate,
+} from '../../../api/filament'
 import { resetMockState } from '../../handlers'
-import { spoolId, TAG } from './seed'
+import { B, IT, L, LK, M, spoolId, T, TAG } from './seed'
 
 // #6262 Task 14 — the Filament section's mock API over its seed, through the client.
+
+/** The problem a call was refused with: its status, title and detail. */
+async function refusal(call: Promise<unknown>) {
+  const error = await call.then(
+    () => null,
+    (cause: unknown) => cause,
+  )
+  expect(error).toBeInstanceOf(ApiError)
+  const { status, title, detail } = (error as ApiError).problem
+  return { status, title, detail }
+}
+
+const NEW_SPOOL = { weight_locked: false } as SpoolCreate
+const NOBODY = '00000000-0000-4000-8000-000000000000'
 
 describe('the filament mocks', () => {
   it('seeds 12 spools: opaque, translucent, clear, one needing a type, one Unknown, one archived', async () => {
@@ -26,36 +64,193 @@ describe('the filament mocks', () => {
     expect(archived.tag).toBeNull()
     expect(archived.last_tag).toMatchObject({ tag: { id: TAG.MOVED }, held_by: 3 })
     expect((await getSpool(spoolId(3))).tag?.id).toBe(TAG.MOVED)
-    const history = (await getTag(TAG.MOVED)).history
+    const history = (await getTag(TAG.MOVED)).history ?? []
     expect(history.map((binding) => binding.spool_id)).toEqual([spoolId(3), spoolId(19)])
     expect((await listTags()).map((tag) => tag.spool_number)).toEqual([3, 4])
     expect(await listTags({ includeUnbound: true })).toHaveLength(3)
   })
 
-  it('serves the inventory, the summary, the places and the ledger from the same spools', async () => {
+  it('serves the inventory, the summary and the places from the same spools', async () => {
     const inventory = await getInventory()
     expect(inventory.spools.find((row) => row.spool.number === 8)?.loaded).toMatchObject({ ams_id: 0, tray_id: 3 })
     expect(inventory.spools.some((row) => row.spool.number === 19)).toBe(false)
-    const summary = await getSummary()
-    expect(summary).toMatchObject({ spools: 11, loaded: 2, needs_type: 2 })
+    expect(await getSummary()).toMatchObject({ spools: 11, loaded: 2, needs_type: 2 })
     const [workshop] = await listLocations()
-    expect(workshop?.children.map((place) => [place.name, place.spool_count])).toEqual([
+    expect((workshop?.children ?? []).map((place) => [place.name, place.spool_count])).toEqual([
       ['Shelf A', 2],
       ['Dry box 1', 2],
     ])
-    const first = await listEvents({ limit: 5 })
-    expect(first.events).toHaveLength(5)
-    const next = await listEvents({ limit: 5, cursor: first.next_cursor })
-    expect(next.events[0]!.at <= first.events[4]!.at).toBe(true)
+  })
+
+  it('pages the ledger with no row lost or repeated, and refuses a cursor no page gave', async () => {
+    const seen: string[] = []
+    let cursor: string | null | undefined
+    do {
+      const page = await listEvents({ limit: 5, cursor })
+      seen.push(...page.events.map((event) => event.id))
+      cursor = page.next_cursor
+    } while (cursor)
+    const all = await listEvents({ limit: 500 })
+    expect(new Set(seen).size).toBe(seen.length)
+    expect(seen).toEqual(all.events.map((event) => event.id))
+    expect(await refusal(listEvents({ cursor: 'nope' }))).toEqual({
+      status: 422,
+      title: 'Unprocessable Content',
+      detail: 'the cursor is not one this ledger gave',
+    })
   })
 
   it('changes a spool, and reset puts the seed back', async () => {
-    await patchSpool(spoolId(1), { rgba: '#ff000080' } as Parameters<typeof patchSpool>[1])
+    await patchSpool(spoolId(1), { rgba: '#ff000080' } as SpoolPatch)
     expect((await getSpool(spoolId(1))).effective?.rgba).toBe('#FF000080')
     await archiveSpool(spoolId(1))
     expect(await listSpools()).toHaveLength(10)
     resetMockState()
     expect((await getSpool(spoolId(1))).effective?.rgba).toBe('#FFFFFFFF')
     expect(await listSpools()).toHaveLength(11)
+  })
+
+  it('answers 404 for a spool, type or tag that does not exist', async () => {
+    expect(await refusal(getSpool(NOBODY))).toEqual({ status: 404, title: 'Not Found', detail: `no spool ${NOBODY}` })
+    expect(await refusal(getType(NOBODY))).toMatchObject({ status: 404, title: 'Not Found' })
+    expect(await refusal(unbindTag(NOBODY))).toMatchObject({ status: 404, title: 'Not Found' })
+  })
+
+  it('adds a spool with a type, or with only its material, and refuses one with neither', async () => {
+    const typed = await createSpool({ ...NEW_SPOOL, type_id: T.JADE, grams_left: 1000 })
+    expect(typed).toMatchObject({ number: 20, type_id: T.JADE, effective: { rgba: '#FFFFFFFF' }, names: { material: 'PLA' } })
+    const untyped = await createSpool({ ...NEW_SPOOL, material_id: M.PETG, rgba: '#00ff0080' })
+    expect(untyped).toMatchObject({ number: 21, type_id: null, rgba: '#00FF0080' })
+    expect((await listSpools({ needsType: true })).map((spool) => spool.number)).toContain(21)
+
+    expect(await refusal(createSpool(NEW_SPOOL))).toEqual({
+      status: 422,
+      title: 'Unprocessable Content',
+      detail: 'a spool needs a type_id or a material_id',
+    })
+    expect(await refusal(createSpool({ ...NEW_SPOOL, material_id: M.PLA, brand_id: T.JADE }))).toMatchObject({
+      status: 422,
+      detail: 'a row this one points at does not exist',
+    })
+    expect(await refusal(createSpool({ ...NEW_SPOOL, material_id: M.PLA, nozzle_temp_min: 240, nozzle_temp_max: 200 }))).toMatchObject({
+      status: 422,
+      detail: 'nozzle_temp_min is above nozzle_temp_max',
+    })
+    expect(await refusal(patchSpool(spoolId(6), { material_id: null } as SpoolPatch))).toMatchObject({
+      status: 422,
+      detail: 'a spool needs a type_id or a material_id',
+    })
+  })
+
+  it('deletes a spool that never printed, and refuses one that did', async () => {
+    expect(await refusal(deleteSpool(spoolId(4)))).toEqual({
+      status: 409,
+      title: 'Conflict',
+      detail: 'the spool has prints in its ledger; archive it instead',
+    })
+    await deleteSpool(spoolId(9))
+    expect(await refusal(getSpool(spoolId(9)))).toMatchObject({ status: 404 })
+  })
+
+  it('binds a tag, moving it off the spool that had it, and unbinds it', async () => {
+    const bound = await bindTag(spoolId(1), { tag_uid: '04:a1:b2:c3:d4:e5:f6', kind: 'other', override: true })
+    expect(bound).toMatchObject({ tag_id: TAG.MOVED, spool_id: spoolId(1), unbound_at: null })
+    expect((await getSpool(spoolId(3))).tag).toBeNull()
+    const history = (await getTag(TAG.MOVED)).history ?? []
+    expect(history[1]).toMatchObject({ spool_id: spoolId(3), reason: 'rebound' })
+
+    expect(await unbindTag(TAG.MOVED)).toMatchObject({ spool_id: spoolId(1), reason: 'unbound' })
+    expect((await getSpool(spoolId(1))).tag).toBeNull()
+    expect(await refusal(unbindTag(TAG.MOVED))).toMatchObject({ status: 404 })
+  })
+
+  it('refuses a tag whose two keys name two tags, and one with no key once cleaned', async () => {
+    const clash = bindTag(spoolId(1), { tag_uid: '04A1B2C3D4E5F6', tray_uuid: '7F3E1C0A9B8D4E2F8A6B5C4D3E2F1A0B', kind: 'other', override: false })
+    expect(await refusal(clash)).toEqual({
+      status: 409,
+      title: 'Conflict',
+      detail: 'the tag_uid and the tray_uuid name two different tags',
+    })
+    expect(await refusal(bindTag(spoolId(1), { tag_uid: '00:00:00', kind: 'other', override: false }))).toMatchObject({
+      status: 422,
+      detail: 'the tag has no tag_uid or tray_uuid once cleaned',
+    })
+  })
+
+  it('archiving a spool takes its tag off', async () => {
+    await archiveSpool(spoolId(4))
+    expect((await getSpool(spoolId(4))).last_tag).toMatchObject({ tag: { id: TAG.BLACK }, reason: 'archived' })
+  })
+
+  it('moves a spool, and refuses a place that does not exist', async () => {
+    expect((await moveSpool(spoolId(9), L.SHELF_A)).location_id).toBe(L.SHELF_A)
+    expect(await refusal(moveSpool(spoolId(9), NOBODY))).toEqual({
+      status: 422,
+      title: 'Unprocessable Content',
+      detail: 'the place to move to does not exist or is archived',
+    })
+  })
+
+  it('adds a priced type with its price book row, and refuses a bad one', async () => {
+    const body = { code: 'BL-PLA-BASIC-CYAN', material_id: M.PLA, brand_id: B.BAMBU, rgba: '#0086d680', label_weight_g: 1000, cost_per_kg: '18.5' } as SpoolTypeCreate
+    const made = await upsertType(body)
+    expect(made.filament_id).not.toBeNull()
+    const book = await api.priceBook()
+    expect(book.filaments.find((row) => row.id === made.filament_id)).toMatchObject({
+      material: 'PLA',
+      brand: 'Bambu Lab',
+      colour: '#0086D6',
+      alpha: 0x80,
+      cost_per_kg: '18.5000',
+    })
+    expect(await refusal(upsertType(body))).toMatchObject({ status: 409, detail: 'a row of this catalog already has that name' })
+    expect(await refusal(upsertType({ ...body, code: 'X', brand_id: M.PLA }))).toMatchObject({
+      status: 422,
+      detail: 'a row this one points at does not exist',
+    })
+    expect(await refusal(upsertType({ ...body, code: 'X', bed_temp_min: 80, bed_temp_max: 60 }))).toMatchObject({
+      status: 422,
+      detail: 'bed_temp_min is above bed_temp_max',
+    })
+    expect(await refusal(upsertType({ nozzle_temp_min: 300, nozzle_temp_max: 200 }, T.JADE))).toMatchObject({
+      status: 422,
+      detail: 'nozzle_temp_min is above nozzle_temp_max',
+    })
+  })
+
+  it('refuses a catalog row whose name is taken, whose reference is missing, or that clears its name', async () => {
+    expect(await refusal(upsertCatalog('brands', { name: 'bambu lab' }))).toEqual({
+      status: 409,
+      title: 'Conflict',
+      detail: 'a row of this catalog already has that name',
+    })
+    expect(await refusal(upsertCatalog('subtypes', { name: 'Glow', material_id: B.BAMBU }))).toMatchObject({
+      status: 422,
+      detail: 'a row this one points at does not exist',
+    })
+    expect(await refusal(upsertCatalog('insert-types', { name: 'Glass spool', empty_weight_g: 300, insert_material_id: IT.CARDBOARD }))).toMatchObject({
+      status: 422,
+    })
+    expect(await refusal(upsertCatalog('materials', { name: 'ASA', nozzle_temp_min: 270, nozzle_temp_max: 240 }))).toMatchObject({
+      status: 422,
+      detail: 'nozzle_temp_min is above nozzle_temp_max',
+    })
+    expect(await refusal(upsertCatalog('brands', { name: null } as never, B.BAMBU))).toMatchObject({ status: 422, detail: 'name cannot be cleared' })
+    expect(await upsertCatalog('brands', { name: 'Overture' })).toMatchObject({ name: 'Overture', archived_at: null })
+  })
+
+  it('refuses a place whose name is taken, whose kind is missing, or that would sit under itself', async () => {
+    expect(await refusal(upsertLocation({ name: 'Shelf A', kind_id: LK.SHELF, parent_id: L.WORKSHOP, sort_order: 0 }))).toMatchObject({
+      status: 409,
+      detail: 'a place with that name or that tray already exists',
+    })
+    expect(await refusal(upsertLocation({ name: 'Shelf B', kind_id: L.WORKSHOP, sort_order: 0 }))).toMatchObject({
+      status: 422,
+      detail: 'a row this one points at does not exist',
+    })
+    expect(await refusal(upsertLocation({ parent_id: L.SHELF_A }, L.WORKSHOP))).toMatchObject({
+      status: 409,
+      detail: 'a place cannot be its own parent or sit under one of its own',
+    })
   })
 })

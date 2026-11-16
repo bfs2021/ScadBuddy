@@ -38,14 +38,15 @@ export function RgbaColourField({ value, onChange, inherited = null }: RgbaColou
   if (value !== seen) {
     // A new value from outside: show it, unless the draft already reads as it.
     setSeen(value)
-    if (parseRgba(draft) !== value) setDraft(value ?? '')
+    if (parseRgba(draft.trim()) !== value) setDraft(value ?? '')
   }
 
   const base = value ?? (inherited ? parseRgba(inherited) : null) ?? BLANK
   const alpha = alphaOf(base)
-  // Said once the field is left, not at every keystroke on the way to six digits.
+  // Said once the field is left, not at every keystroke on the way to six digits, and
+  // dropped once the draft reads again: the next mistake waits for the next leave.
   const [left, setLeft] = useState(false)
-  const invalid = left && draft.trim() !== '' && parseRgba(draft) === null
+  const invalid = left && draft.trim() !== '' && parseRgba(draft.trim()) === null
   const errorId = `${id}-error`
 
   return (
@@ -64,8 +65,11 @@ export function RgbaColourField({ value, onChange, inherited = null }: RgbaColou
             onBlur={() => setLeft(true)}
             onChange={(event) => {
               setDraft(event.target.value)
-              const parsed = parseRgba(event.target.value)
-              if (parsed !== null && parsed !== value) onChange(parsed)
+              // Spaces around a pasted colour are the field's to drop, not the parser's.
+              const parsed = parseRgba(event.target.value.trim())
+              if (parsed === null) return
+              setLeft(false)
+              if (parsed !== value) onChange(parsed)
             }}
             className="w-32 tabular-nums"
           />
@@ -81,7 +85,7 @@ export function RgbaColourField({ value, onChange, inherited = null }: RgbaColou
           />
         </div>
         {invalid && (
-          <p id={errorId} className="text-[12px] text-destructive">
+          <p id={errorId} role="alert" className="text-[12px] text-destructive">
             Use six or eight hex digits: #RRGGBB or #RRGGBBAA.
           </p>
         )}

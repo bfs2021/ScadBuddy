@@ -79,7 +79,31 @@ describe('RgbaColourField', () => {
     await user.tab()
     expect(onChange).not.toHaveBeenCalled()
     expect(hex).toHaveAttribute('aria-invalid', 'true')
-    expect(screen.getByText('Use six or eight hex digits: #RRGGBB or #RRGGBBAA.')).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent('Use six or eight hex digits: #RRGGBB or #RRGGBBAA.')
+  })
+
+  it('drops the error once the hex reads, and waits for the next leave to say it again', async () => {
+    const { user } = setup('#FF8800FF')
+    const hex = screen.getByRole('textbox', { name: 'Colour (hex)' })
+    await user.clear(hex)
+    await user.type(hex, '#12')
+    await user.tab()
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+    await user.click(hex)
+    await user.type(hex, '3456')
+    expect(hex).toHaveAttribute('aria-invalid', 'false')
+    expect(screen.queryByRole('alert')).toBeNull()
+    await user.type(hex, '7')
+    expect(hex).toHaveAttribute('aria-invalid', 'false')
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('takes a hex with spaces around it, as typed or pasted', async () => {
+    const { onChange, user } = setup('#FF8800FF')
+    const hex = screen.getByRole('textbox', { name: 'Colour (hex)' })
+    await user.clear(hex)
+    await user.type(hex, ' #1b6ca8 ')
+    expect(onChange).toHaveBeenLastCalledWith('#1B6CA8FF')
   })
 
   it('the native picker changes the colour and keeps the alpha', () => {

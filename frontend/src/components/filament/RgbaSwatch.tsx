@@ -29,7 +29,8 @@ export interface RgbaSwatchProps extends Omit<ComponentProps<'span'>, 'children'
  * #6262 — a spool chip: its `#RRGGBBAA` colour as a disc over a checkerboard, so a
  * translucent or clear spool never looks like an opaque one. With both the grams left and
  * the label weight known, a thin ring around the disc shows what is left as an arc from
- * twelve o'clock. Hidden from assistive tech: whatever sits beside it names the spool.
+ * twelve o'clock. Hidden from assistive tech: whatever sits beside it names the spool,
+ * so a chip shown alone needs a visible or `sr-only` name next to it.
  * `data-colour` is the `#RRGGBBAA`, for a test.
  */
 export function RgbaSwatch({ rgba, size = 'md', gramsLeft, labelWeight, className, style, ...props }: RgbaSwatchProps) {
