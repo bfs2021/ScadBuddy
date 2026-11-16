@@ -71,7 +71,7 @@ import {
   withServiceCredential,
 } from './api/serviceCredential.js'
 import { untilBackendAnswers } from './api/backendUp.js'
-import { BLOB_AREAS, CrudAreas, FORGET_AREAS, GATE_AREAS, SECRET_AREAS, TASK_AREAS, WORKSPACE_AREAS } from './api/crudAreas.js'
+import { BLOB_AREAS, CrudAreas, FORGET_AREAS, GATE_AREAS, SECRET_AREAS, SESSION_AREAS, TASK_AREAS, WORKSPACE_AREAS } from './api/crudAreas.js'
 import { CrudApprovals } from './approvals/crudApprovals.js'
 import { CrudAudit } from './audit/crudAudit.js'
 import { CrudPending } from './gate/crudPending.js'
@@ -102,7 +102,8 @@ import { drainRetains, type MemoryOptions } from './memory/hindsight.js'
 import { shutdown } from './shutdown.js'
 import { shutdownTelemetry, traceListener } from './telemetry/runtime.js'
 import { harnessTools } from './tools/harness.js'
-import { SessionResources } from './sessions/touched.js'
+import { CrudResourceRows, PgResourceRows, type ResourceRows, SessionResources } from './sessions/touched.js'
+import { CrudSessionRows, PgSessionRows, type SessionRows } from './sessions/rows.js'
 import { crudCostPoster, OrderCosts, touchedSinks } from './sessions/orderCosts.js'
 import { ALL_TOOLS } from './tools/index.js'
 import { CrudFlowBlobs, gatedFlowBlobs, PgFlowBlobs } from './temporal/flowBlobs.js'
@@ -254,9 +255,10 @@ const serviceCredential: CredentialSource | undefined =
 // with those areas listed this process needs no KEK for them. So do the key deletes and a flow
 // run's images (#5299 step 6, area `forget`). A session's background tasks and the agent's
 // command record (#5299 step 8, `TASK_AREAS`) follow the same rule, and so do the tool-call
-// gate's writes (#5299 step 10, `GATE_AREAS`), but for a run grant's check, which only the API runs.
+// gate's writes (#5299 step 10, `GATE_AREAS`), but for a run grant's check, which only the API runs,
+// and the sessions' rows and what their calls touched (#5299 step 9, `SESSION_AREAS`).
 const crudFetch = serviceCredential ? withServiceCredential(globalThis.fetch, serviceCredential, config.backendUrl) : globalThis.fetch
-const crudAreas = new CrudAreas(config.backendUrl, { fetch: crudFetch, wanted: [...SECRET_AREAS, ...FORGET_AREAS, ...STORE_AREAS, ...WORKSPACE_AREAS, ...BLOB_AREAS, ...TASK_AREAS, ...GATE_AREAS] })
+const crudAreas = new CrudAreas(config.backendUrl, { fetch: crudFetch, wanted: [...SECRET_AREAS, ...FORGET_AREAS, ...STORE_AREAS, ...WORKSPACE_AREAS, ...BLOB_AREAS, ...TASK_AREAS, ...GATE_AREAS, ...SESSION_AREAS] })
 crudAreas.start()
 // The small stores (#5299 step 5, api/crudStores.ts): each through its CRUD routes once the API
 // lists its area, over SQL until then.
@@ -274,6 +276,12 @@ const httpBodies =
   (sql: Sql): HttpBodiesFor =>
   (sessionId) =>
     gated<SavedBodies>(new PgHttpBodies(sql, sessionId), new CrudHttpBodies(config.backendUrl, sessionId, { fetch: crudFetch }), () => crudAreas.has('http-bodies'))
+// The sessions' rows and what their calls touched (#5299 step 9, backend api/crud_agent_sessions.py):
+// over SQL on `sql` until the API lists areas `sessions` and `session-resources`.
+const crudSessionRows = new CrudSessionRows(config.backendUrl, { fetch: crudFetch })
+const sessionRows = (sql: Sql): SessionRows => gated<SessionRows>(new PgSessionRows(sql), crudSessionRows, () => crudAreas.has('sessions'))
+const crudResourceRows = new CrudResourceRows(config.backendUrl, { fetch: crudFetch })
+const resourceRows = (sql: Sql): ResourceRows => gated<ResourceRows>(new PgResourceRows(sql), crudResourceRows, () => crudAreas.has('session-resources'))
 // The headless browser's approved origins (#982), over `sql` or through area `browser-origins`.
 const browserOriginsOn = (sql: Sql) =>
   new BrowserOrigins(sql, settings, { crud: new CrudSessionOrigins(crudTarget), use: storeArea('browser-origins') })
@@ -450,7 +458,7 @@ if (database && orderCosts && role.http) {
 }
 if (database && orderCosts) {
   toolServices.touched = touchedSinks(
-    new SessionResources(database.sql, (err) => console.error('session resources: could not record a call:', (err as Error).message)),
+    new SessionResources(resourceRows(database.sql), (err) => console.error('session resources: could not record a call:', (err as Error).message)),
     orderCosts,
   )
 }
@@ -653,6 +661,8 @@ const sessions =
     ? new SessionManager({
         memory,
         sql: database.sql,
+        rows: sessionRows(database.sql),
+        resourceRows: resourceRows(database.sql),
         pendingRoutes,
         approvalRoutes: { crud: new CrudApprovals(crudTarget), use: () => crudAreas.has('approvals') },
         questionRoutes: { crud: new CrudQuestions(crudTarget), use: () => crudAreas.has('questions') },
