@@ -890,3 +890,36 @@ def test_a_bb_update_before_the_settle_counts_the_plate_once(pg_pool: PgPool) ->
     # BB's next write, after a later plate, still anchors.
     pull(f, [bb(weight_used=200.0, updated_at=_now_in_bb())], now=NOW)
     assert f.spools.get(made).grams_left == 800  # type: ignore[union-attr]
+
+
+def test_a_persons_row_matching_bambuddys_value_is_kept(pg_pool: PgPool) -> None:
+    """Task 7 re-review 3: a person's row (not migrated) is never Bambuddy's, even when
+    it holds Bambuddy's last value, so Bambuddy's next change leaves it alone."""
+    f = _filament(pg_pool)
+    pull(f, [bb(slicer_filament="GFA00", slicer_filament_name="Bambu PLA Basic")], now=NOW)
+    (spool,) = f.spools.list()
+    with pg_pool.connection() as conn:
+        conn.execute(
+            "UPDATE filament_spool_presets SET migrated = false"
+            " WHERE spool_id = %s AND nozzle_diameter = '0.4'",
+            (spool.id,),
+        )
+
+    pull(
+        f,
+        [
+            bb(
+                slicer_filament="GFA05",
+                slicer_filament_name="Bambu PLA Silk",
+                updated_at=_bb_time(1),
+            )
+        ],
+        now=NOW,
+    )
+
+    assert _own_presets(pg_pool, spool.id) == [
+        ("0.2", "GFA05", "Bambu PLA Silk", True),
+        ("0.4", "GFA00", "Bambu PLA Basic", False),
+        ("0.6", "GFA05", "Bambu PLA Silk", True),
+        ("0.8", "GFA05", "Bambu PLA Silk", True),
+    ]

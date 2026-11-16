@@ -300,19 +300,22 @@ def _bb_presets(conn: Conn, spool_id: UUID, bb: BbSpool, actor: str) -> bool:
     )
     if link["typed"] or sent == last:
         return False
+    found = conn.execute(
+        "SELECT nozzle_diameter, slicer_filament, slicer_filament_name, migrated"
+        " FROM filament_spool_presets WHERE spool_id = %s AND printer_model = %s",
+        (spool_id, PRINTER_MODEL),
+    ).fetchall()
     rows = {
         row["nozzle_diameter"]: (row["slicer_filament"], row["slicer_filament_name"])
-        for row in conn.execute(
-            "SELECT nozzle_diameter, slicer_filament, slicer_filament_name"
-            " FROM filament_spool_presets WHERE spool_id = %s AND printer_model = %s",
-            (spool_id, PRINTER_MODEL),
-        ).fetchall()
+        for row in found
     }
-    # Bambuddy's own rows: none, or the ones still holding what it sent last.
+    migrated = {row["nozzle_diameter"] for row in found if row["migrated"]}
+    # Bambuddy's own rows: none, or migrated ones still holding what it sent last. A
+    # person's row (not migrated) is never Bambuddy's, even when its value matches.
     ours = [
         size
         for size in BB_PRESET_NOZZLES
-        if size not in rows or (last[0] is not None and rows[size] == last)
+        if size not in rows or (last[0] is not None and size in migrated and rows[size] == last)
     ]
     wanted = [size for size in ours if rows.get(size) != (sent if sent[0] else None)]
     if not wanted:
