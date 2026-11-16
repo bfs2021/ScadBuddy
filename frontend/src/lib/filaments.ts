@@ -86,11 +86,12 @@ export function amsUnitLabel(amsId: number): string {
  * slot 1. The one wording for a loaded spool, in the print dialog and Settings alike.
  */
 export function trayPlace(
-  loaded: { printer_id: number; printer_name?: string | null; ams_id: number; tray_id: number },
+  loaded: { printer_id: number | string | null; printer_name?: string | null; ams_id: number; tray_id: number },
   { printer = false }: { printer?: boolean } = {},
 ): string {
   const place = `${amsUnitLabel(loaded.ams_id)} · slot ${loaded.tray_id + 1}`
-  return printer ? `${loaded.printer_name ?? `Printer ${loaded.printer_id}`} · ${place}` : place
+  if (!printer) return place
+  return `${loaded.printer_name ?? (loaded.printer_id === null ? 'A printer' : `Printer ${loaded.printer_id}`)} · ${place}`
 }
 
 /**

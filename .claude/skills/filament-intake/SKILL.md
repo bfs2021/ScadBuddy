@@ -17,8 +17,9 @@ against what is already in inventory.
 Where the spools live today: Bambuddy (BB) owns the spool inventory, and
 ScadBuddy (SB) reads it. SB's overlay refreshes every
 `spool_overlay_refresh_seconds` (300 s, `backend/scadbuddy/core/settings.py`),
-and SB's price book (`filaments`) is filled from BB spools only on request
-(step 8). So the scripts write to BB.
+and SB's price book (`filaments`) is filled only on request (step 8), from
+SB's own spools (#6262), not BB's: a spool that is only in BB is not priced
+until it is an SB spool. So the scripts write to BB.
 
 BB is `https://bambuddy.internal.nullreference.io` (`BAMBUDDY` overrides it).
 Write endpoints need no API key on this instance. Printer model string is `H2C`.
@@ -55,12 +56,13 @@ Write endpoints need no API key on this instance. Printer model string is `H2C`.
    - No spool has a null `cost_per_kg` or a null `note`. A cost without a note is what makes the next intake ambiguous.
 8. **Bring the prices into ScadBuddy.** Run the price book import: the agent tool
    `price_book_import_spools`, or `POST /api/v1/orders/price-book/import-spools`
-   (`backend/scadbuddy/api/orders.py`). It groups BB spools by material,
-   subtype, brand and colour and takes the newest priced spool's `cost_per_kg`
+   (`backend/scadbuddy/api/orders.py`). It groups SB spools by material,
+   subtype, brand and `#RRGGBBAA` (an opaque and a translucent spool are two
+   filaments) and takes the newest priced spool's `cost_per_kg`
    (`backend/scadbuddy/orders/spool_import.py`). Read its report: a filament
    whose spools have different prices shows the min and max, and the newest
-   one wins. A group with no `#RRGGBB` colour or no priced spool is reported
-   and skipped: fix the spool in BB and run it again. The new spools themselves appear in SB's print dialog after the
+   one wins. A group with no colour or no priced spool is reported
+   and skipped: fix the spool in SB and run it again. The new spools themselves appear in SB's print dialog after the
    next overlay refresh (at most 300 s).
 
 ## Traps

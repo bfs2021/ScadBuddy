@@ -1133,8 +1133,9 @@ class PriceBook(BaseModel):
     rough_estimate_factor: str
     #: The records not archived, by material, brand and colour.
     filaments: list[Filament]
-    #: Whether a Bambuddy is linked, so ``POST …/import-spools`` can run (§8.3, #4253).
-    spool_import: bool = False
+    #: Whether ``POST …/import-spools`` can run (§8.3, #4253): always, since it reads
+    #: ScadBuddy's own spools (#6262 Task 9), with or without a Bambuddy.
+    spool_import: bool = True
 
 
 SpoolImportAction = Literal["created", "updated", "unchanged", "skipped"]

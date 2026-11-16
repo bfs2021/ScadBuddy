@@ -93,7 +93,7 @@ test.describe('native hot path (msw)', () => {
     await expect(page.getByTestId('now-printing').getByText('H2C', { exact: true })).toBeVisible()
     // One Bambuddy-only route asked on purpose, and one 409 of another kind.
     const statuses = await page.evaluate(async () => {
-      const refused = await fetch('/api/v1/farm/inventory')
+      const refused = await fetch('/api/v1/print/printers/1/camera')
       // A name already taken: the duplicate route's own 409, nothing to do with Bambuddy.
       const other = await fetch('/api/v1/models/name-keychain/duplicate', {
         method: 'POST',
@@ -103,6 +103,6 @@ test.describe('native hot path (msw)', () => {
       return [refused.status, other.status]
     })
     expect(statuses).toEqual([409, 409])
-    await expect.poll(() => bambuddy).toEqual([expect.stringMatching(/\/api\/v1\/farm\/inventory$/)])
+    await expect.poll(() => bambuddy).toEqual([expect.stringMatching(/\/api\/v1\/print\/printers\/1\/camera$/)])
   })
 })

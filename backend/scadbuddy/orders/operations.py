@@ -43,6 +43,7 @@ from scadbuddy.bambuddy.subject import PrintSubject
 from scadbuddy.core.gitrepo import GitError, RevisionNotFoundError
 from scadbuddy.core.problems import ApiError
 from scadbuddy.filament.component import FILAMENT
+from scadbuddy.filament.inventory import read_sb_spools
 from scadbuddy.library.catalogue import declares_pipeline
 from scadbuddy.library.libraries import CheckoutFetcher
 from scadbuddy.library.operations import PIN_TIMEOUT
@@ -221,6 +222,13 @@ class PreviewSlicer:
         slicing = self.components.get(SLICING)
         # Bambuddy's path offers ScadBuddy's own spools (#6262 Task 7), as the run's.
         reads = self.components.get(FILAMENT).reads
+        # A native printer's held SB spools and their presets, read as the dialog's
+        # background slice reads them (`bambuddy/operations.py` `preview_run`), so the
+        # quote's grams, time and price use the preset the print will (#6262 Task 9).
+        sb = None
+        if lan:
+            assert route is not None
+            sb = await read_sb_spools(reads, route.row, route.status)
         if file_id is not None:
             return await start_library_quote_preview(
                 file_id,
@@ -235,6 +243,7 @@ class PreviewSlicer:
                 native_reads=native_reads,
                 route=route,
                 reads=reads,
+                sb=sb,
             )
         assert output_id is not None
         outputs = LocalOutputs(core.outputs, core.catalogue)
@@ -269,6 +278,7 @@ class PreviewSlicer:
             route=route,
             title=naming.title,
             reads=reads,
+            sb=sb,
         )
 
     async def poll(self, started: PreviewStarted, subject: str) -> SlicedPlate | None:
@@ -618,20 +628,23 @@ def order_kinds(core: Core, components: Components) -> list[OperationKind]:
         native = await native_run(body, settings)
         if body.path == "native" and "path" not in sent_keys(sent) and not native:
             raise quoted_path_refusal(request["item_id"])
-        # §5.4 "Spools" (#4251): each slot's spool from the item's filaments, in the check
-        # so a refusal writes nothing, and recorded with it so a retry keys its run as
-        # the first try did. On the native path the plan is the request's.
+        # §5.4 "Spools" (#4251): each slot's spool from the item's filaments, ScadBuddy's
+        # own (#6262 Task 9), in the check so a refusal writes nothing, and recorded with
+        # it so a retry keys its run as the first try did. On the native path the plan is
+        # the request's: its choices are the printer's trays.
         if not native:
-            printer_id = body.printer_id
-            if printer_id is None and body.printer is not None:
-                row = await asyncio.to_thread(components.get(PRINTERS).store.get, body.printer)
-                printer_id = None if row is None else row.bambuddy_printer_id
+            printer = body.printer
+            if printer is None and body.printer_id is not None:
+                row = await asyncio.to_thread(
+                    components.get(PRINTERS).store.by_bambuddy_id, body.printer_id
+                )
+                printer = None if row is None else row.id
             plan = await item_plan(
                 orders.store,
-                orders.integrations,
+                orders.inventory,
                 request["item_id"],
                 body.filament_plan,
-                printer_id,
+                printer,
             )
             if plan is not None:
                 checked["filament_plan"] = plan.model_dump(mode="json")

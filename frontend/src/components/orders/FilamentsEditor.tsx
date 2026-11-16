@@ -81,8 +81,8 @@ function importLine(row: SpoolImportRow): string {
 }
 
 /**
- * Where a record's density came from (#6136): the preset Bambuddy linked it to, or a
- * person. An empty one says that an estimate of it is refused, never a bare dash.
+ * Where a record's density came from (#6136): the slicer preset its spools name, a
+ * spool's own density (#6262 Task 9), or a person. An empty one says that an estimate of it is refused, never a bare dash.
  */
 function densityText(f: Pick<Filament, 'density_g_cm3' | 'density_profile'>): { text: string; missing: boolean } {
   if (f.density_g_cm3) return { text: f.density_profile ? `${f.density_g_cm3} g/cm³, from ${f.density_profile}` : `${f.density_g_cm3} g/cm³`, missing: false }
@@ -91,7 +91,7 @@ function densityText(f: Pick<Filament, 'density_g_cm3' | 'density_profile'>): { 
 
 function fillLine(row: DensityFillRow): string {
   const name = filamentLabel(row) || row.material
-  return row.density_g_cm3 ? `${name}: filled, ${row.density_g_cm3} g/cm³ from ${row.density_profile}` : `${name}: no source (Bambuddy links no preset or density to it); enter its density`
+  return row.density_g_cm3 ? `${name}: filled, ${row.density_g_cm3} g/cm³ from ${row.density_profile}` : `${name}: no source (none of its spools names a preset or a density); enter its density`
 }
 
 /**
@@ -99,11 +99,12 @@ function fillLine(row: DensityFillRow): string {
  * Settings page's Orders section: what a kilogram of each costs, and its density for the
  * rough estimate. A record is never deleted, only archived: a quote priced with it keeps
  * its lines, and an item may still name it. "Show archived" lists the archived ones, each
- * with an Unarchive that brings the same record back (#4977). With Bambuddy linked
- * (`spool_import`), "Import from spools" makes or updates one record per filament of its
- * spool inventory, on click only: a quote never reads Bambuddy (#4253, spec §8.3).
- * Each density says where it came from; "Fill densities" writes into every empty one
- * the density Bambuddy's link to the slicer preset gives (#6136).
+ * with an Unarchive that brings the same record back (#4977). "Import from spools" makes
+ * or updates one record per filament of ScadBuddy's spools (names and `#RRGGBBAA`, so an
+ * opaque and a translucent spool are two records, #6316), on click only: a quote never
+ * reads spools (#4253, spec §8.3; #6262 Task 9: no Bambuddy needed, `spool_import` is
+ * always true). Each density says where it came from; "Fill densities" writes into every
+ * empty one the density its spools' slicer preset or own density gives (#6136).
  */
 export function FilamentsEditor() {
   const [showArchived, setShowArchived] = useState(false)
@@ -305,7 +306,7 @@ export function FilamentsEditor() {
       {imported && (
         <div role="status" aria-label="Spool import" className="text-xs text-muted-foreground">
           {imported.length === 0 ? (
-            <p>Bambuddy has no spools to import.</p>
+            <p>ScadBuddy has no spools to import.</p>
           ) : (
             <ul className="list-disc pl-4">
               {imported.map((row) => (

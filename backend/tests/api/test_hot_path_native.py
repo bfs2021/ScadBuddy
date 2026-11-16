@@ -858,6 +858,33 @@ def _quote_body(client: TestClient, model: str, row: str) -> tuple[str, dict[str
     return path, {**dialog, "filaments": {"0": pla, "1": petg}}
 
 
+def test_a_native_quote_slices_with_the_held_spools_preset(
+    native_app: TestClient,
+    model: str,
+    fake_lan: FakeLan,
+    slicer: FakeSlicer,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#6262 Task 9: a quote's background slice on a native printer resolves with the SB
+    spool in each tray and its presets, as the dialog's preview does, so its grams, time
+    and price come from the preset the print will use: the tagged tray's spool names its
+    own H2C 0.4 preset, over the tray's ``tray_info_idx``."""
+    row = lan_row(native_app, fake_lan)
+    _own_preset(native_app, held_spool(native_app))
+    planned = _preview_plans(monkeypatch)
+    path, body = _quote_body(native_app, model, row)
+    slicer.sliced = sliced_plate(1, 3600, [12.5, 3.0])
+
+    started = native_app.post(path, json=body, headers=press())
+    assert started.status_code == 202, started.text
+    op = follow_operation(native_app, started.json(), timeout=120, poll=0.2)
+
+    assert op["status"] == "succeeded", op
+    (run,) = planned
+    presets = [ref.id for ref in run.plates[0].plan.filament_presets]
+    assert presets[0] == "Generic PLA @BBL H2C", presets
+
+
 def test_a_quote_naming_a_disagreeing_printer_is_refused_before_it_starts(
     native_app: TestClient, model: str, fake_lan: FakeLan
 ) -> None:
@@ -1113,8 +1140,8 @@ def test_a_library_check_naming_no_printer_answers_without_bambuddy(
 @NO_BAMBUDDY
 @pytest.mark.parametrize(
     "path",
-    ["/api/v1/print/printers/1/camera", "/api/v1/farm/inventory", "/api/v1/print/projects"],
-    ids=["camera", "inventory", "projects"],
+    ["/api/v1/print/printers/1/camera", "/api/v1/farm/stats", "/api/v1/print/projects"],
+    ids=["camera", "stats", "projects"],
 )
 def test_bambuddy_only_routes_still_say_why(native_app: TestClient, path: str) -> None:
     """A route that is Bambuddy's by nature keeps `client_for`'s 409 naming Settings."""

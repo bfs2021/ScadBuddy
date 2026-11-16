@@ -1460,15 +1460,23 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   that imports `bambuddy.client` (`tests/test_orders_bambuddy_seam.py`), reached through
   `orders/integrations.py` `OrderIntegrations` (`OrdersComponent.integrations`, chosen for
   the running `bambuddy_url`; `NotLinked` without one); the quote's Bambuddy slice calls
-  live there too. `POST /orders/price-book/import-spools` (`orders/spool_import.py`) makes
-  or updates filament records from the spools, on click only (`PriceBook.spool_import`).
+  live there too. The orders read ScadBuddy's own spools, never Bambuddy's (#6262 Task 9):
+  `OrdersComponent.inventory` is the filament component's `FilamentInventory`, and
+  `OrderIntegrations` keeps only `local_densities` (Bambuddy's local presets, `{}` when
+  Bambuddy is unlinked or refuses). `POST /orders/price-book/import-spools`
+  (`orders/spool_import.py` `inventory_groups`) makes or updates filament records from the
+  SB spools, on click only, with or without Bambuddy (`PriceBook.spool_import` is always
+  true); a group is the spools' effective names and `#RRGGBBAA` (#6316: an opaque and a
+  translucent spool of one hue are two records), its `spool_ids` are spool numbers, and the
+  newest priced spool (highest number) prices it. `GET /filament/inventory` and
+  `GET /filament/spools/{spool_id}/summary` (`api/filament.py`, `filament/inventory.py`
+  `view`, `summary`) replace the removed `/farm/inventory` and `/farm/spools/{id}/summary`.
   A record with no density gets one there, from a manual add sent with no density, and
-  from `POST …/price-book/fill-densities` (#6136, `orders/density.py`): the spools' preset id (`slicer_filament`, a K-profile's
-  `setting_id`, the AMS tray's `tray_info_idx`), that preset's density (Bambuddy's local
-  preset, else the image's Bambu Studio preset), else Bambuddy's filament catalogue
-  (only entries whose name holds each word of the spool's subtype); no preset is found
-  by a subtype's name. A density read Bambuddy refuses leaves the density
-  empty and fails nothing. `filaments.density_profile` keeps where it came from; a
+  from `POST …/price-book/fill-densities` (#6136, `orders/density.py`): the newest spool
+  of its names and `#RRGGBBAA` names a slicer preset, whose density is Bambuddy's local
+  preset's (while linked), else the image's Bambu Studio preset's; else the spool's own
+  effective density (`ScadBuddy spool #N`). No preset is found by a subtype's name. A
+  density read Bambuddy refuses leaves the density empty and fails nothing. `filaments.density_profile` keeps where it came from; a
   person's density clears it. An estimate reads only the record's own density.
   A record's whole colour (#6209, migration `20261114T1607Z_filaments_alpha_effect.sql`):
   `colour` stays `#RRGGBB` (the render splits parts by it; a clear filament is its RGB with
@@ -1482,7 +1490,8 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   sends it only for a record an import linked to spools (`Filament.spool_linked`:
   `spool_colour` or `spool_ids` set). The import matches only a record of
   the group's material, subtype and brand: by its link to the group's spools (`spool_ids`),
-  else by the spools' RGB (`spool_colour`, then `colour`), never by a colour a person set, so
+  else by the spools' `#RRGGBBAA` (`spool_colour` plus `alpha`, then `colour` plus `alpha`;
+  never a spool of another alpha, `filament/colour.py` `same_opacity`), never by a colour a person set, so
   it makes no duplicate, and a spool whose material was corrected is another filament's
   (`spool_import.py` `_matches`, in three passes over every group, so the groups' order
   never decides: a record linked to a group whose RGB its spools had, then a record linked
@@ -1504,7 +1513,9 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   spools' colour. So run "Import from spools" once after the deploy, before any colour
   edit (#6211 review). An item
   print's spools are matched the same way (`orders/spools.py` `_of`, the store's
-  `spool_links`), so a hand-set colour still finds its spools.
+  `spool_links`), so a hand-set colour still finds its spools; `item_plan` fills SB spool
+  numbers (`ids: "sb"`) from the SB rows of the registry printer, and maps an older
+  `ids: "bb"` plan through `bb_to_sb`.
 - A customer's own models (#6133, spec 2026-11-13; migration
   `20261113T1547Z_storefront_customer_models.sql`): `orders/storefront/model_requests.py`,
   CRUD area `models`, the edge's `POST /api/store/v1/uploads` and `…/draft/models`. The files

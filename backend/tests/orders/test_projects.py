@@ -20,9 +20,8 @@ from scadbuddy.orders.integrations import (
     ArchiveFacts,
     ArchiveMedia,
     CopiedMedia,
+    LocalDensity,
     MaintenanceTask,
-    ShelfSpool,
-    SpoolGroup,
 )
 from scadbuddy.orders.printing import print_item
 from scadbuddy.orders.projects import ensure_projects, item_project, item_project_name
@@ -53,10 +52,7 @@ class Projects:
         self.asked.append(project_id)
         return project_id not in self.deleted
 
-    async def spool_inventory(self) -> list[ShelfSpool]:
-        raise AssertionError("not asked")
-
-    async def spool_groups(self) -> list[SpoolGroup]:
+    async def local_densities(self) -> dict[str, LocalDensity]:
         raise AssertionError("not asked")
 
     async def maintenance_tasks(self, printer_id: int) -> list[MaintenanceTask]:

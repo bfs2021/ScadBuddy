@@ -757,8 +757,9 @@ class TrayPlace(BaseModel):
 
 class FilamentInventorySpool(BaseModel):
     """An SB spool, the tray it is in, and the Bambuddy spool it is linked to
-    (`filament_bb_links`), as the Bambuddy path's print picker reads it (#6262 Task 7).
-    Named apart from `bambuddy/farm.py`'s ``InventorySpool`` (plan F16)."""
+    (`filament_bb_links`), as the Bambuddy path's print picker (#6262 Task 7) and
+    ``GET /filament/inventory`` (Task 9) read it. Named apart from Bambuddy's inventory
+    spool (plan F16)."""
 
     spool: Spool
     loaded: TrayPlace | None = None
@@ -766,6 +767,83 @@ class FilamentInventorySpool(BaseModel):
     #: The spool's effective presets (`presets.effective_presets`), so its row names the
     #: preset it slices with on the chosen nozzle (#6262 Task 7 review R2).
     presets: list[EffectivePreset] = Field(default_factory=list)
+
+
+class InventoryTray(BaseModel):
+    """One filled tray a registry printer's latest report shows (#6262 Task 9): its label,
+    the material and ``#RRGGBBAA`` it reports, and the SB spool it holds
+    (`FilamentInventory.view`), with how that spool was found."""
+
+    ams_id: int
+    tray_id: int
+    #: "AMS-A slot 1", as Bambu's own UI counts.
+    label: str
+    material: str | None = None
+    rgba: str | None = None
+    spool_id: UUID | None = None
+    spool_number: int | None = None
+    found_by: TrayFoundBy | None = None
+
+
+class PrinterTrays(BaseModel):
+    """A registry printer's reported trays, as its latest stored report shows them."""
+
+    printer_id: str
+    printer_name: str
+    trays: list[InventoryTray]
+
+
+class FilamentInventoryView(BaseModel):
+    """ScadBuddy's spools, each with the tray it is in, and every registry printer's
+    reported trays with the SB spool each holds (`GET /filament/inventory`, #6262 Task 9).
+    Named apart from Bambuddy's ``InventoryView`` (plan F16)."""
+
+    spools: list[FilamentInventorySpool]
+    trays: list[PrinterTrays]
+
+
+class SameFilamentPlace(BaseModel):
+    """Where one spool of a filament is loaded."""
+
+    spool_id: UUID
+    spool_number: int
+    loaded: TrayPlace
+
+
+class SameFilamentStock(BaseModel):
+    """Every unarchived SB spool of one filament: the same effective material, subtype,
+    brand and ``#RRGGBBAA`` (the colour's name for a spool with none). An opaque and a
+    translucent spool of one hue are two filaments (#6316)."""
+
+    material: str | None = None
+    subtype: str | None = None
+    brand: str | None = None
+    colour_name: str | None = None
+    rgba: str | None = None
+    spool_count: int
+    spool_numbers: list[int]
+    #: The spools' grams left (their ledgers), summed.
+    grams_left: float
+    #: Where the filament's spools are loaded, one row per loaded spool.
+    loaded: list[SameFilamentPlace]
+
+
+class FilamentSpoolSummary(BaseModel):
+    """What a filament hover card shows for one SB spool (#785, #6262 Task 9): its stock,
+    tray and price, and the stock of every spool of the same filament. Prices are the
+    spool's effective ``cost_per_kg``; every price and cost is ``None`` without one,
+    never a guess."""
+
+    spool: FilamentInventorySpool
+    cost_per_kg: Decimal | None = None
+    #: ``cost_per_kg`` / 1000, to six places.
+    price_per_g: float | None = None
+    #: What the grams left on this spool are worth, to four places.
+    value_left: float | None = None
+    #: ``grams`` x ``price_per_g``, when the caller asked about ``grams`` (a plate's use).
+    grams: float | None = None
+    grams_cost: float | None = None
+    filament: SameFilamentStock
 
 
 class HeldSpool(BaseModel):

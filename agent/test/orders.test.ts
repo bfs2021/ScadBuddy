@@ -1050,8 +1050,12 @@ describe('pricing tools (#4250)', () => {
     ).toEqual(['read', 'write', 'write', 'write', 'read', 'write'])
   })
 
-  // #4253 §8.3
-  it('imports the filaments from spools', async () => {
+  // #4253 §8.3; #6262 Task 9: ScadBuddy's own spools, by number, kept apart by alpha
+  it("imports the filaments from ScadBuddy's spools, with no Bambuddy needed", async () => {
+    const described = tool('price_book_import_spools').description
+    expect(described).toContain("ScadBuddy's own spools")
+    expect(described).toContain('#RRGGBBAA')
+    expect(described).not.toContain('not_linked')
     const rows = [{ action: 'created', material: 'PLA', spool_ids: [3] }]
     let posted = 0
     server.use(
@@ -1065,7 +1069,8 @@ describe('pricing tools (#4250)', () => {
   })
 
   // #6136
-  it("fills the empty densities from Bambuddy's preset links", async () => {
+  it("fills the empty densities from ScadBuddy's spools", async () => {
+    expect(tool('price_book_fill_densities').description).not.toContain('not_linked')
     const rows = [
       {
         filament_id: FILAMENT,

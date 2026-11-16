@@ -511,7 +511,6 @@ const routes: Route[] = [
   // Bambuddy's own: a component that still asks is a bug the spec sees as a 409.
   { method: 'POST', path: /^\/print\/projects$/, answer: noBambuddy },
   { method: 'GET', path: /^\/print\/printers\/[^/]+\/camera(?:\/stream)?$/, answer: noBambuddy },
-  { method: 'GET', path: /^\/farm\/inventory$/, answer: noBambuddy },
   { method: 'POST', path: /^\/print\/printers\/[^/]+\/trays\/\d+\/\d+\/spool$/, answer: noBambuddy },
 ]
 

@@ -1,5 +1,5 @@
 import type {
-  InventoryView,
+  FilamentInventoryView,
   PrintChoices,
   FilamentProfile,
   ProfilePreview,
@@ -2164,9 +2164,9 @@ export const api = {
     return request<FilamentOptions>(`/print/outputs/${seg(outputId)}/filaments${suffix}`)
   },
 
-  /** #2351 — Bambuddy's spool inventory, each spool with where it is loaded. */
+  /** #6262 Task 9 — ScadBuddy's spools, each with the registry tray it is in. */
   getSpoolInventory: (includeArchived = false) =>
-    request<InventoryView>(`/farm/inventory${includeArchived ? '?include_archived=true' : ''}`),
+    request<FilamentInventoryView>(`/filament/inventory${includeArchived ? '?include_archived=true' : ''}`),
   /** #4643 — ScadBuddy's own spools, the native spool provider's records. */
   nativeSpools: (includeArchived = false) =>
     request<NativeSpool[]>(`/native-spools${includeArchived ? '?include_archived=true' : ''}`),

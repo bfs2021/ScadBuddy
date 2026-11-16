@@ -351,9 +351,11 @@ export type LibraryFolderUpdate = Schemas['LibraryFolderUpdate']
 export type LibraryFileObjects = Schemas['LibraryFileObjects']
 export type LibraryFileObject = Schemas['LibraryFileObject']
 
-/** #2351 — Bambuddy's spool inventory and loaded slots, read through `/farm/inventory`. */
-export type InventoryView = Schemas['InventoryView']
-export type InventorySpool = Schemas['InventorySpool']
+/** #6262 Task 9 — ScadBuddy's spools and the registry printers' trays (`GET /filament/inventory`). */
+export type FilamentInventoryView = Schemas['FilamentInventoryView']
+export type FilamentInventorySpool = Schemas['FilamentInventorySpool']
+/** The registry printer and AMS tray an SB spool is in. */
+export type TrayPlace = Schemas['TrayPlace']
 
 /**
  * #89 — run tracking.

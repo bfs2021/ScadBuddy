@@ -699,6 +699,54 @@ async def get_summary(filament: FilamentDep) -> m.InventorySummary:
     return await asyncio.to_thread(filament.spools.summary)
 
 
+@router.get(
+    "/inventory",
+    response_model=m.FilamentInventoryView,
+    summary="Spools and the trays they are in",
+    description=(
+        "Every spool by number, with its effective values (`rgba` is `#RRGGBBAA`), its "
+        "presets and the tray it is in (`loaded`: the tray a registry printer's latest "
+        "report holds it in, else the tray it was last linked to on a printer with no "
+        "report; `null` on the shelf), and its linked Bambuddy spool. `trays` is each "
+        "registry printer's reported trays, with the spool each holds and how it was found "
+        "(`tag` or `link`). Archived spools only with `include_archived`. Bambuddy is never "
+        "read (#6262)."
+    ),
+)
+async def get_inventory(
+    filament: FilamentDep, include_archived: bool = False
+) -> m.FilamentInventoryView:
+    return await asyncio.to_thread(filament.inventory.view, include_archived=include_archived)
+
+
+@router.get(
+    "/spools/{spool_id}/summary",
+    response_model=m.FilamentSpoolSummary,
+    summary="One spool's stock and price, and its filament's",
+    description=(
+        "What a filament hover card shows (#785): the spool's grams left, its tray and its "
+        "effective `cost_per_kg`, the value of what is left and, with `grams`, what those "
+        "grams cost; and every unarchived spool of the same filament (effective material, "
+        "subtype, brand and `#RRGGBBAA`, so a translucent spool is not an opaque one's) with "
+        "their total grams left and where they are loaded. An archived spool is still "
+        "summarised. With no cost per kg every price and cost is `null`. 404 for no such "
+        "spool."
+    ),
+)
+async def get_spool_summary(
+    filament: FilamentDep,
+    spool_id: UUID,
+    grams: Annotated[
+        float | None,
+        Query(ge=0, description="Grams to price at this spool's cost, e.g. a plate's use"),
+    ] = None,
+) -> m.FilamentSpoolSummary:
+    found = await asyncio.to_thread(filament.inventory.summary, spool_id, grams)
+    if found is None:
+        raise _no_spool(spool_id)
+    return found
+
+
 # -- locations ------------------------------------------------------------------------
 
 _LOCATION_REFUSED = (CatalogRefError, LocationExistsError, LocationCycleError)

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
+from uuid import uuid4
 
 import httpx
 import psycopg
@@ -10,8 +12,10 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 
+from scadbuddy.api.deps import STATE_ATTR, AppState
 from scadbuddy.api.filament import actor
 from scadbuddy.auth.models import ANONYMOUS, AuthSession, Person, PersonalToken, Service
+from scadbuddy.printers.reports import PrinterReportStore
 from tests.api.test_send import API, configure
 from tests.support.printers import bambuddy_printer
 
@@ -402,3 +406,104 @@ def test_the_bambuddy_import_pulls_once_then_changes_nothing(client: TestClient)
     again = client.post(IMPORT_BB).json()
     assert (again["created"], again["linked"], again["updated"]) == (0, 0, 0)
     assert route.call_count == 2
+
+
+# -- the inventory and a spool's summary (#6262 Task 9, F16) ---------------------------
+
+INVENTORY = "/api/v1/filament/inventory"
+TRAY_UUID = "A1B2C3D4E5F60718293A4B5C6D7E8F90"
+
+
+def _garage_reports_tray(client: TestClient, pg_conninfo: str) -> str:
+    """A registry printer whose latest report shows AMS 0 tray 2 with a tagged PLA."""
+    printer = str(uuid4())
+    with psycopg.connect(pg_conninfo, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO printers (id, serial, name, lan_host) VALUES (%s, %s, %s, %s)",
+            (printer, "SN-GARAGE", "Garage", "10.0.0.9"),
+        )
+    tray = {"id": "2", "tray_type": "PLA", "tray_color": "FFFFFFFF", "state": 11}
+    report = {"ams": {"ams": [{"id": "0", "tray": [tray | {"tray_uuid": TRAY_UUID}]}]}}
+    state: AppState = getattr(client.app.state, STATE_ATTR)  # type: ignore[attr-defined]
+    PrinterReportStore(state.settings_store.pool).put(printer, report, datetime.now(UTC))
+    return printer
+
+
+def test_inventory_route_lists_sb_spools(client: TestClient, pg_conninfo: str) -> None:
+    """Every SB spool by number with its ``#RRGGBBAA`` and tray, and each registry
+    printer's reported trays with the SB spool each holds. Bambuddy is never read."""
+    white = _spool(client, rgba="#FFFFFF", grams_left=500)
+    clear = _spool(client, rgba="#FFFFFF80", grams_left=300)
+    gone = _spool(client, rgba="#000000")
+    assert client.post(f"{SPOOLS}/{gone['id']}/archive", json={"archived": True}).is_success
+    tag = {"tray_uuid": TRAY_UUID, "kind": "bambu_mifare"}
+    assert client.post(f"{SPOOLS}/{white['id']}/tags", json=tag).status_code == 201
+    printer = _garage_reports_tray(client, pg_conninfo)
+
+    response = client.get(INVENTORY)
+
+    assert response.status_code == 200, response.text
+    view = response.json()
+    spools = {row["spool"]["id"]: row for row in view["spools"]}
+    assert set(spools) == {white["id"], clear["id"]}
+    assert spools[clear["id"]]["spool"]["effective"]["rgba"] == "#FFFFFF80"
+    assert spools[clear["id"]]["loaded"] is None
+    assert spools[white["id"]]["loaded"] == {
+        "printer_id": printer,
+        "bambuddy_printer_id": None,
+        "printer_name": "Garage",
+        "ams_id": 0,
+        "tray_id": 2,
+    }
+    assert view["trays"] == [
+        {
+            "printer_id": printer,
+            "printer_name": "Garage",
+            "trays": [
+                {
+                    "ams_id": 0,
+                    "tray_id": 2,
+                    "label": "AMS-A slot 3",
+                    "material": "PLA",
+                    "rgba": "#FFFFFFFF",
+                    "spool_id": white["id"],
+                    "spool_number": white["number"],
+                    "found_by": "tag",
+                }
+            ],
+        }
+    ]
+    every = client.get(INVENTORY, params={"include_archived": True}).json()
+    assert {row["spool"]["id"] for row in every["spools"]} == {
+        white["id"],
+        clear["id"],
+        gone["id"],
+    }
+
+
+def test_a_spool_summary_prices_it_and_counts_its_filament(client: TestClient) -> None:
+    """What a filament hover card shows: grams left, cost per kg, the value left and a
+    plate's cost, and the unarchived spools of the same filament. A translucent spool of
+    the hue is another filament (#6316)."""
+    one = _spool(client, rgba="#FFFFFF", grams_left=500, cost_per_kg="20")
+    two = _spool(client, rgba="#ffffffff", grams_left=250)
+    _spool(client, rgba="#FFFFFF80", grams_left=300)
+
+    response = client.get(f"{SPOOLS}/{one['id']}/summary", params={"grams": 12.5})
+
+    assert response.status_code == 200, response.text
+    summary = response.json()
+    assert summary["spool"]["spool"]["number"] == one["number"]
+    assert (Decimal(summary["cost_per_kg"]), summary["price_per_g"]) == (Decimal(20), 0.02)
+    assert (summary["value_left"], summary["grams"], summary["grams_cost"]) == (10.0, 12.5, 0.25)
+    stock = summary["filament"]
+    assert (stock["material"], stock["rgba"], stock["spool_count"]) == ("PLA", "#FFFFFFFF", 2)
+    assert stock["spool_numbers"] == [one["number"], two["number"]]
+    assert (stock["grams_left"], stock["loaded"]) == (750.0, [])
+    unpriced = client.get(f"{SPOOLS}/{two['id']}/summary").json()
+    assert (unpriced["cost_per_kg"], unpriced["value_left"], unpriced["grams_cost"]) == (
+        None,
+        None,
+        None,
+    )
+    assert client.get(f"{SPOOLS}/{MISSING}/summary").status_code == 404

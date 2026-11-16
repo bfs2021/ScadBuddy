@@ -33,10 +33,9 @@ from scadbuddy.orders.integrations import (
     ArchiveFacts,
     ArchiveMedia,
     CopiedMedia,
+    LocalDensity,
     MaintenanceTask,
     MediaTooLargeError,
-    ShelfSpool,
-    SpoolGroup,
 )
 from scadbuddy.orders.lifecycle import FulfilmentInput, LifecycleError
 from scadbuddy.orders.models import Fulfilment, Order, OrderItem
@@ -66,10 +65,7 @@ class Archives:
         self.facts = {f.archive_id: f for f in facts}
         self.downloads: list[tuple[int, str, str | None]] = []
 
-    async def spool_inventory(self) -> list[ShelfSpool]:
-        raise AssertionError("not asked")
-
-    async def spool_groups(self) -> list[SpoolGroup]:
+    async def local_densities(self) -> dict[str, LocalDensity]:
         raise AssertionError("not asked")
 
     async def maintenance_tasks(self, printer_id: int) -> list[MaintenanceTask]:

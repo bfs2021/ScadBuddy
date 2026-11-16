@@ -85,7 +85,6 @@ describe('hot-path mock (#3818, plan 2026-10-18 Task 11)', () => {
     for (const [path, method] of [
       ['/print/printers/1/camera', 'GET'],
       ['/print/printers/1/camera/stream', 'GET'],
-      ['/farm/inventory', 'GET'],
       ['/print/printers/1/trays/0/1/spool', 'POST'],
       ['/print/projects', 'POST'],
     ] as const) {

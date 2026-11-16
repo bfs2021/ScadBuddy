@@ -257,6 +257,82 @@ class FilamentInventory:
             )
         return found
 
+    def view(self, *, include_archived: bool = False) -> m.FilamentInventoryView:
+        """Every SB spool with its tray (:meth:`rows`, no Bambuddy assignment read), and
+        each registry printer's reported trays with the SB spool each holds, as its latest
+        stored report shows them (`_Keys.hold`), by printer name (#6262 Task 9)."""
+        rows = self.rows(include_archived=include_archived)
+        numbers = {row.spool.id: row.spool.number for row in rows}
+        with self._pool.connection() as conn:
+            keys = _Keys(conn)
+        printers = {row.id: row for row in PrinterStore(self._pool, None).list()}
+        found: list[m.PrinterTrays] = []
+        for printer_id, seen in self._reported(printers):
+            row = printers[str(printer_id)]
+            trays: list[m.InventoryTray] = []
+            for tray in seen:
+                spool_id, found_by = keys.hold(printer_id, tray)
+                if spool_id is not None and spool_id not in numbers:
+                    # Archived since the read above: `_Keys` reads unarchived ones only.
+                    spool_id, found_by = None, None
+                trays.append(
+                    m.InventoryTray(
+                        ams_id=tray.ams_id,
+                        tray_id=tray.tray_id,
+                        label=tray_label(tray.ams_id, tray.tray_id),
+                        material=tray.material or None,
+                        rgba=tray.rgba,
+                        spool_id=spool_id,
+                        spool_number=None if spool_id is None else numbers[spool_id],
+                        found_by=found_by,
+                    )
+                )
+            found.append(m.PrinterTrays(printer_id=row.id, printer_name=row.name, trays=trays))
+        found.sort(key=lambda p: (p.printer_name.casefold(), p.printer_id))
+        return m.FilamentInventoryView(spools=rows, trays=found)
+
+    def summary(self, spool_id: UUID, grams: float | None = None) -> m.FilamentSpoolSummary | None:
+        """One SB spool's stock, tray and price, and its filament's stock: the
+        unarchived spools of its effective material, subtype, brand and ``#RRGGBBAA``
+        (its colour's name for one with none). An archived spool is still summarised.
+        ``None`` for no such spool."""
+        rows = self.rows(include_archived=True)
+        row = next((r for r in rows if r.spool.id == spool_id), None)
+        if row is None:
+            return None
+        key = _filament_key(row.spool)
+        same = [r for r in rows if r.spool.archived_at is None and _filament_key(r.spool) == key]
+        same.sort(key=lambda r: r.spool.number)
+        cost = row.spool.effective.cost_per_kg
+        per_g = None if cost is None else round(float(cost) / 1000, 6)
+        left = row.spool.grams_left
+        effective, names = row.spool.effective, row.spool.names
+        return m.FilamentSpoolSummary(
+            spool=row,
+            cost_per_kg=cost,
+            price_per_g=per_g,
+            value_left=None if per_g is None or left is None else round(left * per_g, 4),
+            grams=grams,
+            grams_cost=None if per_g is None or grams is None else round(grams * per_g, 4),
+            filament=m.SameFilamentStock(
+                material=names.material,
+                subtype=names.subtype,
+                brand=names.brand,
+                colour_name=effective.colour_name,
+                rgba=effective.rgba,
+                spool_count=len(same),
+                spool_numbers=[r.spool.number for r in same],
+                grams_left=round(sum(r.spool.grams_left or 0.0 for r in same), 2),
+                loaded=[
+                    m.SameFilamentPlace(
+                        spool_id=r.spool.id, spool_number=r.spool.number, loaded=r.loaded
+                    )
+                    for r in same
+                    if r.loaded is not None
+                ],
+            ),
+        )
+
     def by_number(self, number: int) -> tuple[UUID, int | None] | None:
         """Unarchived SB spool #``number``'s id and the Bambuddy spool it is linked to
         (``None`` for none), or ``None`` for no such spool."""
@@ -412,6 +488,20 @@ class FilamentInventory:
             ).fetchone()
             if holder is not None and holder["spool_id"] != spool_id:
                 raise TrayTagClashError()
+
+
+def _filament_key(spool: m.Spool) -> tuple[str, str, str, str]:
+    """Which spools are one filament: the same effective material, subtype and brand, and
+    the same ``#RRGGBBAA``, else the same colour name for spools with none (#2918: a
+    spool known by name is never assumed to be one known by colour)."""
+    names = spool.names
+    colour = spool.effective.rgba or "name:" + (spool.effective.colour_name or "").upper()
+    return (
+        (names.material or "").strip().upper(),
+        (names.subtype or "").strip().upper(),
+        (names.brand or "").strip().upper(),
+        colour,
+    )
 
 
 def _tray_lock(conn: Conn, printer_id: UUID, ams_id: int, tray_id: int) -> None:

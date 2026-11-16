@@ -25,7 +25,7 @@ describe('Settings → Storefront pricing (#6153)', () => {
     await choose(user, within(profile).getByRole('combobox', { name: 'Spool for PETG' }), /Clear/)
     await user.click(within(profile).getByRole('button', { name: 'Save slice profile' }))
     await waitFor(() => expect(put).toHaveBeenCalled())
-    expect(put.mock.calls[0]?.[0]).toEqual({ storefront_slice_profile: { printer: H2C, spools: { pla: 2, petg: 15 } } })
+    expect(put.mock.calls[0]?.[0]).toEqual({ storefront_slice_profile: { printer: H2C, spools: { pla: 3, petg: 8 } } })
     expect(await within(profile).findByText('Saved.')).toBeInTheDocument()
     put.mockRestore()
   })
@@ -65,14 +65,14 @@ describe('Settings → Storefront pricing (#6153)', () => {
   })
 
   it('never sends a spool for a material the editor does not list', async () => {
-    setMockSettings({ ...mockSettings(), storefront_slice_profile: { printer: H2C, spools: { pla: 2, nylon: 2 } } })
+    setMockSettings({ ...mockSettings(), storefront_slice_profile: { printer: H2C, spools: { pla: 3, nylon: 3 } } })
     const put = vi.spyOn(api, 'putSettings')
     const { user } = renderSettingsSection(<StorefrontPricing />, { route })
     const profile = await screen.findByRole('region', { name: 'Shop slice profile' })
     await within(profile).findByRole('combobox', { name: 'Spool for PLA' })
     await user.click(within(profile).getByRole('button', { name: 'Save slice profile' }))
     await waitFor(() => expect(put).toHaveBeenCalled())
-    expect(put.mock.calls[0]?.[0]).toEqual({ storefront_slice_profile: { printer: H2C, spools: { pla: 2 } } })
+    expect(put.mock.calls[0]?.[0]).toEqual({ storefront_slice_profile: { printer: H2C, spools: { pla: 3 } } })
     put.mockRestore()
   })
 
@@ -84,7 +84,7 @@ describe('Settings → Storefront pricing (#6153)', () => {
   })
 
   it('keeps Save off until the stored printer\'s spools are read', async () => {
-    setMockSettings({ ...mockSettings(), storefront_slice_profile: { printer: H2C, spools: { pla: 2 } } })
+    setMockSettings({ ...mockSettings(), storefront_slice_profile: { printer: H2C, spools: { pla: 3 } } })
     const real = api.storefrontSliceOptions.bind(api)
     let release: () => void = () => {}
     const held = new Promise<void>((resolve) => {
