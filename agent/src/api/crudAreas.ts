@@ -68,6 +68,13 @@ export const SESSION_AREAS = ['sessions', 'session-resources', 'transcripts', 's
  */
 export const REST_AREAS = ['publish', 'session-reads'] as const
 
+/**
+ * Which sessions still have a row, for the pod's directory sweeps, and a forget's last rows
+ * (#6501; backend api/crud_agent_sweeps.py; sessions/presence.ts, sessions/forget.ts
+ * `CrudForgetRows`).
+ */
+export const SWEEP_AREAS = ['session-sweeps', 'forget-rows'] as const
+
 export type CrudAreasOptions = {
   fetch?: typeof fetch
   /** The areas the agent waits for. */

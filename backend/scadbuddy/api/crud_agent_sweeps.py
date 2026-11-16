@@ -113,7 +113,7 @@ def _forget_rows(state: Any, session_id: str) -> int:
                 )
         # A session's warm process, on whichever replica holds it (warmEvict.ts).
         notify_warm_evict(conn, session_id)
-    return entries + sessions
+    return int(entries + sessions)
 
 
 @router.post("/sessions/{session_id}/forget-rows", name="crud_agent_session_forget_rows")

@@ -137,9 +137,7 @@ def test_the_live_ids_are_those_with_a_row(
     got = c.post(f"{BASE}/sessions/live", json={"ids": [here, gone]}, headers=headers)
     assert got.status_code == 200, got.text
     assert got.json() == {"ids": [here]}
-    assert c.post(f"{BASE}/sessions/live", json={"ids": []}, headers=headers).json() == {
-        "ids": []
-    }
+    assert c.post(f"{BASE}/sessions/live", json={"ids": []}, headers=headers).json() == {"ids": []}
 
 
 @pytest.mark.parametrize(
@@ -178,7 +176,8 @@ def test_a_forgotten_sessions_rows_go_with_its_unnamed_bytes(
     _file(tables, other, "b.txt", b"shared")
     _sql(
         tables,
-        "INSERT INTO ai_session_entries (project_key, session_id, subpath, entry) VALUES ('p', %s, '', '{}')",
+        "INSERT INTO ai_session_entries (project_key, session_id, subpath, entry)"
+        " VALUES ('p', %s, '', '{}')",
         (sid,),
     )
     _sql(tables, "INSERT INTO ai_forgotten_subjects (subject) VALUES (%s)", (f"session-{sid}",))

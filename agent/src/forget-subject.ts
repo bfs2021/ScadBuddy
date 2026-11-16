@@ -2,8 +2,10 @@ import { Client, Connection } from '@temporalio/client'
 import { loadConfig } from './config.js'
 import { connectDatabase } from './db.js'
 import { CrudAreas, FORGET_AREAS } from './api/crudAreas.js'
+import { BackgroundTaskStore, CrudBackgroundTasks } from './background/store.js'
 import { type CredentialSource, ExchangeCredential, ServiceCredential, withServiceCredential } from './api/serviceCredential.js'
-import { CrudSubjectKeys, forgetSubject } from './sessions/forget.js'
+import { CrudForgetRows, CrudSubjectKeys, forgetSubject } from './sessions/forget.js'
+import { CrudSessionReads } from './sessions/sessionReads.js'
 import path from 'node:path'
 import { DEFAULT_STATE_DIR } from './harness/options.js'
 import { loadKek } from './secrets.js'
@@ -58,9 +60,20 @@ try {
       ? new ExchangeCredential({ backendUrl: config.backendUrl, proofFile, proof: config.serviceTokenFile !== undefined ? 'k8s' : 'bootstrap', fallback: view })
       : view
   const crudFetch = withServiceCredential(globalThis.fetch, credential, config.backendUrl)
-  const areas = new CrudAreas(config.backendUrl, { fetch: crudFetch, wanted: FORGET_AREAS, log: (m) => console.error(`forget-subject: ${m}`) })
-  const crud = (await areas.refresh()) ? new CrudSubjectKeys(config.backendUrl, { fetch: crudFetch }) : undefined
-  const done = await forgetSubject({ sql: database.sql, client, keys, payloads, turnDirs, sessionDirs, crud }, subject)
+  // Step 0's tasks and open calls and step 3's rows too, each once the API lists its area (#6501).
+  const areas = new CrudAreas(config.backendUrl, {
+    fetch: crudFetch,
+    wanted: [...FORGET_AREAS, 'background-tasks', 'session-reads', 'forget-rows'],
+    log: (m) => console.error(`forget-subject: ${m}`),
+  })
+  await areas.refresh()
+  const target = { baseUrl: config.backendUrl, fetch: crudFetch }
+  const crud = areas.has('forget') ? new CrudSubjectKeys(config.backendUrl, { fetch: crudFetch }) : undefined
+  const tasks = new BackgroundTaskStore(database.sql, { crud: new CrudBackgroundTasks(config.backendUrl, { fetch: crudFetch }), use: () => areas.has('background-tasks') })
+  const reads = areas.has('session-reads') ? new CrudSessionReads(target) : undefined
+  // Step 3 on the API only with step 1 there: a forget never deletes the rows of a session it did not tombstone.
+  const rows = crud && areas.has('forget-rows') ? new CrudForgetRows(target) : undefined
+  const done = await forgetSubject({ sql: database.sql, client, keys, payloads, turnDirs, sessionDirs, crud, tasks, reads, rows }, subject)
   console.log(JSON.stringify({ subject, ...done }))
 } finally {
   await connection?.close()
