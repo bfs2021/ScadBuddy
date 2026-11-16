@@ -39,9 +39,9 @@ required. A signed-in person's session (`src/auth/browserSession.ts`) is looked 
 API's `…/agent/auth-sessions/lookup` once it lists area `auth-sessions` (`CrudSessionLookup`,
 only the cookie's hash travels), the view `auth_sessions_agent` over SQL until then. The ledger
 `ready()` waits for is read through `…/agent/migrations/ledger` once the API lists area
-`migrations` (`src/db/schema.ts` `crudLedger`), and `/healthz`'s `database` is whether the API
-answers the agent's areas once it lists them all (`CrudAreas.answers`), never a Postgres ping
-then (backend `api/crud_agent_start.py`, #6501; test `test/crudStart.test.ts`).
+`migrations` (`src/db/schema.ts` `crudLedger`), and `/healthz`'s `database` is the Postgres
+ping and, once the API lists every area, whether it answers them (`CrudAreas.answers`); the ping
+stays while the agent still runs SQL, until #5299 step 12 (backend `api/crud_agent_start.py`, #6501; test `test/crudStart.test.ts`).
 
 The agent's own CRUD routes (`/api/v1/internal/crud/agent/`, class `crud.agent`, #5330): the
 holds of the workspace files' blobs (`workspace-blob-refs`, #5299; see the workspace under

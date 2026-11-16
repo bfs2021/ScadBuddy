@@ -143,6 +143,13 @@ def test_a_ledger_ask_is_bounded(client: tuple[TestClient, dict[str, str]]) -> N
     c, headers = client
     many = {"ids": ["20261003T0000Z_x"] * 5001}
     assert c.post(f"{BASE}/migrations/ledger", json=many, headers=headers).status_code == 422
+    # Past the byte cap, both routes refuse before they parse the body.
+    big = b'{"ids": [], "pad": "' + b"x" * (40 * 1024 * 1024) + b'"}'
+    for path in ("migrations/ledger", "auth-sessions/lookup"):
+        refused = c.post(
+            f"{BASE}/{path}", content=big, headers={**headers, "content-type": "application/json"}
+        )
+        assert refused.status_code == 413
 
 
 def test_a_live_session_is_found_by_its_hash_only(

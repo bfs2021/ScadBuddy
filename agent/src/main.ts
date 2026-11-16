@@ -277,7 +277,11 @@ void database?.ready()
 // Health's probe of the agent's data (#6501): the API's answer once it lists every area, so
 // /healthz asks Postgres nothing; the SQL ping only while an older API pod lists fewer.
 const dataHealth = database
-  ? { ...database, ping: (timeoutMs?: number) => (crudAreas.complete ? crudAreas.answers(timeoutMs) : database.ping(timeoutMs)) }
+  ? { ...database, ping: async (timeoutMs?: number) =>
+        // The agent still runs SQL (the LISTEN bus, a turn's claim and end, the MCP relay), so
+        // Postgres counts too until #5299 step 12; the API's answer counts once it lists every area.
+        (await database.ping(timeoutMs)) && (!crudAreas.complete || (await crudAreas.answers(timeoutMs))),
+    }
   : undefined
 const storeArea = (area: StoreArea) => () => crudAreas.has(area)
 // The tool-call gate's routes (#5299 step 10, backend api/crud_agent_gate.py).

@@ -107,12 +107,7 @@ export async function awaitMigrations(
   )
 }
 
-/**
- * The expected files' rows of the ledger, id to checksum; none while the API has not made
- * the ledger, and `positional` while it is still keyed by position (no `id` column, before
- * #491), which the API's runner rewrites at its next start; a row main never had stops
- * that start instead (AgentMigrationLedgerError).
- */
+/** Reads the expected files' rows of the ledger (`readLedger`, below): SQL or the API's route. */
 export type LedgerReader = (expected: readonly ExpectedMigration[]) => Promise<Map<string, string | null> | 'positional'>
 
 /** `LedgerReader` over SQL (the agent's own connection). */
@@ -136,6 +131,12 @@ export function crudLedger(target: CrudTarget): LedgerReader {
   }
 }
 
+/**
+ * The expected files' rows of the ledger, id to checksum; none while the API has not made
+ * the ledger, and `positional` while it is still keyed by position (no `id` column, before
+ * #491), which the API's runner rewrites at its next start; a row main never had stops
+ * that start instead (AgentMigrationLedgerError).
+ */
 async function readLedger(
   sql: Sql,
   expected: readonly ExpectedMigration[],
