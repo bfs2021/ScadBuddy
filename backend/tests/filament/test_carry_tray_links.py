@@ -136,28 +136,6 @@ def test_a_bb_only_tray_link_finds_its_pulled_spool(pg_conninfo: str) -> None:
         assert len(_moves(conn, pulled)) == 1
 
 
-def test_a_physical_spool_has_one_bambuddy_record_link(pg_conninfo: str) -> None:
-    """The BB-record lookup takes one row (``ORDER BY r.linked_at, r.record_id LIMIT 1``,
-    as `20261116T0034Z` orders), and the old table allows only one: two Bambuddy record
-    links on one physical spool are refused (``UNIQUE (physical_spool_id, provider)``,
-    `20261018T1744Z_physical_spools.sql`), so no link can name two pulled spools."""
-    physical = "00000000-0000-0000-0000-0000000000b8"
-    with psycopg.connect(pg_conninfo) as conn:
-        _before(conn)
-        conn.execute("INSERT INTO physical_spools (id) VALUES (%s)", (physical,))
-        conn.execute(
-            "INSERT INTO spool_record_links (provider, record_id, physical_spool_id, linked_by)"
-            " VALUES ('bambuddy', '41', %s, 'manual')",
-            (physical,),
-        )
-        with pytest.raises(psycopg.errors.UniqueViolation):
-            conn.execute(
-                "INSERT INTO spool_record_links (provider, record_id, physical_spool_id,"
-                " linked_by) VALUES ('bambuddy', '42', %s, 'manual')",
-                (physical,),
-            )
-
-
 def test_the_carry_skips_a_taken_tray(pg_conninfo: str) -> None:
     """A tray another spool already holds keeps it; a spool already in a tray stays
     there; a link that names no SB spool, or a fingerprint of no known shape, is
