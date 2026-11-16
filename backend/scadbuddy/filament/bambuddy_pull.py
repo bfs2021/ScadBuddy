@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -112,7 +113,11 @@ _PLAIN = (
     "weight_locked",
 )
 #: The snapshot fields that are no column: what is left, the tags and the product code.
-_NOT_COLUMNS = frozenset({"remaining_g", "tag_uid", "tray_uuid", "material_number"})
+_NOT_COLUMNS = frozenset(
+    {"remaining_g", "tag_uid", "tray_uuid", "material_number", "core_weight_catalog_id"}
+)
+#: The catalog entries already warned about as skipped, so a clash is told once a process.
+_WARNED_SKIPS: set[tuple[int, str]] = set()
 
 Outcome = Literal["pulled", "skipped", "failed"]
 
@@ -122,7 +127,9 @@ class PullReport(BaseModel):
     those it made or linked still need a type, and how many it left alone because they
     are archived, with their ids; the BB spools it could not pull (each logged and rolled
     back); and the BB rows it could not read (each logged), with their ids when the row
-    had one; and whether BB's spool catalog failed."""
+    had one; whether BB's spool catalog failed (all or nothing: then no entry was mapped),
+    and how many of its entries were skipped (no name or weight, or a name another type
+    has), so a spool naming one gets no insert type."""
 
     created: int = 0
     linked: int = 0
@@ -132,6 +139,7 @@ class PullReport(BaseModel):
     invalid: int = 0
     #: BB's spool catalog could not be read or mapped; the insert types were left alone.
     catalog_failed: bool = False
+    catalog_skipped: int = 0
     created_ids: list[UUID] = Field(default_factory=list)
     linked_ids: list[UUID] = Field(default_factory=list)
     updated_ids: list[UUID] = Field(default_factory=list)
@@ -187,6 +195,7 @@ def snapshot(bb: BbSpool) -> dict[str, Any]:
         "tag_uid": clean_tag_uid(bb.tag_uid),
         "tray_uuid": clean_tray_uuid(bb.tray_uuid),
         "material_number": _text(bb.material_number),
+        "core_weight_catalog_id": bb.core_weight_catalog_id,
     }
 
 
@@ -209,7 +218,7 @@ def pull(
     logged and listed; the rest go on, as when the catalog fails."""
     report = PullReport()
     try:
-        _insert_types(store, catalog)
+        report.catalog_skipped = _insert_types(store, catalog)
     except Exception:
         logger.warning("could not map Bambuddy's spool catalog", exc_info=True)
         report.catalog_failed = True
@@ -237,20 +246,37 @@ def pull(
     return report
 
 
-def _insert_types(store: Filament, catalog: Sequence[SpoolCatalogEntry]) -> None:
+def _insert_types(store: Filament, catalog: Sequence[SpoolCatalogEntry]) -> int:
     """Make each entry an insert type, in one transaction under its own advisory lock
     (``0`` is no BB spool id): the type with its ``bb_catalog_id``, else the unlinked one
     of the same upper case name, which takes the id, else a new one. A type that exists
-    keeps its name and weight. An entry with no name or no weight is skipped."""
+    keeps its name and weight; a fractional weight is rounded to whole grams. An entry with
+    no name or no weight, or a name another type has, is skipped: how many is the answer
+    (warned once a process, then at debug)."""
+    if not catalog:
+        return 0
+    skipped = 0
+
+    def skip(entry: SpoolCatalogEntry, why: str) -> None:
+        nonlocal skipped
+        skipped += 1
+        key = (entry.id, why)
+        log = logger.debug if key in _WARNED_SKIPS else logger.warning
+        _WARNED_SKIPS.add(key)
+        log(
+            "a Bambuddy spool catalog entry is skipped (%s); spools that name it get no "
+            "insert type",
+            why,
+            extra={"bb_catalog_id": entry.id},
+        )
+
     with store.spools.transaction() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(%s, 0)", (_LOCK,))
         for entry in catalog:
             name = _text(entry.name)
-            if name is None or entry.weight <= 0:
-                logger.warning(
-                    "a Bambuddy spool catalog entry has no name or weight; skipped",
-                    extra={"bb_catalog_id": entry.id},
-                )
+            grams = math.floor(entry.weight + 0.5)
+            if name is None or grams <= 0:
+                skip(entry, "no name or weight")
                 continue
             if conn.execute(
                 "SELECT 1 FROM filament_insert_types WHERE bb_catalog_id = %s", (entry.id,)
@@ -269,26 +295,24 @@ def _insert_types(store: Filament, catalog: Sequence[SpoolCatalogEntry]) -> None
                 " AND archived_at IS NULL",
                 (name,),
             ).fetchone():
-                # Another BB entry already has this name's type.
-                logger.warning(
-                    "a Bambuddy spool catalog entry shares a name with another's type; skipped",
-                    extra={"bb_catalog_id": entry.id},
-                )
+                skip(entry, "another type has its name")
                 continue
             conn.execute(
                 "INSERT INTO filament_insert_types"
                 " (name, sort_order, empty_weight_g, bb_catalog_id)"
                 " VALUES (%s, %s, %s, %s)",
-                (name, _ADDED_SORT, entry.weight, entry.id),
+                (name, _ADDED_SORT, grams, entry.id),
             )
+    return skipped
 
 
 def _core_insert_type(conn: Conn, bb: BbSpool) -> UUID | None:
-    """The insert type BB's ``core_weight_catalog_id`` is, once the catalog is mapped."""
+    """The unarchived insert type BB's ``core_weight_catalog_id`` is, once the catalog is
+    mapped."""
     if bb.core_weight_catalog_id is None:
         return None
     row = conn.execute(
-        "SELECT id FROM filament_insert_types WHERE bb_catalog_id = %s",
+        "SELECT id FROM filament_insert_types WHERE bb_catalog_id = %s AND archived_at IS NULL",
         (bb.core_weight_catalog_id,),
     ).fetchone()
     return None if row is None else row["id"]
@@ -509,6 +533,9 @@ def _link(
             dropped = drop_migrated(conn, spool_id)
             if dropped is not None:
                 changes["presets"] = dropped
+    insert = _backfill_insert_type(conn, spool_id, bb)
+    if insert is not None:
+        changes["insert_type_id"] = insert
     reading = after["remaining_g"]
     if current["grams_left"] is not None or current["weight_locked"]:
         reading = None
@@ -516,6 +543,28 @@ def _link(
     _synced(conn, spool_id, bb, after, changes, reading, actor, linked=True)
     FilamentSpoolStore.read(conn, spool_id, check=True)
     return type_id is None
+
+
+def _backfill_insert_type(conn: Conn, spool_id: UUID, bb: BbSpool) -> list[Any] | None:
+    """Set the insert type BB's ``core_weight_catalog_id`` names where the SB spool has
+    none of its own, and it differs from the spool type's: the change, or None. Never
+    replaces a choice already made."""
+    insert_id = _core_insert_type(conn, bb)
+    if insert_id is None:
+        return None
+    row = conn.execute(
+        "SELECT s.insert_type_id AS own, t.insert_type_id AS typed FROM filament_spools s"
+        " LEFT JOIN filament_spool_types t ON t.id = s.type_id WHERE s.id = %s",
+        (spool_id,),
+    ).fetchone()
+    assert row is not None
+    if row["own"] is not None or row["typed"] == insert_id:
+        return None
+    conn.execute(
+        "UPDATE filament_spools SET insert_type_id = %s, updated_at = now() WHERE id = %s",
+        (insert_id, spool_id),
+    )
+    return [None, insert_id]
 
 
 # -- step 3: a new SB spool ------------------------------------------------------------
@@ -604,8 +653,7 @@ def _update(
     actor: str,
 ) -> bool:
     """True when the SB spool took anything from BB."""
-    if bb.updated_at is not None and pulled_at is not None and bb.updated_at <= pulled_at:
-        return False
+    unmoved = bb.updated_at is not None and pulled_at is not None and bb.updated_at <= pulled_at
     last = conn.execute(
         "SELECT data -> 'bb' AS bb FROM filament_spool_events"
         " WHERE spool_id = %s AND kind = 'synced_from_bb' AND data ? 'bb'"
@@ -613,6 +661,22 @@ def _update(
         (spool_id,),
     ).fetchone()
     before: dict[str, Any] = (last["bb"] if last is not None else None) or {}
+    # A last reading from before the catalog id was kept is read once more, whatever BB's
+    # clock says, so a spool linked earlier takes its insert type. A row BB did not move
+    # still takes one whose catalog entry was mapped after the spool was read.
+    if unmoved and "core_weight_catalog_id" in before:
+        insert = _backfill_insert_type(conn, spool_id, bb)
+        if insert is None:
+            return False
+        ledger.record(
+            conn,
+            spool_id,
+            "synced_from_bb",
+            actor=actor,
+            at=bb.updated_at,
+            data={"bb_spool_id": bb.id, "bb": before, "changes": {"insert_type_id": insert}},
+        )
+        return True
     after = snapshot(bb)
     keys = (after["tag_uid"], after["tray_uuid"])
     retag = keys != (before.get("tag_uid"), before.get("tray_uuid")) and keys != (None, None)
@@ -659,6 +723,20 @@ def _update(
         kind = _match(conn, store, after)
         if kind is not None:
             changes["type_id"] = [None, kind.id]
+    insert_id = _core_insert_type(conn, bb)
+    if insert_id is not None and after["core_weight_catalog_id"] != before.get(
+        "core_weight_catalog_id"
+    ):
+        own = conn.execute(
+            "SELECT insert_type_id FROM filament_spools WHERE id = %s", (spool_id,)
+        ).fetchone()
+        assert own is not None
+        # Moved since BB's last reading: BB's value wins unless a person set the field after.
+        # Read for the first time: only where the spool has none of its own.
+        first = "core_weight_catalog_id" not in before
+        free = own["insert_type_id"] is None if first else "insert_type_id" not in edited
+        if free and spool.effective.insert_type_id != insert_id:
+            changes["insert_type_id"] = [own["insert_type_id"], insert_id]
     if changes:
         columns = list(changes)
         conn.execute(

@@ -14,10 +14,11 @@ Task 6b), and the stack's seed runs it once before resetting the list:
 - ``GET /api/v1/inventory/catalog`` from ``answers/inventory-catalog.json`` (#6262: the pull
   maps it to insert types; built by hand, see the recordings README).
 
-The files are verbatim copies of ``backend/tests/bambuddy/recordings/`` (Bambuddy
-1.2.5.5, recorded 2026-09-23; that folder's README says how), copied because this
-image's build context is its own folder. A trailing slash and a query string do not
-change which path answers.
+The spools and assignments files are verbatim copies of ``backend/tests/bambuddy/recordings/``
+(Bambuddy 1.2.5.5, recorded 2026-09-23; that folder's README says how). The catalog file is a
+copy of that folder's hand-built ``inventory-catalog.json`` (1.2.6b1's shape, not a recording).
+All are copied because this image's build context is its own folder. A trailing slash and a
+query string do not change which path answers.
 
 Its own paths are never Bambuddy's ``/api/v1/*``: ``GET /__recorded`` answers
 ``[{"method", "path", "at"}...]`` for every other request, of any method, since the

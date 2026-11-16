@@ -23,6 +23,7 @@ from scadbuddy.filament.bambuddy_pull import (
     pull,
     read_and_pull,
     read_assignments,
+    read_catalog,
     scheduled_pull,
 )
 from scadbuddy.filament.catalog import CatalogStore
@@ -1062,3 +1063,203 @@ async def test_a_failed_catalog_read_pulls_the_spools_anyway(
     assert (await read_and_pull(f, settings)).catalog_failed is False
     (kind,) = _insert_types(f)
     assert kind.bb_catalog_id == 5
+
+
+# -- fix round 1: linked spools, a fractional weight, skipped entries, read_catalog -----
+
+_NO_TAGS: dict[str, Any] = {"tag_uid": None, "tray_uuid": None}
+
+
+def _linked_untyped(f: Filament, **over: Any) -> UUID:
+    """A BB spool pulled before any catalog was known: linked, with no insert type."""
+    (made,) = pull(
+        f, [bb(id=1, updated_at="2026-11-14T10:00:00", **_NO_TAGS | over)], now=NOW
+    ).created_ids
+    return made
+
+
+def _own_insert(f: Filament, spool: UUID) -> UUID | None:
+    got = f.spools.get(spool)
+    assert got is not None
+    return got.insert_type_id
+
+
+def test_a_linked_spool_takes_bbs_insert_type_on_the_next_pull(pg_pool: PgPool) -> None:
+    f = _filament(pg_pool)
+    made = _linked_untyped(f, core_weight_catalog_id=5)
+    assert _own_insert(f, made) is None
+    # BB's row did not move (same updated_at): the first pull after deploy still backfills.
+    report = pull(
+        f,
+        [bb(id=1, updated_at="2026-11-14T10:00:00", core_weight_catalog_id=5, **_NO_TAGS)],
+        now=NOW,
+        catalog=[_entry()],
+    )
+    (kind,) = _insert_types(f)
+    assert _own_insert(f, made) == kind.id
+    assert report.updated_ids == [made]
+    # Nothing moves again.
+    again = pull(
+        f,
+        [bb(id=1, updated_at="2026-11-14T10:00:00", core_weight_catalog_id=5, **_NO_TAGS)],
+        now=NOW,
+        catalog=[_entry()],
+    )
+    assert again.updated_ids == []
+
+
+def test_a_bb_catalog_change_reaches_a_linked_spool(pg_pool: PgPool) -> None:
+    f = _filament(pg_pool)
+    catalog = [_entry(5, "Bambu reusable", 250), _entry(6, "Bambu cardboard", 212)]
+    made = _linked_untyped(f, core_weight_catalog_id=5)
+    pull(
+        f,
+        [bb(id=1, updated_at="2026-11-14T10:00:00", core_weight_catalog_id=5, **_NO_TAGS)],
+        now=NOW,
+        catalog=catalog,
+    )
+    inserts = {k.bb_catalog_id: k.id for k in _insert_types(f)}
+    assert _own_insert(f, made) == inserts[5]
+    pull(
+        f,
+        [bb(id=1, updated_at="2026-11-14T11:00:00", core_weight_catalog_id=6, **_NO_TAGS)],
+        now=NOW,
+        catalog=catalog,
+    )
+    assert _own_insert(f, made) == inserts[6]
+
+
+def test_a_persons_insert_type_edit_is_kept(pg_pool: PgPool) -> None:
+    f = _filament(pg_pool)
+    catalog = [_entry(5, "Bambu reusable", 250), _entry(6, "Bambu cardboard", 212)]
+    made = _linked_untyped(f, core_weight_catalog_id=5)
+    pull(
+        f,
+        [bb(id=1, updated_at="2026-11-14T10:00:00", core_weight_catalog_id=5, **_NO_TAGS)],
+        now=NOW,
+        catalog=catalog,
+    )
+    own = f.catalog.create(
+        "insert-types", InsertTypeCreate(name="Mine", empty_weight_g=100)
+    ).model_dump()
+    # The person's edit is after BB's change.
+    f.spools.update(made, SpoolPatch(insert_type_id=own["id"]), actor="ann")
+    pull(
+        f,
+        [bb(id=1, updated_at="2026-11-14T10:30:00", core_weight_catalog_id=6, **_NO_TAGS)],
+        now=NOW,
+        catalog=catalog,
+    )
+    assert _own_insert(f, made) == own["id"]
+
+
+def test_a_persons_earlier_insert_type_survives_the_first_backfill(pg_pool: PgPool) -> None:
+    f = _filament(pg_pool)
+    made = _linked_untyped(f, core_weight_catalog_id=5)
+    own = f.catalog.create(
+        "insert-types", InsertTypeCreate(name="Mine", empty_weight_g=100)
+    ).model_dump()
+    f.spools.update(made, SpoolPatch(insert_type_id=own["id"]), actor="ann")
+    pull(
+        f,
+        [bb(id=1, updated_at="2026-11-14T10:00:00", core_weight_catalog_id=5, **_NO_TAGS)],
+        now=NOW,
+        catalog=[_entry()],
+    )
+    assert _own_insert(f, made) == own["id"]
+
+
+def test_a_spool_linked_by_tag_takes_bbs_insert_type(pg_pool: PgPool) -> None:
+    f = _filament(pg_pool)
+    mine = f.spools.create(SpoolCreate(material_id=_pla(pg_pool)), actor="ann")
+    f.spools.bind_tag(mine.id, tray_uuid=TRAY, kind="bambu_mifare", actor="ann")
+    report = pull(f, [bb(core_weight_catalog_id=5)], now=NOW, catalog=[_entry()])
+    assert report.linked_ids == [mine.id]
+    (kind,) = _insert_types(f)
+    assert _own_insert(f, mine.id) == kind.id
+
+
+def test_a_fractional_catalog_weight_is_rounded_not_refused(pg_pool: PgPool) -> None:
+    f = _filament(pg_pool)
+    entry = SpoolCatalogEntry.model_validate({"id": 5, "name": "Half", "weight": 212.5})
+    pull(f, [], now=NOW, catalog=[entry])
+    (kind,) = _insert_types(f)
+    assert kind.empty_weight_g == 213
+
+
+def test_a_name_clash_and_a_weightless_entry_are_skipped_and_counted(pg_pool: PgPool) -> None:
+    f = _filament(pg_pool)
+    catalog = [_entry(5, "Bambu reusable", 250), _entry(6, "BAMBU reusable", 212)]
+    report = pull(f, [], now=NOW, catalog=[*catalog, _entry(7, "Nothing", 0)])
+    assert report.catalog_skipped == 2
+    (kind,) = _insert_types(f)
+    assert kind.bb_catalog_id == 5
+    # A spool naming the skipped entry gets no insert type.
+    (made,) = pull(
+        f, [bb(id=2, core_weight_catalog_id=6, **_NO_TAGS)], now=NOW, catalog=catalog
+    ).created_ids
+    assert _own_insert(f, made) is None
+
+
+def test_a_skipped_entry_warns_once_per_process(
+    pg_pool: PgPool, caplog: pytest.LogCaptureFixture
+) -> None:
+    f = _filament(pg_pool)
+    catalog = [_entry(5, "Bambu reusable", 250), _entry(6, "Bambu REUSABLE", 212)]
+    with caplog.at_level("DEBUG"):
+        pull(f, [], now=NOW, catalog=catalog)
+        pull(f, [], now=NOW, catalog=catalog)
+    warned = [r for r in caplog.records if r.levelname == "WARNING" and "skipped" in r.message]
+    assert len(warned) <= 1
+    assert "get no insert type" in caplog.text
+
+
+def test_an_archived_insert_type_is_no_spools_insert_type(pg_pool: PgPool) -> None:
+    f = _filament(pg_pool)
+    pull(f, [], now=NOW, catalog=[_entry()])
+    (kind,) = _insert_types(f)
+    f.catalog.archive("insert-types", kind.id, True)
+    (made,) = pull(
+        f, [bb(id=3, core_weight_catalog_id=5, **_NO_TAGS)], now=NOW, catalog=[_entry()]
+    ).created_ids
+    assert _own_insert(f, made) is None
+    # And the entry is not made again beside the archived one.
+    assert f.catalog.list("insert-types") == []
+
+
+def test_an_empty_catalog_takes_no_lock_and_no_transaction(pg_pool: PgPool) -> None:
+    f = _filament(pg_pool)
+    assert pull(f, [], now=NOW, catalog=[]).catalog_skipped == 0
+    assert _insert_types(f) == []
+
+
+@pytest.mark.parametrize(
+    ("answer", "text"),
+    [
+        (httpx.Response(200, text="not json"), "another shape"),
+        (httpx.Response(200, json=[{"id": "x"}]), "another shape"),
+    ],
+)
+@respx.mock
+async def test_a_garbled_catalog_read_is_none_and_logged(
+    answer: httpx.Response, text: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    settings = StoredSettings(bambuddy_url=BB, bambuddy_api_key="k")
+    respx.get(f"{BB}/api/v1/inventory/catalog").mock(return_value=answer)
+    assert await read_catalog(settings) is None
+    assert text in caplog.text
+
+
+@respx.mock
+async def test_a_slow_catalog_read_is_none_within_its_timeout(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def hang(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(30)
+        return httpx.Response(200, json=[])
+
+    monkeypatch.setattr("scadbuddy.filament.bambuddy_pull.CATALOG_TIMEOUT", 0.2)
+    respx.get(f"{BB}/api/v1/inventory/catalog").mock(side_effect=hang)
+    settings = StoredSettings(bambuddy_url=BB, bambuddy_api_key="k")
+    assert await read_catalog(settings) is None
+    assert "no answer within" in caplog.text

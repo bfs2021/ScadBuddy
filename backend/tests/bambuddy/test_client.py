@@ -539,3 +539,15 @@ async def test_the_spool_catalog_is_read_from_the_inventory(bambuddy: BambuddyCl
         (6, "Bambu cardboard", 212),
         (7, "Generic plastic", 140),
     ]
+
+
+@respx.mock
+async def test_the_spool_catalog_declares_read_status(bambuddy: BambuddyClient) -> None:
+    respx.get(f"{API}/inventory/catalog").mock(
+        return_value=httpx.Response(403, json={"detail": "Missing permission"})
+    )
+
+    with pytest.raises(ApiError) as caught:
+        await bambuddy.spool_catalog()
+
+    assert caught.value.extensions["required_scope"] == Scope.READ_STATUS.value

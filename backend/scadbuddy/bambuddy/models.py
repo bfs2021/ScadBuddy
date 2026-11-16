@@ -1146,7 +1146,8 @@ class SpoolCatalogEntry(BambuddyModel):
 
     id: int
     name: str
-    weight: int
+    #: Grams; the pull rounds a fractional one to whole grams.
+    weight: int | float
 
 
 class SpoolAssignment(BambuddyModel):
