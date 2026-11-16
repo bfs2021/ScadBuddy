@@ -8,9 +8,12 @@ this order:
    pull. "Changed" compares BB's values with the ones the last pull saw, kept in the
    ``data.bb`` of the spool's newest ``synced_from_bb`` event; a BB row whose
    ``updated_at`` is not past the link's ``bb_updated_at`` is not looked at, except for
-   the insert type (below): its last reading with no ``core_weight_catalog_id`` is read
-   in full once (the event is booked with no ref, so the next pull sees the key), and a
-   row whose catalog entry was mapped after it was read is checked for the insert type. Per field
+   the insert type (below): a row whose last reading has no ``core_weight_catalog_id``
+   is read in full on each pull until the key is recorded (the event is booked with no
+   ref), which happens on the first pull where BB's id is mapped or None, or where the
+   row changed; while the id stays unmapped the key stays absent and nothing is booked.
+   A row whose catalog entry was mapped after it was read is checked for the insert
+   type. Per field
    the newer change wins (§8.2): a field SB edited (an ``edited`` event) after BB's
    ``updated_at`` keeps SB's value. A value BB no longer has never clears SB's, and the
    fields BB does not have (note, location, bed temperatures ...) are never touched. A
