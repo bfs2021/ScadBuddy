@@ -91,12 +91,13 @@ def shelf_spools(rows: Iterable[FilamentInventorySpool]) -> list[ShelfSpool]:
     ]
 
 
-def link_rgba(spool_colour: str) -> str:
+def link_rgba(spool_colour: str, alpha: int) -> str:
     """A record's ``spool_colour`` (its spools' ``#RRGGBBAA`` at the last import, #6262
-    Task 9 fix round 2) as ``#RRGGBBAA``. An old ``#RRGGBB`` (an API still on the old code
-    during a rollout) reads as opaque, alpha ``FF``."""
+    Task 9 fix round 2) as ``#RRGGBBAA``. An old ``#RRGGBB`` (written by an API still on
+    the old code during a rollout) takes the record's ``alpha``, as
+    ``20261116T0300Z_filament_spool_colour_rgba.sql`` converts it."""
     colour = spool_colour.upper()
-    return colour if len(colour) == 9 else colour + "FF"
+    return colour if len(colour) == 9 else colour + f"{alpha:02X}"
 
 
 def record_rgba(record: Filament) -> str:
@@ -131,7 +132,7 @@ def _of(spool: ShelfSpool, record: Filament, link: SpoolLink | None) -> bool:
     if link is not None and link.spool_colour is not None:
         # The spools' own colour and alpha at the last import, whatever the record's alpha
         # (a clear stand-in record of alpha 255 keeps finding its clear spools).
-        return spool.rgba.upper() == link_rgba(link.spool_colour)
+        return spool.rgba.upper() == link_rgba(link.spool_colour, record.alpha)
     if not same_opacity(spool.rgba, record_rgba(record)):
         return False
     return spool.rgba.upper() == record_rgba(record)

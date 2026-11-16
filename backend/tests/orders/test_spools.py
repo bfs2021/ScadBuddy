@@ -122,6 +122,17 @@ def test_a_supplied_spool_must_be_the_slots_filament() -> None:
     assert fill_plan({0: filament()}, elsewhere, PRINTER, {1: 45}) == {1: 45}
 
 
+def test_an_old_link_reads_with_the_records_alpha() -> None:
+    """Fix round 3: a 7-char ``spool_colour`` an old pod wrote reads with the record's
+    alpha, as `20261116T0300Z` converts it: a clear record (alpha 0) linked to `#000000`,
+    its linked spools archived, never takes a black opaque spool of its names."""
+    clear = filament("#000000", alpha=0)
+    links = {clear.id: SpoolLink("#000000", frozenset({99}))}
+    with pytest.raises(SpoolChoiceError):
+        fill_plan({0: clear}, [spool(41, rgba="#000000FF")], PRINTER, {}, links)
+    assert fill_plan({0: clear}, [spool(42, rgba="#00000000")], PRINTER, {}, links) == {1: 42}
+
+
 def test_a_colour_set_by_hand_still_finds_its_spools() -> None:
     """#6211 review: spools are matched as the import matches them, by the record's link
     (its spool numbers, else the spools' colour), so a hand-set colour never hides them."""
@@ -686,6 +697,30 @@ def test_import_by_colour_keeps_alpha_apart(rows: OrderStore) -> None:
     links = rows.spool_links([clear, opaque])
     assert links[clear].spool_ids == frozenset()
     assert links[opaque].spool_ids == frozenset({41})
+
+
+@pytest.mark.requires_postgres
+def test_an_old_link_finds_only_spools_of_the_records_alpha(rows: OrderStore) -> None:
+    """Fix round 3: the import reads a 7-char link with the record's alpha too: a clear
+    record linked to `#000000` (its spools archived) is not a black opaque group's."""
+    clear = rows.insert_filament(
+        FilamentInput(
+            material="PLA",
+            subtype="Basic",
+            brand="Bambu",
+            colour="#000000",
+            alpha=0,
+            cost_per_kg="10",
+        ),
+        colour_source="import",
+        spool_colour="#000000",
+        spool_ids=[99],
+    )
+
+    [imported] = _import(rows, [priced(41, "#000000FF", "24")])
+
+    assert imported["action"] == "created"
+    assert imported["filament_id"] != clear.id
 
 
 @pytest.mark.requires_postgres

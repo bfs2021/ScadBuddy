@@ -5,7 +5,8 @@
 -- prod stand-ins below) still finds a new clear spool once its linked ones are archived.
 --
 -- The check takes both forms for one rollout window: an API still running the old code
--- writes `#RRGGBB`, which the new code reads as alpha `FF`.
+-- writes `#RRGGBB`, which the new code reads with the record's alpha (`orders/spools.py`
+-- `link_rgba`), as the conversion below does.
 ALTER TABLE filaments DROP CONSTRAINT IF EXISTS filaments_spool_colour_check;
 ALTER TABLE filaments ADD CONSTRAINT filaments_spool_colour_check
   CHECK (spool_colour ~ '^#[0-9A-F]{6}([0-9A-F]{2})?$');

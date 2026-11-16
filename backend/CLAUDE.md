@@ -1504,8 +1504,8 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   own `#RRGGBBAA` at the last import (`spool_colour`, written as `#RRGGBBAA` since
   `20261116T0300Z_filament_spool_colour_rgba.sql`, which converted the old `#RRGGBB` with
   the record's alpha and the two stand-ins to `#00000000`; an old `#RRGGBB` an API on the
-  old code still writes during a rollout reads as alpha `FF`, `orders/spools.py`
-  `link_rgba`), else, for a record with no link, by its own `colour` plus `alpha` (never
+  old code still writes during a rollout reads with the record's alpha, as the migration
+  converts it, `orders/spools.py` `link_rgba`), else, for a record with no link, by its own `colour` plus `alpha` (never
   a spool of another alpha, `filament/colour.py` `same_opacity`), so a colour a person set on a linked record is
   never matched, it makes no duplicate, and a spool whose material was corrected is
   another filament's (`spool_import.py` `_matches`, in three passes over every group, so
@@ -1535,7 +1535,9 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   edit (#6211 review). Until that import also after #6262 Task 9's deploy, an opaque
   record whose link an import before #6316 wrote over both alphas' spools (it grouped by
   RGB) may take the translucent spool for an item print, by its `spool_ids`; the import
-  relinks it to its own alpha's spools. An item
+  relinks it to its own alpha's spools. An old pod's import during the rollout writes
+  7-char links again (the RGB of a group of either alpha), which read with the record's
+  alpha until the next import on the new code writes `#RRGGBBAA`. An item
   print's spools are matched the same way (`orders/spools.py` `_of`, the store's
   `spool_links`), so a hand-set colour still finds its spools; `item_plan` fills SB spool
   numbers (`ids: "sb"`) from the SB rows of the registry printer, and maps an older

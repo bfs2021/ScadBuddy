@@ -355,9 +355,12 @@ def test_the_rgba_link_migration_keeps_a_stand_ins_clear_spools(
     assert len(client.get(BOOK).json()["filaments"]) == 3
 
 
-def test_an_old_7_char_link_reads_as_opaque(client: TestClient, pg_conninfo: str) -> None:
-    """Fix round 2 (I3): for one rollout window an old API still writes `#RRGGBB`; the new
-    code reads it as alpha `FF`, so it finds opaque spools and never a clear one."""
+def test_an_old_7_char_link_reads_with_the_records_alpha(
+    client: TestClient, pg_conninfo: str
+) -> None:
+    """Fix rounds 2 and 3 (I3): for one rollout window an old API still writes `#RRGGBB`;
+    the new code reads it with the record's alpha (here an opaque record's `FF`), so it
+    finds the opaque spools and never the translucent one."""
     made = add_filament(client, colour="#123456", cost_per_kg="20")
     with psycopg.connect(pg_conninfo, autocommit=True) as conn:
         conn.execute(

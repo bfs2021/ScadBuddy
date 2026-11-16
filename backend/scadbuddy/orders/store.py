@@ -469,7 +469,8 @@ class ImportRecord:
     extra_colours: list[str]
     effect: FilamentEffect | None
     colour_source: ColourSource
-    #: The spools' ``#RRGGBBAA`` (an old ``#RRGGBB`` is opaque, `spools.link_rgba`) and SB
+    #: The spools' ``#RRGGBBAA`` (an old ``#RRGGBB`` takes the record's alpha,
+    #: `spools.link_rgba`) and SB
     #: numbers at the last import; ``None`` and empty before one.
     spool_colour: str | None
     spool_ids: list[int]
@@ -478,7 +479,8 @@ class ImportRecord:
 @dataclass(frozen=True)
 class SpoolLink:
     """A record's link to its spools at the last spool import (#6209): their ``#RRGGBBAA``
-    (``None`` before one; an old ``#RRGGBB`` is opaque) and SB spool numbers."""
+    (``None`` before one; an old ``#RRGGBB`` takes the record's alpha) and SB spool
+    numbers."""
 
     spool_colour: str | None
     spool_ids: frozenset[int]

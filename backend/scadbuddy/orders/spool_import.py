@@ -86,8 +86,8 @@ def _record_rgba(record: ImportRecord) -> str:
 
 def _link_rgba(record: ImportRecord) -> str | None:
     """The spools' own ``#RRGGBBAA`` at the last import (`spools.link_rgba`: an old
-    ``#RRGGBB`` reads as opaque); ``None`` before one."""
-    return None if record.spool_colour is None else link_rgba(record.spool_colour)
+    ``#RRGGBB`` takes the record's alpha); ``None`` before one."""
+    return None if record.spool_colour is None else link_rgba(record.spool_colour, record.alpha)
 
 
 def _names(material: str, subtype: str | None, brand: str | None) -> tuple[str, str, str]:

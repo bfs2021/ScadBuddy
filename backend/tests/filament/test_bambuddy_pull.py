@@ -4,18 +4,26 @@ changed since the last pull."""
 
 from __future__ import annotations
 
+import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
+import httpx
 import pytest
 import respx
 from psycopg.types.json import Jsonb
 
 from scadbuddy.bambuddy.models import Spool as BbSpool
-from scadbuddy.filament.bambuddy_pull import pull, read_and_pull, scheduled_pull
+from scadbuddy.filament.bambuddy_pull import (
+    ASSIGNMENTS_TIMEOUT,
+    pull,
+    read_and_pull,
+    read_assignments,
+    scheduled_pull,
+)
 from scadbuddy.filament.catalog import CatalogStore
 from scadbuddy.filament.component import Filament
 from scadbuddy.filament.inventory import FilamentInventory
@@ -32,6 +40,7 @@ from scadbuddy.filament.print_uses import SlotUse, record_uses, settle_uses
 from scadbuddy.filament.spools import FilamentSpoolStore
 from scadbuddy.filament.types import SpoolTypeStore
 from scadbuddy.library.settings_store import StoredSettings
+from scadbuddy.operations.kinds import CHECK_ON_BAMBUDDY
 from tests.conftest import PgPool
 
 pytestmark = pytest.mark.requires_postgres
@@ -923,3 +932,32 @@ def test_a_persons_row_matching_bambuddys_value_is_kept(pg_pool: PgPool) -> None
         ("0.6", "GFA05", "Bambu PLA Silk", True),
         ("0.8", "GFA05", "Bambu PLA Silk", True),
     ]
+
+
+@respx.mock
+async def test_the_assignment_read_names_bambuddy_only_while_it_waits() -> None:
+    """Task 9 fix round 3: `read_assignments` is a `waiting_on_bambuddy` wait. Its own
+    `ASSIGNMENTS_TIMEOUT` ends the wait (no assignments, the flag cleared), so a check
+    that goes on is not blamed on Bambuddy later; a cancel inside it (the check's budget
+    running out) leaves the flag set, so that timeout names Bambuddy."""
+
+    async def hang(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(30)
+        return httpx.Response(200, json=[])
+
+    respx.get("https://bambuddy.test/api/v1/inventory/assignments").mock(side_effect=hang)
+    settings = StoredSettings(bambuddy_url="https://bambuddy.test", bambuddy_api_key="bb_test")
+    waiting = [False]
+    token = CHECK_ON_BAMBUDDY.set(waiting)
+    try:
+        started = time.monotonic()
+        assert await read_assignments(settings) == []
+        assert time.monotonic() - started < ASSIGNMENTS_TIMEOUT + 1
+        assert waiting == [False]
+
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(0.2):
+                await read_assignments(settings)
+        assert waiting == [True]
+    finally:
+        CHECK_ON_BAMBUDDY.reset(token)
