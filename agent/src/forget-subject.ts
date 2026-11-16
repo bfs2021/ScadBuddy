@@ -51,12 +51,11 @@ try {
   const keys = kek.ok ? new PgPayloadKeys(database.sql, kek.kek, { previous: previous?.ok ? previous.kek : undefined }) : undefined
   // The tombstone, the key and a flow run's images through the API's CRUD route once it lists area
   // `forget` (#5299 step 6), with the agent's service credential as main.ts gets it; over SQL otherwise.
-  const view = new ServiceCredential(database.sql, kek.ok ? kek.kek : undefined)
   const proofFile = config.serviceTokenFile ?? config.serviceBootstrapFile
   const credential: CredentialSource =
     proofFile !== undefined
-      ? new ExchangeCredential({ backendUrl: config.backendUrl, proofFile, proof: config.serviceTokenFile !== undefined ? 'k8s' : 'bootstrap', fallback: view })
-      : view
+      ? new ExchangeCredential({ backendUrl: config.backendUrl, proofFile, proof: config.serviceTokenFile !== undefined ? 'k8s' : 'bootstrap' })
+      : new ServiceCredential(database.sql, kek.ok ? kek.kek : undefined)
   const crudFetch = withServiceCredential(globalThis.fetch, credential, config.backendUrl)
   const areas = new CrudAreas(config.backendUrl, { fetch: crudFetch, wanted: FORGET_AREAS, log: (m) => console.error(`forget-subject: ${m}`) })
   const crud = (await areas.refresh()) ? new CrudSubjectKeys(config.backendUrl, { fetch: crudFetch }) : undefined

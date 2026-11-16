@@ -880,8 +880,9 @@ The counter
 `scadbuddy_service_token_exchanges_total{caller, proof, result}` counts them. An exchange
 the API answers `404` (an older API pod during a roll) falls back to the view while the
 caller still has a database URL, except on the workers that hold no database (render,
-print and projects): they take the exchange only (`exchange_source`), since the CRUD areas
-they wait for come only from an API that serves the exchange (#5298). The API's own in-process `projects` worker gets its
+print and projects) and the agent: they take the exchange only (`exchange_source`; the
+agent's `ExchangeCredential`, #6501), since the CRUD areas they wait for come only from an
+API that serves the exchange (#5298). The API's own in-process `projects` worker gets its
 credential minted in memory. `GET /api/v1/auth/service-credentials` returns each
 credential's `proof`, `pod_name` and `pod_uid` (the Settings page does not show them, or the
 `render` caller, yet), and the API also revokes every credential of a pod
@@ -919,9 +920,9 @@ CNPG a `managed.roles` entry) and point that caller's `SCADBUDDY_DATABASE_URL` a
 the API itself stays on the database's owner role. At every start the API grants each
 role that exists exactly its list (`backend/scadbuddy/auth/caller_grants.py`) and its
 credential's view; a role created
-after the API started is granted on the API's next start. The agent's role owns the
-`ai_*` tables it migrates and grants what the API's role reads of them
-(`agent/src/db/grants.ts`).
+after the API started is granted on the API's next start. The agent grants nothing
+since #6501: on separate roles, the API's role must own the `ai_*` tables (the files it
+applies since #5299 D6 already are; transfer the older ones with `ALTER TABLE … OWNER TO`).
 
 On 2026-11-05 the render, print and projects workers connected as their own roles (the
 projects worker has made no connection since 2026-11-07, and the print worker none since
