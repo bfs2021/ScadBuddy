@@ -121,6 +121,10 @@ from scadbuddy.crud.guard import CrudCaller, crud_router
 #: (`api/crud_agent_questions.py`). Its ``escalations`` area is ``…/agent/escalations/*``: a flow
 #: run's calls at the starting session's hop, passed up, denied, moved on its timeout and
 #: delivered, and a run's child entries for its queue (`api/crud_agent_escalations.py`).
+#: Its ``session-sweeps`` area is ``…/agent/sessions/live``, which session ids still have a
+#: row, for its directory sweeps; its ``forget-rows`` area is
+#: ``…/agent/sessions/{id}/forget-rows``, a forgotten session's last rows deleted with its
+#: unnamed workspace bytes and its warm-evict NOTIFY (#6501, `api/crud_agent_sweeps.py`).
 CRUD_AREAS: dict[CrudCaller, list[str]] = {
     "projects": ["flows", "operations", "payload-keys"],
     "render": ["settings", "jobs", "refs", "blob-index", "store-folders", "assets", "libraries"],
@@ -189,6 +193,8 @@ CRUD_AREAS: dict[CrudCaller, list[str]] = {
         "approvals",
         "questions",
         "escalations",
+        "session-sweeps",
+        "forget-rows",
     ],
     "intake": ["sources"],
 }
