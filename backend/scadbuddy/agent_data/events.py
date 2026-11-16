@@ -77,7 +77,7 @@ def append(
         if fence is not None:
             held = conn.execute(
                 "SELECT 1 FROM ai_sessions WHERE id = %s::uuid AND turn_attempt = %s"
-                " AND durable_turn_id::text = %s FOR UPDATE",
+                " AND durable_turn_id = %s::uuid FOR UPDATE",
                 (session_id, fence.attempt, fence.turn_id),
             ).fetchone()
             if held is None:
@@ -216,3 +216,71 @@ def fork_log(
             (cut, cut, child_id),
         )
         return first + append_in(conn, child_id, then)
+
+
+def copy_fork_events(conn: Connection[Any], session_id: str) -> list[str]:
+    """``copyForkEvents``: before the parent of ``session_id`` goes (the forget's transaction),
+    the events it reads through its chain become rows of its own, at the same seqs, re-addressed
+    to it. The caller clears its link. The events' JSON texts, so their images can be copied."""
+    rows = conn.execute(
+        (
+            _CHAIN + " SELECT e.seq, e.event FROM chain c"
+            " JOIN ai_session_events e ON e.session_id = c.id"
+            " WHERE c.depth > 0 AND e.seq <= c.bound"
+            " AND e.event::jsonb->>'type' = ANY(%(types)s) ORDER BY e.seq"
+        ).encode(),
+        {"session": session_id, "types": FORK_EVENT_TYPES},
+    ).fetchall()
+    texts = []
+    for row in rows:
+        event = json.loads(row["event"])
+        event["sessionId"] = session_id
+        texts.append(json.dumps(event, ensure_ascii=False, separators=(",", ":")))
+    for at in range(0, len(rows), 500):
+        conn.execute(
+            "INSERT INTO ai_session_events (session_id, seq, event)"
+            " SELECT %s::uuid, e.seq, e.event"
+            " FROM unnest(%s::bigint[], %s::text[]) AS e(seq, event)",
+            (
+                session_id,
+                [int(r["seq"]) for r in rows[at : at + 500]],
+                texts[at : at + 500],
+            ),
+        )
+    return texts
+
+
+def blob_names(texts: list[str]) -> list[str]:
+    """``forkPoint.ts`` ``blobNames``: the images the events name."""
+    names: dict[str, None] = {}
+    for text in texts:
+        event = json.loads(text)
+        if event.get("type") == "tool.result":
+            for image in event.get("images") or []:
+                names[image["name"]] = None
+        if event.get("type") == "user.turn":
+            for image in event.get("images") or []:
+                if image.get("name") is not None:
+                    names[image["name"]] = None
+                names[image["preview"]["name"]] = None
+    return list(names)
+
+
+def copy_fork_blobs(conn: Connection[Any], session_id: str, names: list[str]) -> None:
+    """``blobs.ts`` ``copyForkBlobs``: the images ``names`` lists, found through the chain,
+    become rows of the session's own; a new one keeps its ``created_at``, one the session
+    already has is stamped now (#6413)."""
+    if not names:
+        return
+    conn.execute(
+        (
+            _CHAIN + " INSERT INTO ai_session_blobs (session_id, name, media_type, data,"
+            " created_at) SELECT DISTINCT ON (b.name) %(session)s::uuid, b.name, b.media_type,"
+            " b.data, b.created_at FROM chain c JOIN ai_session_blobs b ON b.session_id = c.id"
+            " WHERE c.depth > 0 AND b.name = ANY(%(names)s) ORDER BY b.name, c.depth"
+            # An image the fork already holds is written again now: a queued message's images
+            # are deleted only up to its own write's time (#6413), so every write sets it.
+            " ON CONFLICT (session_id, name) DO UPDATE SET created_at = clock_timestamp()"
+        ).encode(),
+        {"session": session_id, "names": names},
+    )

@@ -303,8 +303,10 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   `RELEASE_AUDIT_WINDOW`) writes in its transaction; `rotation.py` the re-wrap of the credentials and payload
   keys at the API's start (`main._rotate_agent_secrets`). For `api/crud_agent_forget.py` (area
   `forget`, #5299 step 6): `forget.py` a subject's tombstone, its flow images and its key in one
-  transaction under its lock (a session with forks refused, `ForksTakeRangesError`: the agent
-  copies their ranges itself until its sessions move here), a browser call's key dropped and the
+  transaction under its lock, a session's forks first taking their ranges of its transcript,
+  events and images (`transcripts.py` `copy_fork_ranges`, #5299 step 9, part c; refused,
+  `ForksTakeRangesError`, only with no KEK when a fork takes transcript entries, and the agent
+  copies them itself), a browser call's key dropped and the
   hourly sweep of the keys no forget deletes; `flow_blobs.py` a flow run's images kept (sealed by
   the agent, sent as multipart bytes; the tombstone check and `FLOW_IMAGES_MAX` under the lock)
   and read. For `api/crud_agent_workspace.py` (area `workspace`, #5299 step 7): `workspace.py`
@@ -354,7 +356,12 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   `ai_sessions.event_seq` in the insert's statement, a turn's append fenced `FOR UPDATE` on its
   placement, a fork's read through its chain (`LEAST(bound, cut)`) in one statement, and a new
   fork's log under its parent's payload-key lock, shared (tests
-  `tests/crud/test_crud_agent_events.py`).
+  `tests/crud/test_crud_agent_events.py`). `order_costs.py` is the order items a session revised
+  and its spend's report, for `api/crud_agent_order_costs.py` (area `session-order-costs`, #5299
+  step 9, part c): the agent's `PgOrderCostRows`, a report's writes each checking in its
+  transaction that the caller's token holds the session's lease (`leases.py`
+  `order-cost:<session id>`, whose acquire also tries the SQL pod's advisory lock) (tests
+  `tests/crud/test_crud_agent_order_costs.py`).
 - The agent's small stores (#5299 step 5): `api/crud_agent_stores.py` (areas
   `activity-kinds`, `browser-origins`, `bridge-tabs`, `pairings`, `mcp-tokens`) and
   `api/crud_agent_notify.py` (area `notify`, sealed with the KEK under the agent's AAD), each
@@ -1612,14 +1619,15 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   its print run's other linked plates, `OrderStore.archive_run_plates`). Quote source
   `archive`: `POST …/items/{item}/quotes/archive` (`ArchiveQuoteRequest`: `archive_id`,
   default the item's first origin, one of its origins or printed by its output or library
-  file, else 422; `filaments`; `filament_id` for every slot the print used), `quote_from_archive`: the slice quote's
+  file, else 422; `filaments`; `filament_id` for every slot the print used; `units`, the
+  units of the item the run made, 1 to `ARCHIVE_UNITS_MAX`, default 1, #6336), `quote_from_archive`: the slice quote's
   check, then every plate archive of the run (`print_sends` by `run_id`, `print_links` by
   queue item; 409 `archive_plates_missing` for a plate with none, `archive_not_succeeded` for
   a status other than `completed`, `archive_gone`), grams per slot from
   `extra_data.filament_slots` (slot id less one), the actual seconds else the estimate, each
-  plate an `ArchivePlate` naming its archive, recorded by `Lifecycle.record_archive_quote`
-  (the whole run is one unit: a run that printed several units, on one plate or as copies,
-  overstates the unit cost: `ArchiveFacts` carries no count of the units a plate held)
+  plate an `ArchivePlate` naming its archive, its grams and seconds divided by `units`
+  (`_per_unit`: grams to the hundredth, seconds to the second, half up; the setup line
+  stays per plate and the labour line per item), recorded by `Lifecycle.record_archive_quote`
   (no sliced file; printing it re-slices, as a manual quote). A library file item with no
   slots gets the slots the print used (`archive_colours`). Job cost reads an `archive`
   quote's plates as a slice quote's, and a `storefront` quote's too (`models.py`

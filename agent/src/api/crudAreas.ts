@@ -59,7 +59,7 @@ export const GATE_AREAS = ['gate', 'pending-input', 'audit', 'approvals', 'quest
  * api/crud_agent_transcripts.py, api/crud_agent_events.py; sessions/crudTranscripts.ts,
  * sessions/crudEvents.ts).
  */
-export const SESSION_AREAS = ['sessions', 'session-resources', 'transcripts', 'session-events'] as const
+export const SESSION_AREAS = ['sessions', 'session-resources', 'transcripts', 'session-events', 'session-order-costs'] as const
 
 /**
  * The area of the /mcp session relay's directory and messages (#5299 step 11; backend
