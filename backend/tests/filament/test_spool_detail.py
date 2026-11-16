@@ -4,6 +4,7 @@ basis, the ledger page, the tags and the summary."""
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -19,9 +20,9 @@ from scadbuddy.filament.models import (
     SpoolTypeCreate,
     SpoolTypePatch,
 )
-from scadbuddy.filament.spools import FilamentSpoolStore
+from scadbuddy.filament.spools import FilamentDefaults, FilamentSpoolStore
 from scadbuddy.filament.types import SpoolTypeStore
-from tests.conftest import PgPool
+from tests.conftest import PgPool, open_pg_pool
 
 pytestmark = pytest.mark.requires_postgres
 
@@ -180,7 +181,7 @@ def test_low_stock_uses_the_spool_then_the_default(pg_pool: PgPool) -> None:
 
 def test_low_stock_reads_the_setting(pg_pool: PgPool) -> None:
     percent = 20
-    store = FilamentSpoolStore(pg_pool, low_stock_pct=lambda: percent)
+    store = FilamentSpoolStore(pg_pool, lambda: FilamentDefaults(percent, None))
     made = store.create(
         SpoolCreate(material_id=_material(pg_pool), label_weight_g=1000, grams_left=150),
         actor="ann",
@@ -191,6 +192,40 @@ def test_low_stock_reads_the_setting(pg_pool: PgPool) -> None:
     assert spool is not None
     assert spool.low_stock is False
     assert store.summary().low_stock == 0
+
+
+def test_the_summary_values_a_spool_with_no_cost_at_the_default_cost(pg_pool: PgPool) -> None:
+    cost: Decimal | None = Decimal("24.50")
+    store = FilamentSpoolStore(pg_pool, lambda: FilamentDefaults(20, cost))
+    store.create(
+        SpoolCreate(material_id=_material(pg_pool), label_weight_g=1000, grams_left=500),
+        actor="ann",
+    )
+    assert store.summary().value_left == Decimal("12.25")
+    cost = None
+    assert store.summary().value_left is None
+
+
+def test_no_read_of_the_settings_holds_a_pool_connection(pg_conninfo: str, pg_pool: PgPool) -> None:
+    """A reader that takes a second connection from the one pool would deadlock a busy
+    pool, so the store reads before it takes its own."""
+    material = _material(pg_pool)
+    small = open_pg_pool(pg_conninfo, size=1)
+    try:
+
+        def defaults() -> FilamentDefaults:
+            with small.connection(timeout=3):
+                return FilamentDefaults(20, None)
+
+        store = FilamentSpoolStore(small, defaults)
+        made = store.create(SpoolCreate(material_id=material, grams_left=100), actor="ann")
+        assert store.list()
+        assert store.get(made.id) is not None
+        assert store.detail(made.id) is not None
+        assert store.summary().spools == 1
+        assert store.update(made.id, SpoolPatch(low_stock_pct=5), actor="ann") is not None
+    finally:
+        small.close()
 
 
 def test_in_use_follows_print_events(pg_pool: PgPool) -> None:

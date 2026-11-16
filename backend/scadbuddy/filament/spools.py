@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -102,20 +103,36 @@ def _by_id(conn: Conn, table: str, columns: str, ids: Iterable[UUID | None]) -> 
     return {row["id"]: row for row in rows}
 
 
-def _default_low_stock_pct() -> int:
-    """The setting's default, for a store built with no reader of it (a test)."""
-    return int(Settings.model_fields["filament_low_stock_pct"].default)
+@dataclass(frozen=True)
+class FilamentDefaults:
+    """The two Filament settings a spool read leans on, as one read of them: the
+    percentage under which a spool with none of its own is low (``filament_low_stock_pct``)
+    and the cost per kg of a spool and type that name none (``filament_default_cost_per_kg``)."""
+
+    low_stock_pct: int
+    cost_per_kg: Decimal | None
+
+
+#: The settings' own defaults, for a read that shows neither ``low_stock`` nor a value (a
+#: static read, a store a test builds with no reader).
+_SETTING_DEFAULTS = FilamentDefaults(
+    int(Settings.model_fields["filament_low_stock_pct"].default), None
+)
+
+
+def _setting_defaults() -> FilamentDefaults:
+    return _SETTING_DEFAULTS
 
 
 def _hydrate(
     conn: Conn,
     rows: list[dict[str, Any]],
-    low_stock_pct: Callable[[], int] = _default_low_stock_pct,
+    defaults: FilamentDefaults = _SETTING_DEFAULTS,
 ) -> list[m.Spool]:
     """The spools of ``rows`` with their effective values. A spool's subtype and
     material are its own if it sets them, else its type's. A spool with no percentage of
-    its own is low under ``low_stock_pct()``, the setting ``filament_low_stock_pct``."""
-    default_pct = low_stock_pct()
+    its own is low under ``defaults.low_stock_pct``, the setting ``filament_low_stock_pct``."""
+    default_pct = defaults.low_stock_pct
     types = _by_id(conn, "filament_spool_types", _TYPE_COLUMNS, (r["type_id"] for r in rows))
 
     def level(row: Row, field: str) -> UUID | None:
@@ -187,13 +204,13 @@ class FilamentSpoolStore:
     def __init__(
         self,
         pool: ConnectionPool[Conn],
-        low_stock_pct: Callable[[], int] = _default_low_stock_pct,
+        defaults: Callable[[], FilamentDefaults] = _setting_defaults,
     ) -> None:
-        """``low_stock_pct`` reads the setting ``filament_low_stock_pct`` as it is now; a
-        store built without one (a test, a static read that never shows ``low_stock``)
-        uses the setting's default."""
+        """``defaults`` reads the Filament settings as they are now. It may take a
+        connection of its own, so a method calls it before it takes one of the pool's,
+        never inside. A store built without one uses the settings' defaults."""
         self._pool = pool
-        self._low_stock_pct = low_stock_pct
+        self._defaults = defaults
 
     def list(self, *, include_archived: bool = False, needs_type: bool | None = None) -> _Spools:
         """By number. ``needs_type`` keeps only the spools with no type (``True``) or only
@@ -202,23 +219,26 @@ class FilamentSpoolStore:
         if needs_type is not None:
             where.append("type_id IS NULL" if needs_type else "type_id IS NOT NULL")
         clause = f" WHERE {' AND '.join(where)}" if where else ""
+        defaults = self._defaults()
         with self._pool.connection() as conn:
             rows = conn.execute(
                 f"SELECT {_SPOOL_COLUMNS} FROM filament_spools{clause} ORDER BY number"
             ).fetchall()
-            return _hydrate(conn, rows, self._low_stock_pct)
+            return _hydrate(conn, rows, defaults)
 
     def get(self, spool_id: UUID) -> m.Spool | None:
+        defaults = self._defaults()
         with self._pool.connection() as conn:
-            return self._spool(conn, spool_id, self._low_stock_pct)
+            return self._spool(conn, spool_id, defaults)
 
     def detail(self, spool_id: UUID) -> m.SpoolDetail | None:
         """The spool with its tags, effective presets and K values, the basis of its
         grams and whether it ever printed; ``None`` for no such spool."""
+        defaults = self._defaults()
         with self._pool.connection() as conn, conn.transaction():
             # One snapshot, so the stored grams and the basis behind them agree.
             conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-            spool = self._spool(conn, spool_id, self._low_stock_pct)
+            spool = self._spool(conn, spool_id, defaults)
             if spool is None:
                 return None
             history = ledger.events(conn, spool_id)
@@ -264,8 +284,9 @@ class FilamentSpoolStore:
 
     def summary(self) -> m.InventorySummary:
         """The unarchived spools in total; a spool's value is its grams left at its
-        effective cost per kg. A spool is loaded when its place is a printer's tray
-        (``printer_id`` set, `filament/inventory.py`)."""
+        effective cost per kg, else ``filament_default_cost_per_kg``. A spool is loaded when
+        its place is a printer's tray (``printer_id`` set, `filament/inventory.py`)."""
+        default_cost = self._defaults().cost_per_kg
         spools = self.list()
         with self._pool.connection() as conn:
             trays = {
@@ -281,6 +302,8 @@ class FilamentSpoolStore:
             count, total = stock.get(spool.names.material, (0, 0.0))
             stock[spool.names.material] = (count + 1, total + grams)
             cost = spool.effective.cost_per_kg
+            if cost is None:
+                cost = default_cost
             if cost is not None and spool.grams_left is not None:
                 value = (value or Decimal(0)) + Decimal(str(grams)) / 1000 * cost
         return m.InventorySummary(
@@ -361,6 +384,7 @@ class FilamentSpoolStore:
         event's reading. The temperature ranges are checked on the effective values."""
         data = body.model_dump(exclude={"grams_left"})
         names = list(data)
+        defaults = self._defaults()
         try:
             with self._pool.connection() as conn, conn.transaction():
                 row = conn.execute(
@@ -379,7 +403,7 @@ class FilamentSpoolStore:
                     absolute_g=body.grams_left,
                     actor=actor,
                 )
-                made = self._spool(conn, spool_id, self._low_stock_pct)
+                made = self._spool(conn, spool_id, defaults)
         except errors.ForeignKeyViolation:
             raise CatalogRefError() from None
         assert made is not None
@@ -396,6 +420,7 @@ class FilamentSpoolStore:
         ``migrated`` presets (`presets.drop_migrated`), in the same event as
         ``changes.presets``."""
         sent = [n for n in _WRITABLE if n in patch.model_fields_set]
+        defaults = self._defaults()
         try:
             with self._pool.connection() as conn, conn.transaction():
                 if patch.archived:
@@ -436,7 +461,7 @@ class FilamentSpoolStore:
                     ledger.record(conn, spool_id, "edited", actor=actor, data={"changes": changes})
                 if patch.archived is not None:
                     self._archive(conn, current, patch.archived, actor)
-                return self._spool(conn, spool_id, self._low_stock_pct)
+                return self._spool(conn, spool_id, defaults)
         except errors.ForeignKeyViolation:
             raise CatalogRefError() from None
 
@@ -444,7 +469,7 @@ class FilamentSpoolStore:
         """The spool's slicer presets, its own over its type's; ``None`` for no such
         spool."""
         with self._pool.connection() as conn:
-            if self._spool(conn, spool_id, self._low_stock_pct) is None:
+            if self._spool(conn, spool_id) is None:
                 return None
             return p.effective_presets(conn, spool_id)
 
@@ -493,7 +518,7 @@ class FilamentSpoolStore:
         """The spool's pressure-advance values, its own over its type's; ``None`` for no
         such spool."""
         with self._pool.connection() as conn:
-            if self._spool(conn, spool_id, self._low_stock_pct) is None:
+            if self._spool(conn, spool_id) is None:
                 return None
             return p.effective_k_values(conn, spool_id)
 
@@ -757,12 +782,12 @@ class FilamentSpoolStore:
 
     @staticmethod
     def _spool(
-        conn: Conn, spool_id: UUID, low_stock_pct: Callable[[], int] = _default_low_stock_pct
+        conn: Conn, spool_id: UUID, defaults: FilamentDefaults = _SETTING_DEFAULTS
     ) -> m.Spool | None:
         row = conn.execute(
             f"SELECT {_SPOOL_COLUMNS} FROM filament_spools WHERE id = %s", (spool_id,)
         ).fetchone()
-        return None if row is None else _hydrate(conn, [row], low_stock_pct)[0]
+        return None if row is None else _hydrate(conn, [row], defaults)[0]
 
     @staticmethod
     def _tag_row(row: Row) -> m.TagRow:
@@ -793,7 +818,7 @@ class FilamentSpoolStore:
         )
 
     def _check(self, conn: Conn, spool_id: UUID) -> None:
-        spool = self._spool(conn, spool_id, self._low_stock_pct)
+        spool = self._spool(conn, spool_id)
         assert spool is not None
         _check_temps(spool.effective)
 

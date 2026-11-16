@@ -22,7 +22,7 @@ from temporalio.api.workflowservice.v1 import RegisterNamespaceRequest
 from scadbuddy.api import operations as operations_api
 from scadbuddy.api import settings as settings_api
 from scadbuddy.api.deps import STATE_ATTR, AppState
-from scadbuddy.core.settings import Settings
+from scadbuddy.core.settings import FilamentSync, Settings
 from scadbuddy.library.settings_store import RECOVER_BAMBUDDY_LIBRARY_SQL, StoreNotReadyError
 from scadbuddy.main import create_app
 from scadbuddy.operations.component import OPERATIONS
@@ -1076,3 +1076,13 @@ def test_filament_settings_round_trip(client: TestClient) -> None:
     )
     for bad in ({"spools": "two_way"}, {"spools": "off", "extra": 1}):
         assert client.put("/api/v1/settings", json={"filament_sync": bad}).status_code == 422
+
+
+def test_a_saved_sync_reads_back_as_a_filament_sync(client: TestClient) -> None:
+    """The path the spool refresh Schedule's pull takes (`main.py`)."""
+    assert (
+        client.put("/api/v1/settings", json={"filament_sync": {"spools": "off"}}).status_code == 200
+    )
+    read = _state(client).settings_store.read({"filament_sync"})["filament_sync"]
+    assert isinstance(read, FilamentSync)
+    assert read.spools == "off"

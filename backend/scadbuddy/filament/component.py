@@ -13,7 +13,7 @@ from scadbuddy.filament.inventory import FilamentInventory, PoolSbSpoolReads
 from scadbuddy.filament.locations import LocationStore
 from scadbuddy.filament.presets import PoolSpoolPresets
 from scadbuddy.filament.print_uses import PoolPrintUses, print_use_hook
-from scadbuddy.filament.spools import FilamentSpoolStore
+from scadbuddy.filament.spools import FilamentDefaults, FilamentSpoolStore
 from scadbuddy.filament.types import SpoolTypeStore
 
 
@@ -41,9 +41,14 @@ FILAMENT: Key[Filament] = Key("filament")
 def _build(core: Core, components: Components) -> Filament:
     pool = core.settings_store.pool
 
-    def low_stock() -> int:
-        # One row, read on each use: a change applies to the next read.
-        return int(core.settings_store.read({"filament_low_stock_pct"})["filament_low_stock_pct"])
+    def defaults() -> FilamentDefaults:
+        # Two rows in one query, read on each use: a change applies to the next read. It
+        # takes a connection of its own, so the stores call it before they take theirs.
+        read = core.settings_store.read({"filament_low_stock_pct", "filament_default_cost_per_kg"})
+        return FilamentDefaults(
+            low_stock_pct=int(read["filament_low_stock_pct"]),
+            cost_per_kg=read["filament_default_cost_per_kg"],
+        )
 
     # What a native print used is settled on its SB spools as the follow reads it settled
     # (#4643, #6262 Task 6); the follow is a core service and imports no feature.
@@ -51,9 +56,9 @@ def _build(core: Core, components: Components) -> Filament:
     return Filament(
         catalog=CatalogStore(pool),
         types=SpoolTypeStore(pool),
-        spools=FilamentSpoolStore(pool, low_stock),
+        spools=FilamentSpoolStore(pool, defaults),
         locations=LocationStore(pool),
-        inventory=FilamentInventory(pool, low_stock),
+        inventory=FilamentInventory(pool, defaults),
         presets=PoolSpoolPresets(pool),
     )
 

@@ -712,7 +712,8 @@ class Settings(BaseSettings):
     # _FILAMENT_DEFAULT_COST_PER_KG (#6262 Task 13): the Filament section's settings.
     # `filament_sync.spools` "off" turns the pull of Bambuddy's spools off; a spool that
     # sets no low-stock percentage is low under `filament_low_stock_pct` of its label
-    # weight; `filament_default_cost_per_kg` is in the shop's `orders_currency`.
+    # weight; `filament_default_cost_per_kg`, in the shop's `orders_currency`, values a
+    # spool with no cost in the inventory summary (`filament/spools.py` `summary`).
     filament_sync: FilamentSync = Field(default_factory=FilamentSync)
     filament_low_stock_pct: int = Field(default=20, ge=0, le=100)
     filament_default_cost_per_kg: Decimal | None = Field(default=None, ge=0)

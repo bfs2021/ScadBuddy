@@ -41,7 +41,7 @@ from scadbuddy.filament.models import (
     TrayView,
 )
 from scadbuddy.filament.presets import PoolSpoolPresets, effective_presets
-from scadbuddy.filament.spools import FilamentSpoolStore
+from scadbuddy.filament.spools import FilamentDefaults, FilamentSpoolStore
 from scadbuddy.printers.models import PrinterRow
 from scadbuddy.printers.reports import PrinterReportStore, report_status
 from scadbuddy.printers.store import PrinterStore
@@ -140,13 +140,11 @@ class FilamentInventory:
     rows (the settings store's). Synchronous: callers run it in a thread."""
 
     def __init__(
-        self, pool: ConnectionPool[Conn], low_stock_pct: Callable[[], int] | None = None
+        self, pool: ConnectionPool[Conn], defaults: Callable[[], FilamentDefaults] | None = None
     ) -> None:
         self._pool = pool
         self._spools = (
-            FilamentSpoolStore(pool)
-            if low_stock_pct is None
-            else FilamentSpoolStore(pool, low_stock_pct)
+            FilamentSpoolStore(pool) if defaults is None else FilamentSpoolStore(pool, defaults)
         )
         self._locations = LocationStore(pool)
 
