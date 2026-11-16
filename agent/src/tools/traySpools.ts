@@ -5,8 +5,7 @@ import { defineTool, json, type Tool } from './registry.js'
 // Which SB spool is in a registry printer's tray, on the native print path (#3818 tier A,
 // #6262 Task 4): the manual link a person makes for an untagged tray. The spool moves to
 // the tray's place (backend/scadbuddy/filament/inventory.py) and holds the tray until its
-// material or colour changes. Write tier: nothing leaves ScadBuddy (not Bambuddy, not any
-// spool provider).
+// material or colour changes. Write tier: nothing leaves ScadBuddy (not Bambuddy).
 // Routes: backend/scadbuddy/api/tray_spools.py. Not the Bambuddy path's question
 // (`POST /print/printers/{id}/trays/.../spool`), which writes Bambuddy's assignment.
 

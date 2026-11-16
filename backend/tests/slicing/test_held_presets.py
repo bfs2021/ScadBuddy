@@ -376,7 +376,7 @@ async def test_a_spools_own_kept_preset_resolves_on_native(kept: Profiles) -> No
     options = FilamentOptions(
         library_file_id=None,
         slots=[SlotNeed(slot_id=1, colour="#FFFFFF")],
-        spools=[SpoolOption(spool_id=16, material="PLA", colour="#000000")],
+        spools=[SpoolOption(spool_id=16, material="PLA", colour="#000000", sb_number=16)],
     )
     own = {16: kept_preset()}
     resolved = resolve(

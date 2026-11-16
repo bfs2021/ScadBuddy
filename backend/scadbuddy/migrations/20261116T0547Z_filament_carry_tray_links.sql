@@ -49,7 +49,9 @@ BEGIN
                 JOIN filament_bb_links b ON b.bb_spool_id::text = r.record_id
                 JOIN filament_spools s ON s.id = b.spool_id
                 WHERE r.provider = 'bambuddy' AND r.physical_spool_id = link.physical_spool_id
-                  AND r.record_id ~ '^[0-9]{1,9}$' AND s.archived_at IS NULL;
+                  AND r.record_id ~ '^[0-9]{1,9}$' AND s.archived_at IS NULL
+                ORDER BY r.linked_at, r.record_id
+                LIMIT 1;
         END IF;
         CONTINUE WHEN spool IS NULL;
         -- Already in a tray, this one or another: it stays there.

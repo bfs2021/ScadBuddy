@@ -182,7 +182,7 @@ def _spool_with_own_preset(profiles: Profiles, preset_id: str | None) -> Any:
     options = FilamentOptions(
         library_file_id=None,
         slots=[SlotNeed(slot_id=1, colour="#FFFFFF")],
-        spools=[SpoolOption(spool_id=7, material="PETG", colour="#FFFFFF")],
+        spools=[SpoolOption(spool_id=7, material="PETG", colour="#FFFFFF", sb_number=7)],
     )
     plan = FilamentPlan(slots=[SlotChoice(slot_id=1, spool_id=7)])
     own = (
