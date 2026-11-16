@@ -39,11 +39,13 @@ case name (now linked), else a new one (its weight, no insert material). A type 
 exists is never rewritten. A BB spool's ``core_weight_catalog_id`` (an unarchived mapped
 entry) sets the SB spool's insert type: when the spool is made, its own insert type when
 it has no spool type, else an override only when it differs from the spool type's; when
-it is linked, or read for the first time, where the spool has none of its own, unless a
-person cleared it (an ``edited`` event naming ``insert_type_id`` since the link); and when
-BB's value changed since the last reading, as any moved field (a person's later ``edited``
-event wins), clearing the override when BB moves to the spool type's own insert type. The
-reading keeps the last id while the entry is not mapped, so a later pull applies it. A
+it is linked, or read for the first time (the last reading has no such key), where the
+spool has none of its own, unless a person cleared it (an ``edited`` event naming
+``insert_type_id`` since the link); and when BB's value changed since the last reading (a
+recorded ``None`` is a value), as any moved field: BB's wins unless an ``edited`` event
+since BB's change names ``insert_type_id``, and moving to the spool type's own insert type
+clears the override. While the entry is not mapped the reading keeps the last id, or, with
+no last id, leaves the key absent, so the pull that maps it applies it. A
 catalog read that fails leaves the insert types alone and the spools are pulled
 (`PullReport.catalog_failed`).
 
@@ -586,6 +588,8 @@ def _backfill_insert_type(conn: Conn, spool_id: UUID, bb: BbSpool) -> list[Any] 
     insert_id = _core_insert_type(conn, bb)
     if insert_id is None:
         return None
+    # The row first, as a person's edit of it is: this read-then-write must not lose one.
+    conn.execute("SELECT 1 FROM filament_spools WHERE id = %s FOR UPDATE", (spool_id,))
     own, typed = _insert_state(conn, spool_id)
     if own is not None or typed == insert_id or _insert_edited_since_link(conn, spool_id):
         return None
@@ -714,8 +718,12 @@ def _update(
     after = snapshot(bb)
     if insert_id is None and bb.core_weight_catalog_id is not None:
         # Its entry is not mapped (the read failed, or it was skipped or archived): the
-        # reading keeps the last id, so the pull that maps it sees the change.
-        after["core_weight_catalog_id"] = before.get("core_weight_catalog_id")
+        # reading keeps the last id, so the pull that maps it sees the change. With no
+        # last id the key stays absent, so the pull that maps it reads it for the first time.
+        if "core_weight_catalog_id" in before:
+            after["core_weight_catalog_id"] = before["core_weight_catalog_id"]
+        else:
+            del after["core_weight_catalog_id"]
     keys = (after["tag_uid"], after["tray_uuid"])
     retag = keys != (before.get("tag_uid"), before.get("tray_uuid")) and keys != (None, None)
     if retag:
@@ -765,10 +773,11 @@ def _update(
         "core_weight_catalog_id"
     ):
         own, typed = _insert_state(conn, spool_id)
-        # Moved since BB's last reading: BB's value wins unless a person set the field after.
-        # Read for the first time: only where the spool has none of its own, and a person
-        # has not cleared it since the link.
-        if before.get("core_weight_catalog_id") is None:
+        # A key the last reading does not have is read for the first time: only where the
+        # spool has none of its own, and a person has not cleared it since the link. A key
+        # it has (even None) moved: BB's value wins unless an ``edited`` event since BB's
+        # change names the field.
+        if "core_weight_catalog_id" not in before:
             free = own is None and not _insert_edited_since_link(conn, spool_id)
         else:
             free = "insert_type_id" not in edited

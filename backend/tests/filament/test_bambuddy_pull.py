@@ -1388,3 +1388,63 @@ def test_a_skipped_entry_warns_exactly_once(
     warned = [r for r in caplog.records if r.levelname == "WARNING" and "skipped" in r.message]
     assert len(warned) == 1
     assert "get no insert type" in caplog.text
+
+
+# -- fix round 3 -----------------------------------------------------------------------
+
+
+def _mine(f: Filament) -> UUID:
+    made = f.catalog.create(
+        "insert-types", InsertTypeCreate(name="Mine", empty_weight_g=100)
+    ).model_dump()
+    return UUID(str(made["id"]))
+
+
+def test_a_recorded_none_moving_to_a_mapped_id_replaces_an_older_person_choice(
+    pg_pool: PgPool,
+) -> None:
+    f = _filament(pg_pool)
+    made = _linked_untyped(f)
+    f.spools.update(made, SpoolPatch(insert_type_id=_mine(f)), actor="ann")
+    # BB's change is after the person's edit (BB's clock is ahead of the database's).
+    pull(f, [_row(6, _bb_time(1))], now=NOW, catalog=[_entry(6, "Bambu cardboard", 212)])
+    (kind,) = [k for k in _insert_types(f) if k.bb_catalog_id == 6]
+    assert _own_insert(f, made) == kind.id
+
+
+def test_a_recorded_none_moving_to_a_mapped_id_keeps_a_later_person_choice(
+    pg_pool: PgPool,
+) -> None:
+    f = _filament(pg_pool)
+    made = _linked_untyped(f)
+    mine = _mine(f)
+    f.spools.update(made, SpoolPatch(insert_type_id=mine), actor="ann")
+    # BB's change is before the person's edit.
+    pull(f, [_row(6, "2026-11-14T11:00:00")], now=NOW, catalog=[_entry(6, "Bambu cardboard", 212)])
+    assert _own_insert(f, made) == mine
+
+
+def test_an_unmapped_entry_with_no_last_id_leaves_the_key_absent(pg_pool: PgPool) -> None:
+    f = _filament(pg_pool)
+    made = _linked_untyped(f, core_weight_catalog_id=5)
+    _strip_key(f, made)
+    events = len(_synced_events(f, made))
+    for _ in range(2):
+        assert pull(f, [_row(5)], now=NOW).updated_ids == []
+    assert len(_synced_events(f, made)) == events
+    assert "core_weight_catalog_id" not in _synced_events(f, made)[-1].data["bb"]
+    # Mapped later, BB's row unmoved: the first-read rule fills the spool.
+    pull(f, [_row(5)], now=NOW, catalog=[_entry()])
+    (kind,) = _insert_types(f)
+    assert _own_insert(f, made) == kind.id
+    assert pull(f, [_row(5)], now=NOW, catalog=[_entry()]).updated_ids == []
+
+
+def test_a_first_read_keeps_a_persons_clear(pg_pool: PgPool) -> None:
+    f = _filament(pg_pool)
+    made = _linked_untyped(f, core_weight_catalog_id=5)
+    f.spools.update(made, SpoolPatch(insert_type_id=_mine(f)), actor="ann")
+    f.spools.update(made, SpoolPatch(insert_type_id=None), actor="ann")
+    _strip_key(f, made)
+    pull(f, [_row(5)], now=NOW, catalog=[_entry()])
+    assert _own_insert(f, made) is None
