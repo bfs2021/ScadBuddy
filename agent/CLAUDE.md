@@ -181,11 +181,22 @@ Test `test/crudApprovals.test.ts`. Area `questions` (backend `api/crud_agent_que
 events and audit row in one transaction on the API), the attention count (read only while this
 process holds the lease `attention-rate`, which the API grants only while no SQL-path pod holds
 `ATTENTION_RATE_LOCK`; a busy lease is tried again until the rate lock's wait, and a lost lease,
-a busy one past the wait or an API error refuses the request, never lets it through), and a turn's
+a busy one past the wait or an API error refuses the request, never lets it through; the lease
+is taken for 15 s, so a holder that dies blocks the limit no longer; an SQL-path pod does not read
+the lease, so during a roll it can count while a lease holds), and a turn's
 `done` post: the facts are read through the API, the summary is written here with the turn's
 secrets redacted, and the post lands only while the turn's `turn_attempt` and `durable_turn_id`
 hold the session, with its cap, the summaries it replaces, its events and its audit rows in one
-transaction. Test `test/crudQuestions.test.ts`. A route's
+transaction. Test `test/crudQuestions.test.ts`. Area `escalations` (backend
+`api/crud_agent_escalations.py`, `src/flows/crudEscalations.ts`) takes `Escalations`' SQL on
+`ai_pending_input` and `ai_escalation_deliveries` and `FlowQueue.forRun`'s read of a run's child
+entries; who may answer is still checked here first, and every write of an answer or a delivery
+names the parent session again (the hop's timeout sweep and the record of a run's own calls sent
+name none). A delivery's claim is committed on the API before its turn starts, and handed back
+(`unclaim`) when the turn does not start; a process that dies between the two leaves the calls
+marked sent, and each still reaches the person when its hop ends. The parent's owner and the
+child's reasoning (`ai_sessions`, `ai_session_events`) stay SQL until the sessions move (step 9).
+Test `test/crudEscalations.test.ts`. A route's
 answer counts only with `X-ScadBuddy-Crud: 1`; any other failure takes the read's existing
 error path (a lookup failure the activity retries, a 500, a resync). A session's successful `order_item_revision_add` (or
 `_after_acceptance`) is an `ai_session_order_costs` row (`src/sessions/orderCosts.ts`
