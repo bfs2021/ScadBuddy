@@ -224,6 +224,19 @@ describe('the filament mocks', () => {
     expect(await refusal(upsertType({ ...body, code: 'pla-blk' }))).toMatchObject({ status: 409 })
   })
 
+  it('refuses to restore a type or a place whose name a live one has taken since', async () => {
+    const body = { code: 'PETG-RED', material_id: M.PETG, rgba: '#FF0000', label_weight_g: 1000 } as SpoolTypeCreate
+    const old = await upsertType(body)
+    await upsertType({ archived: true }, old.id)
+    await upsertType(body)
+    expect(await refusal(upsertType({ archived: false }, old.id))).toMatchObject({ status: 409 })
+
+    const place = await upsertLocation({ name: 'Cupboard', kind_id: LK.SHELF, sort_order: 0 })
+    await upsertLocation({ archived: true }, place.id)
+    await upsertLocation({ name: 'cupboard', kind_id: LK.SHELF, sort_order: 0 })
+    expect(await refusal(upsertLocation({ archived: false }, place.id))).toMatchObject({ status: 409 })
+  })
+
   it('keeps a colour name unique per manufacturer, as `filament_colours_name` does', async () => {
     const black = { name: 'Black', rgba: '#000000FF', sort_order: 0 }
     expect(await upsertCatalog('colours', { ...black, manufacturer: 'Bambu Lab' })).toMatchObject({ name: 'Black' })
