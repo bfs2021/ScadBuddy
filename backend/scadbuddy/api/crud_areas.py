@@ -121,6 +121,11 @@ from scadbuddy.crud.guard import CrudCaller, crud_router
 #: (`api/crud_agent_questions.py`). Its ``escalations`` area is ``…/agent/escalations/*``: a flow
 #: run's calls at the starting session's hop, passed up, denied, moved on its timeout and
 #: delivered, and a run's child entries for its queue (`api/crud_agent_escalations.py`).
+#: Its ``publish`` area is ``…/agent/publish/session-event`` and ``…/publish/warm-evict``: a
+#: ``session.*`` bus event NOTIFYed on ``scadbuddy_events`` and a warm process's eviction on
+#: ``scadbuddy_warm_evict``; its ``session-reads`` area is ``…/agent/sessions/{id}/open-calls``
+#: and ``…/reasoning``, a session's calls with no result and a child's text before a call
+#: (#6501, `api/crud_agent_publish.py`).
 #: Its ``migrations`` area is ``…/agent/migrations/ledger``, the ledger rows of the files the
 #: agent expects, which it waits for at its start; its ``auth-sessions`` area is
 #: ``…/agent/auth-sessions/lookup``, a signed-in person's live session by its cookie's hash
@@ -193,6 +198,8 @@ CRUD_AREAS: dict[CrudCaller, list[str]] = {
         "approvals",
         "questions",
         "escalations",
+        "publish",
+        "session-reads",
         "migrations",
         "auth-sessions",
     ],
