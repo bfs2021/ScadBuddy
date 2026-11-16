@@ -2856,9 +2856,10 @@ export const orderTools: Tool[] = [
     label: 'Fill empty filament densities',
     description:
       "Give every price-book filament with no density the one ScadBuddy's spools of its material, subtype, " +
-      "brand and `#RRGGBBAA` give: the newest spool's slicer preset id gives Bambuddy's local preset's (while " +
-      "Bambuddy is linked) or the Bambu Studio vendor preset's `filament_density`, else the spool's own " +
-      'effective density. Never overwrites a density that is set. Each row is filled with its `density_profile` ' +
+      "brand and `#RRGGBBAA` give: the newest spool's own effective density, else the `filament_density` of " +
+      "its slicer preset id (Bambuddy's local preset while Bambuddy is linked, else the Bambu Studio vendor " +
+      "preset), else that of the preset id (`tray_info_idx`) the tray holding it reports. Never overwrites a " +
+      'density that is set. Each row is filled with its `density_profile` ' +
       '(the source) or has no `density_g_cm3` (no source: enter it with price_book_set). Needs no Bambuddy.',
     input: z.object({}),
     risk: 'write',

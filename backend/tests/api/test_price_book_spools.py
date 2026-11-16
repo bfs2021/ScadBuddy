@@ -284,6 +284,94 @@ def test_an_opaque_stand_in_keeps_its_clear_spools_by_their_link(client: TestCli
     spools = shelf_spools(state.components.get(FILAMENT).inventory.rows())
     assert {s.rgba for s in spools} == {"#00000000"}
     assert fill_plan({0: record}, spools, None, {}, links) == {1: 9 + OFFSET}
+    # The link keeps the spools' own `#RRGGBBAA` (fix round 2, I3).
+    assert links[record.id].spool_colour == "#00000000"
+
+    # Every linked spool gone, a new clear spool: found by the link's colour, which is
+    # the spools' own `#00000000`, not the record's `#000000FF`. No second record.
+    _inventory(client, spool(12, **CLEAR, cost_per_kg=24))
+    [newest] = client.post(IMPORT).json()["rows"]
+    assert (newest["action"], newest["filament_id"]) == ("updated", made["filament_id"])
+    assert [f["id"] for f in client.get(BOOK).json()["filaments"]] == [made["filament_id"]]
+    links = orders.store.spool_links([record.id])
+    spools = shelf_spools(state.components.get(FILAMENT).inventory.rows())
+    assert fill_plan({0: record}, spools, None, {}, links) == {1: 12 + OFFSET}
+
+
+#: Fix round 2 (I3): `spool_colour` becomes the spools' `#RRGGBBAA`.
+RGBA_LINK = (
+    Path(__file__).parents[2] / "scadbuddy/migrations/20261116T0300Z_filament_spool_colour_rgba.sql"
+)
+
+
+def _run_updates(conninfo: str, migration: Path) -> None:
+    """Run ``migration``'s UPDATE statements again, as on a database from before it."""
+    sql = "\n".join(
+        line
+        for line in migration.read_text(encoding="utf-8").splitlines()
+        if not line.startswith("--")
+    )
+    with psycopg.connect(conninfo, autocommit=True) as conn:
+        for statement in sql.split(";"):
+            if statement.strip().startswith("UPDATE"):
+                conn.execute(statement.encode())
+
+
+def test_the_rgba_link_migration_keeps_a_stand_ins_clear_spools(
+    client: TestClient, pg_conninfo: str
+) -> None:
+    """Fix round 2 (I3): a prod stand-in from before the migration (alpha 255, the old
+    7-char `spool_colour` `#000000`, its linked spools archived) gets `#00000000`, so a new
+    clear spool updates it and the import makes no second record; another record's old
+    link takes the record's alpha; a link in the new form is left alone."""
+    stand_in = "a324599b-86dd-45fe-8408-579491da2f59"
+    made = add_filament(client, subtype="Translucent", colour="#EEF3F4", cost_per_kg="20")
+    red = add_filament(client, colour="#FF0000", alpha=128, cost_per_kg="20")
+    blue = add_filament(client, colour="#0000FF", cost_per_kg="20")
+    with psycopg.connect(pg_conninfo, autocommit=True) as conn:
+        conn.execute(
+            "UPDATE filaments SET id = %s, colour_source = 'manual', spool_colour = '#000000',"
+            " spool_ids = '{}' WHERE id = %s",
+            (stand_in, made["id"]),
+        )
+        conn.execute("UPDATE filaments SET spool_colour = '#FF0000' WHERE id = %s", (red["id"],))
+        conn.execute("UPDATE filaments SET spool_colour = '#0000EEFF' WHERE id = %s", (blue["id"],))
+
+    _run_updates(pg_conninfo, RGBA_LINK)
+    _run_updates(pg_conninfo, RGBA_LINK)
+
+    with psycopg.connect(pg_conninfo) as conn:
+        links: dict[str, str] = dict(
+            conn.execute("SELECT id::text, spool_colour FROM filaments").fetchall()
+        )
+    assert (links[stand_in], links[red["id"]], links[blue["id"]]) == (
+        "#00000000",
+        "#FF000080",
+        "#0000EEFF",
+    )
+    _inventory(client, spool(12, **CLEAR, cost_per_kg=24))
+    rows = {r["filament_id"]: r for r in client.post(IMPORT).json()["rows"]}
+    assert rows[stand_in]["action"] == "updated"
+    assert len(client.get(BOOK).json()["filaments"]) == 3
+
+
+def test_an_old_7_char_link_reads_as_opaque(client: TestClient, pg_conninfo: str) -> None:
+    """Fix round 2 (I3): for one rollout window an old API still writes `#RRGGBB`; the new
+    code reads it as alpha `FF`, so it finds opaque spools and never a clear one."""
+    made = add_filament(client, colour="#123456", cost_per_kg="20")
+    with psycopg.connect(pg_conninfo, autocommit=True) as conn:
+        conn.execute(
+            "UPDATE filaments SET colour_source = 'manual', spool_colour = '#00FF00' WHERE id = %s",
+            (made["id"],),
+        )
+    green = {"rgba": "00FF00FF", "color_name": "Green"}
+    glass = {"rgba": "00FF0080", "color_name": "Green Glass"}
+    _inventory(client, spool(1, **green, cost_per_kg=25), spool(2, **glass, cost_per_kg=30))
+
+    rows = {_ids(r): r for r in client.post(IMPORT).json()["rows"]}
+
+    assert (rows[(1,)]["action"], rows[(1,)]["filament_id"]) == ("updated", made["id"])
+    assert rows[(2,)]["action"] == "created"
 
 
 def test_the_import_fills_the_look_of_an_imported_record(client: TestClient) -> None:

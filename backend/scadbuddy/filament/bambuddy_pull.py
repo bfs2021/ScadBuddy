@@ -68,6 +68,7 @@ from scadbuddy.filament.component import Filament
 from scadbuddy.filament.presets import drop_migrated, own_presets
 from scadbuddy.filament.spools import FilamentSpoolStore, TagKeysClashError
 from scadbuddy.library.settings_store import StoredSettings
+from scadbuddy.operations.kinds import waiting_on_bambuddy
 from scadbuddy.spools.models import clean_tag_uid, clean_tray_uuid
 
 logger = logging.getLogger(__name__)
@@ -846,20 +847,37 @@ async def read_and_pull(
     return report
 
 
+#: How long :func:`read_assignments` waits for Bambuddy. It runs inside an item print's
+#: check, whose whole budget is 6 s (`workflows/operation_activities.py`
+#: `CHECK_BUDGET_SECONDS`), so it may take at most part of it; the client's own 30 s
+#: would take all of it.
+ASSIGNMENTS_TIMEOUT = 2.5
+
+
 async def read_assignments(settings: StoredSettings) -> list[SpoolAssignment]:
     """Bambuddy's tray assignments (``GET /inventory/assignments``), which place a linked
     SB spool where no registry printer reports it (plan Decision 3, until #6263): none
-    with no BB URL, and none, logged, when Bambuddy refuses or answers in another shape,
-    so the spools are placed by the reports alone."""
+    with no BB URL, and none, logged, when Bambuddy refuses, answers in another shape or
+    no JSON, or does not answer within :data:`ASSIGNMENTS_TIMEOUT`, so the spools are
+    placed by the reports alone. The read is a wait on Bambuddy (`waiting_on_bambuddy`),
+    so a check cut short inside it names Bambuddy."""
     if not settings.bambuddy_url:
         return []
-    try:
-        async with client_for(settings) as client:
-            return await client.spool_assignments()
-    except ApiError as error:
-        logger.warning("no tray assignments from Bambuddy: %s", error.detail)
-    except ValidationError as error:
-        logger.warning("no tray assignments from Bambuddy: an answer of another shape: %s", error)
+    async with waiting_on_bambuddy():
+        try:
+            async with asyncio.timeout(ASSIGNMENTS_TIMEOUT), client_for(settings) as client:
+                return await client.spool_assignments()
+        except TimeoutError:
+            logger.warning(
+                "no tray assignments from Bambuddy: no answer within %s s", ASSIGNMENTS_TIMEOUT
+            )
+        except ApiError as error:
+            logger.warning("no tray assignments from Bambuddy: %s", error.detail)
+        except ValueError as error:
+            # A pydantic ValidationError (another shape) or a JSONDecodeError (no JSON).
+            logger.warning(
+                "no tray assignments from Bambuddy: an answer of another shape: %s", error
+            )
     return []
 
 

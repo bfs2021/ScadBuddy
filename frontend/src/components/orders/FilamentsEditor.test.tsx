@@ -101,7 +101,7 @@ describe('FilamentsEditor (#4250)', () => {
     await user.click(screen.getByRole('button', { name: 'Fill densities' }))
     const status = await screen.findByRole('status', { name: 'Density fill' })
     expect(status).toHaveTextContent('Bambu Lab PLA Basic Hot Pink: filled, 1.26 g/cm³ from Bambu PLA Basic @base (spool preset GFA00)')
-    expect(status).toHaveTextContent('Neon City: no source (none of its spools names a preset or a density); enter its density')
+    expect(status).toHaveTextContent('Neon City: no source (none of its spools has a density or names a preset, nor does its tray); enter its density')
     await within(screen.getByTestId(`filament-${pink.id}`)).findByText('1.26 g/cm³, from Bambu PLA Basic @base (spool preset GFA00)')
     expect(within(screen.getByTestId(`filament-${none.id}`)).getByText('Not set: no estimate')).toBeInTheDocument()
   })

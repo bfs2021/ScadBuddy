@@ -17,7 +17,8 @@ from pydantic import AwareDatetime, BaseModel, ValidationError
 from scadbuddy.api.deps import SettingsStoreDep
 from scadbuddy.auth.component import CallerDep
 from scadbuddy.auth.models import Caller, Person, PersonalToken, Service
-from scadbuddy.core.problems import ApiError
+from scadbuddy.bambuddy.models import SpoolAssignment
+from scadbuddy.core.problems import DATABASE_ERRORS, ApiError
 from scadbuddy.filament import models as m
 from scadbuddy.filament.bambuddy_pull import PullReport, read_and_pull, read_assignments
 from scadbuddy.filament.catalog import (
@@ -40,6 +41,7 @@ from scadbuddy.filament.spools import (
     TagUnnamedError,
 )
 from scadbuddy.filament.types import TypeRowsDuplicateError, TypeTempError
+from scadbuddy.library.settings_store import SettingsStore
 from scadbuddy.orders.store import FilamentExistsError
 
 router = APIRouter(prefix="/filament", tags=["filament"])
@@ -699,6 +701,18 @@ async def get_summary(filament: FilamentDep) -> m.InventorySummary:
     return await asyncio.to_thread(filament.spools.summary)
 
 
+async def _assignments(store: SettingsStore) -> list[SpoolAssignment]:
+    """Bambuddy's tray assignments (`read_assignments`); 503 when the settings cannot be
+    read, as when the spools cannot."""
+    try:
+        settings = await asyncio.to_thread(store.load)
+    except DATABASE_ERRORS as error:
+        raise ApiError(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "the settings could not be read; try again"
+        ) from error
+    return await read_assignments(settings)
+
+
 @router.get(
     "/inventory",
     response_model=m.FilamentInventoryView,
@@ -719,7 +733,7 @@ async def get_summary(filament: FilamentDep) -> m.InventorySummary:
 async def get_inventory(
     filament: FilamentDep, store: SettingsStoreDep, include_archived: bool = False
 ) -> m.FilamentInventoryView:
-    assignments = await read_assignments(await asyncio.to_thread(store.load))
+    assignments = await _assignments(store)
     return await asyncio.to_thread(
         filament.inventory.view, include_archived=include_archived, bb_assignments=assignments
     )
@@ -748,7 +762,7 @@ async def get_spool_summary(
         Query(ge=0, description="Grams to price at this spool's cost, e.g. a plate's use"),
     ] = None,
 ) -> m.FilamentSpoolSummary:
-    assignments = await read_assignments(await asyncio.to_thread(store.load))
+    assignments = await _assignments(store)
     found = await asyncio.to_thread(filament.inventory.summary, spool_id, grams, assignments)
     if found is None:
         raise _no_spool(spool_id)

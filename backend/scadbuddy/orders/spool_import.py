@@ -49,6 +49,7 @@ from scadbuddy.orders.models import (
     SpoolImport,
     SpoolImportRow,
 )
+from scadbuddy.orders.spools import link_rgba
 from scadbuddy.orders.store import ImportRecord, OrderStore
 
 SkipReason = Literal["no_colour", "no_price", "too_long"]
@@ -84,9 +85,9 @@ def _record_rgba(record: ImportRecord) -> str:
 
 
 def _link_rgba(record: ImportRecord) -> str | None:
-    """The spools' ``#RRGGBB`` at the last import, with the record's alpha; ``None``
-    before one."""
-    return None if record.spool_colour is None else _rgba(record.spool_colour, record.alpha)
+    """The spools' own ``#RRGGBBAA`` at the last import (`spools.link_rgba`: an old
+    ``#RRGGBB`` reads as opaque); ``None`` before one."""
+    return None if record.spool_colour is None else link_rgba(record.spool_colour)
 
 
 def _names(material: str, subtype: str | None, brand: str | None) -> tuple[str, str, str]:
@@ -231,7 +232,7 @@ def _linked(
     rgba: str | None = None,
 ) -> ImportRecord | None:
     """The record of ``group``'s names linked to most of its spools (#6209); with
-    ``rgba``, only among the records whose spools had that RGB at the record's alpha."""
+    ``rgba``, only among the records whose spools had that ``#RRGGBBAA``."""
     ids = {spool_id for spool_id, _ in group.spools}
     linked = [
         r
@@ -245,7 +246,7 @@ def _by_colour(
     group: SpoolGroup, rgba: str, records: list[ImportRecord], claimed: set[str]
 ) -> ImportRecord | None:
     """The record of ``group``'s names whose spools had its ``#RRGGBBAA`` at the last
-    import (their RGB at the record's alpha), else one with no other spools' colour whose
+    import (``spool_colour``), else one with no other spools' colour whose
     own ``#RRGGBBAA`` is its (#6209, #6316)."""
     same = _same_names(group, records, claimed)
     return next((r for r in same if _link_rgba(r) == rgba), None) or next(
@@ -269,7 +270,7 @@ def _skip_reason(group: SpoolGroup) -> SkipReason | None:
 def _matches(groups: list[SpoolGroup], records: list[ImportRecord]) -> dict[int, ImportRecord]:
     """Each group's record, by the group's place in ``groups`` (#6209, #6211 review), so
     the order of the groups never decides a match. First a record linked to a group whose
-    colour its spools had (``spool_colour`` at its alpha), as when one spool of a record
+    colour its spools had (``spool_colour``), as when one spool of a record
     was recoloured;
     then any record linked to a group's spools, as when all of them were; only then a
     record by colour (:func:`_by_colour`). A spool link always wins over a colour."""
@@ -414,7 +415,7 @@ def import_spools(
                     conn=conn,
                     density_profile=None if found is None else found.profile,
                     colour_source="import",
-                    spool_colour=colour,
+                    spool_colour=rgba,
                     spool_ids=spool_ids,
                 )
                 rows[index] = row.model_copy(
@@ -454,7 +455,7 @@ def import_spools(
                 conn,
                 record.id,
                 look=look,
-                spool_colour=colour,
+                spool_colour=rgba,
                 spool_ids=spool_ids,
                 unpark=record.id in movers,
             )
@@ -463,7 +464,7 @@ def import_spools(
                 record,
                 colour=str(look.get("colour", record.colour)),
                 alpha=group.alpha if "alpha" in look else record.alpha,
-                spool_colour=colour,
+                spool_colour=rgba,
                 spool_ids=spool_ids,
             )
             shown = current.model_copy(update=look)

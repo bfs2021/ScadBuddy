@@ -6,12 +6,12 @@ fills ``filament_plan.slots`` when it starts, on the printer it runs on, with SB
 numbers (``ids`` ``"sb"``). A spool is of a filament as the spool import matches them
 (#6209, ``orders/spool_import.py`` ``_matches``): the same material, subtype and brand,
 upper-cased, and the record's link to it (its ``spool_ids``, whatever the spools' alpha:
-a link by id is not a match by colour, spec §5.1), else the spools' ``#RRGGBB`` at the
-last import (``spool_colour``) with the record's alpha, else, for a record the import
-never linked, its own colour and alpha (:func:`record_rgba`). A match by colour needs the
-spool and the record both opaque or both translucent (`same_opacity`, #6316): a
-translucent spool is never an opaque record's by its RGB. So a colour a person set never
-hides the record's spools. For each slot whose filament the item names:
+a link by id is not a match by colour, spec §5.1), else the spools' own ``#RRGGBBAA`` at
+the last import (``spool_colour``, :func:`link_rgba`), else, for a record the import
+never linked, its own colour and alpha (:func:`record_rgba`; a spool of another opacity
+is never its, `same_opacity`, #6316). So a colour a person set never hides the record's
+spools, and a clear stand-in record of alpha 255 finds a new clear spool. For each slot
+whose filament the item names:
 
 - a spool the request names must be of that filament, else ``spool_not_filament``;
 - otherwise the spool of that filament loaded on the run's registry printer with the
@@ -91,6 +91,14 @@ def shelf_spools(rows: Iterable[FilamentInventorySpool]) -> list[ShelfSpool]:
     ]
 
 
+def link_rgba(spool_colour: str) -> str:
+    """A record's ``spool_colour`` (its spools' ``#RRGGBBAA`` at the last import, #6262
+    Task 9 fix round 2) as ``#RRGGBBAA``. An old ``#RRGGBB`` (an API still on the old code
+    during a rollout) reads as opaque, alpha ``FF``."""
+    colour = spool_colour.upper()
+    return colour if len(colour) == 9 else colour + "FF"
+
+
 def record_rgba(record: Filament) -> str:
     """The record's colour with its alpha, ``#RRGGBBAA``, as an SB spool's ``rgba``."""
     return record.colour.upper() + f"{record.alpha:02X}"
@@ -120,13 +128,13 @@ def _of(spool: ShelfSpool, record: Filament, link: SpoolLink | None) -> bool:
         return False
     if link is not None and spool.id in link.spool_ids:
         return True
+    if link is not None and link.spool_colour is not None:
+        # The spools' own colour and alpha at the last import, whatever the record's alpha
+        # (a clear stand-in record of alpha 255 keeps finding its clear spools).
+        return spool.rgba.upper() == link_rgba(link.spool_colour)
     if not same_opacity(spool.rgba, record_rgba(record)):
         return False
-    if link is not None and link.spool_colour is not None:
-        wanted = link.spool_colour.upper() + f"{record.alpha:02X}"
-    else:
-        wanted = record_rgba(record)
-    return spool.rgba.upper() == wanted
+    return spool.rgba.upper() == record_rgba(record)
 
 
 def fill_plan(
@@ -214,8 +222,8 @@ async def item_plan(
     if not filaments:
         return None
     supplied = {slot.slot_id: slot.spool_id for slot in plan.slots}
-    assignments = await integrations.spool_assignments() if integrations.linked else []
     try:
+        assignments = await integrations.spool_assignments() if integrations.linked else []
         rows = await asyncio.to_thread(
             inventory.rows, include_archived=True, bb_assignments=assignments
         )

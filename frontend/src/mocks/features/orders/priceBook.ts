@@ -35,14 +35,23 @@ function policy(): PricingPolicy {
 }
 
 /**
- * #6136 — the density chain's mock (backend `orders/density.py`): the preset id each
- * mock SB spool names by number (its slicer preset), and that preset's density in Bambu
- * Studio v02.08.02.61's tree. A record with no spool of its identity (names and
- * `#RRGGBBAA`, #6316) has no source.
+ * #6136 — the density chain's mock (backend `orders/density.py`, #6262 Task 9 review
+ * ruling): the newest spool of a record's identity (names and `#RRGGBBAA`, #6316) gives
+ * its own effective density, else its slicer preset's (by SB number here), else that of
+ * the preset id (`tray_info_idx`) the tray holding it reports; each preset's density as
+ * Bambu Studio v02.08.02.61's tree has it. A record with no such spool has no source.
  */
 const MOCK_SPOOL_PRESETS: Record<number, string> = { 3: 'GFA00', 11: 'GFA00' }
+/** The loaded clear PETG (#8) sits in a tray that reports Bambu PETG Basic. */
+const MOCK_TRAY_PRESETS: Record<number, string> = { 8: 'GFG00' }
 const MOCK_PRESETS: Record<string, { density_g_cm3: string; name: string }> = {
   GFA00: { density_g_cm3: '1.26', name: 'Bambu PLA Basic @base' },
+  GFG00: { density_g_cm3: '1.25', name: 'Bambu PETG Basic @base' },
+}
+
+function presetDensity(presetId: string | undefined, where: string): { density_g_cm3: string; profile: string } | null {
+  const preset = presetId ? MOCK_PRESETS[presetId] : undefined
+  return presetId && preset ? { density_g_cm3: preset.density_g_cm3, profile: `${preset.name} (${where} ${presetId})` } : null
 }
 
 /** An SB spool's effective `#RRGGBBAA`, upper case, or null. */
@@ -65,11 +74,10 @@ export function mockDensity(f: { material: string; subtype?: string | null; bran
   const spool = SB_INVENTORY.map((row) => row.spool)
     .filter((s) => !s.archived_at && key(names(s), spoolRgba(s)) === key(f, recordRgba(f)))
     .sort((a, b) => b.number - a.number)[0]
-  const presetId = spool ? MOCK_SPOOL_PRESETS[spool.number] : undefined
-  const preset = presetId ? MOCK_PRESETS[presetId] : undefined
-  if (presetId && preset) return { density_g_cm3: preset.density_g_cm3, profile: `${preset.name} (spool preset ${presetId})` }
-  const own = spool?.effective?.density_g_cm3
-  return spool && own ? { density_g_cm3: own, profile: `ScadBuddy spool #${spool.number}` } : null
+  if (!spool) return null
+  const own = spool.effective?.density_g_cm3
+  if (own) return { density_g_cm3: own, profile: `ScadBuddy spool #${spool.number}` }
+  return presetDensity(MOCK_SPOOL_PRESETS[spool.number], 'spool preset') ?? presetDensity(MOCK_TRAY_PRESETS[spool.number], 'tray preset')
 }
 
 function added(body: FilamentInput): Pick<Filament, 'density_g_cm3' | 'density_profile'> {

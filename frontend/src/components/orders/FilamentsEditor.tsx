@@ -81,8 +81,9 @@ function importLine(row: SpoolImportRow): string {
 }
 
 /**
- * Where a record's density came from (#6136): the slicer preset its spools name, a
- * spool's own density (#6262 Task 9), or a person. An empty one says that an estimate of it is refused, never a bare dash.
+ * Where a record's density came from (#6136, #6262 Task 9): a spool's own density, the
+ * slicer preset its spools name, the preset the tray holding it reports, or a person. An
+ * empty one says that an estimate of it is refused, never a bare dash.
  */
 function densityText(f: Pick<Filament, 'density_g_cm3' | 'density_profile'>): { text: string; missing: boolean } {
   if (f.density_g_cm3) return { text: f.density_profile ? `${f.density_g_cm3} g/cm³, from ${f.density_profile}` : `${f.density_g_cm3} g/cm³`, missing: false }
@@ -91,7 +92,7 @@ function densityText(f: Pick<Filament, 'density_g_cm3' | 'density_profile'>): { 
 
 function fillLine(row: DensityFillRow): string {
   const name = filamentLabel(row) || row.material
-  return row.density_g_cm3 ? `${name}: filled, ${row.density_g_cm3} g/cm³ from ${row.density_profile}` : `${name}: no source (none of its spools names a preset or a density); enter its density`
+  return row.density_g_cm3 ? `${name}: filled, ${row.density_g_cm3} g/cm³ from ${row.density_profile}` : `${name}: no source (none of its spools has a density or names a preset, nor does its tray); enter its density`
 }
 
 /**
@@ -104,7 +105,8 @@ function fillLine(row: DensityFillRow): string {
  * opaque and a translucent spool are two records, #6316), on click only: a quote never
  * reads spools (#4253, spec §8.3; #6262 Task 9: no Bambuddy needed, `spool_import` is
  * always true). Each density says where it came from; "Fill densities" writes into every
- * empty one the density its spools' slicer preset or own density gives (#6136).
+ * empty one the density its spools give: their own, else their slicer preset's, else
+ * the preset's their tray reports (#6136).
  */
 export function FilamentsEditor() {
   const [showArchived, setShowArchived] = useState(false)

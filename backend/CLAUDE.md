@@ -1464,7 +1464,10 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   `OrdersComponent.inventory` is the filament component's `FilamentInventory`, and of
   spools `OrderIntegrations` keeps only `local_densities` (Bambuddy's local presets, `{}`
   when Bambuddy refuses) and `spool_assignments` (Bambuddy's tray assignments,
-  `filament/bambuddy_pull.py` `read_assignments`, `[]` when Bambuddy refuses). `POST /orders/price-book/import-spools`
+  `filament/bambuddy_pull.py` `read_assignments`, `[]`, logged, when Bambuddy refuses,
+  answers no JSON or does not answer within `ASSIGNMENTS_TIMEOUT` (2.5 s, inside an item
+  print check's 6 s `CHECK_BUDGET_SECONDS`; the read is a `waiting_on_bambuddy` wait, so a
+  check cut short in it names Bambuddy)). `POST /orders/price-book/import-spools`
   (`orders/spool_import.py` `inventory_groups`) makes or updates filament records from the
   SB spools, on click only, with or without Bambuddy (`PriceBook.spool_import` is always
   true); a group is the spools' effective names and `#RRGGBBAA` (#6316: an opaque and a
@@ -1475,7 +1478,7 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   they, and an item print's fill on the Bambuddy path, place a spool by the tray a
   registry printer's report holds it in, else, while Bambuddy is linked, by Bambuddy's
   assignment of its linked BB spool (plan Decision 3, until #6263; a failed read places by
-  the reports alone). A record with no density gets one there, from a manual add sent with
+  the reports alone; a settings or spool read that fails is a 503). A record with no density gets one there, from a manual add sent with
   no density, and from `POST …/price-book/fill-densities` (#6136, `orders/density.py`,
   Task 9 review ruling), from the spools of its names and `#RRGGBBAA`: the newest spool's
   own effective density (`ScadBuddy spool #N`), else its slicer preset's density
@@ -1498,9 +1501,12 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   `spool_colour` or `spool_ids` set). The import matches only a record of
   the group's material, subtype and brand: by its link to the group's spools (`spool_ids`,
   whatever the spools' alpha: a link by id is not a match by colour), else by the spools'
-  `#RRGGBBAA` (`spool_colour` plus the record's `alpha`; a record with no link by its own
-  `colour` plus `alpha`; a colour match never takes a spool of another alpha,
-  `filament/colour.py` `same_opacity`), so a colour a person set on a linked record is
+  own `#RRGGBBAA` at the last import (`spool_colour`, written as `#RRGGBBAA` since
+  `20261116T0300Z_filament_spool_colour_rgba.sql`, which converted the old `#RRGGBB` with
+  the record's alpha and the two stand-ins to `#00000000`; an old `#RRGGBB` an API on the
+  old code still writes during a rollout reads as alpha `FF`, `orders/spools.py`
+  `link_rgba`), else, for a record with no link, by its own `colour` plus `alpha` (never
+  a spool of another alpha, `filament/colour.py` `same_opacity`), so a colour a person set on a linked record is
   never matched, it makes no duplicate, and a spool whose material was corrected is
   another filament's (`spool_import.py` `_matches`, in three passes over every group, so
   the groups' order never decides: a record linked to a group whose `#RRGGBBAA` its spools
@@ -1520,12 +1526,16 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   spools' RGB at the first import after it; that import set their `spool_ids` (SB numbers
   since `20261116T0034Z_filament_plan_spool_numbers.sql`), and the import and an item
   print now find them by those, whatever the alpha: they are opaque records (alpha 255)
-  of clear spools (`#00000000`). The next import links every other record by its own
+  of clear spools (`#00000000`); with those spools archived, a new clear spool is theirs
+  by their `spool_colour` `#00000000`. The next import links every other record by its own
   `colour`. Until that
   first import after the deploy, a record with no link is found only by its own colour:
   change its colour by hand before then, and the import makes a second record of its
   spools' colour. So run "Import from spools" once after the deploy, before any colour
-  edit (#6211 review). An item
+  edit (#6211 review). Until that import also after #6262 Task 9's deploy, an opaque
+  record whose link an import before #6316 wrote over both alphas' spools (it grouped by
+  RGB) may take the translucent spool for an item print, by its `spool_ids`; the import
+  relinks it to its own alpha's spools. An item
   print's spools are matched the same way (`orders/spools.py` `_of`, the store's
   `spool_links`), so a hand-set colour still finds its spools; `item_plan` fills SB spool
   numbers (`ids: "sb"`) from the SB rows of the registry printer, and maps an older

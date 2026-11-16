@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { api, type ApiError } from '../../../api/client'
 import { DEFAULT_ORDERS_QUERY } from '../../../lib/ordersQuery'
 import { resetMockState } from '../../handlers'
+import { mockDensity } from './priceBook'
 import { FILAMENT_PETG, FILAMENT_PLA, ITEM_DRAFT, ORDER_ACCEPTED, ORDER_DRAFT, OUTPUT_REAGAN, PROBLEMS } from './state'
 
 // #4250 — the price book, the slice quote and the estimate, answered as `api/orders.py`
@@ -16,6 +17,15 @@ const DIALOG = {
 
 describe('price book mock (#4250)', () => {
   beforeEach(() => resetMockState())
+
+  // #6262 Task 9 review: the chain as `orders/density.py` reads it, ending at the tray.
+  it("fills a density from the spool's preset, else its tray's, only at its alpha", () => {
+    const pink = { material: 'PLA', subtype: 'Basic', brand: 'Bambu Lab', colour: '#F5547C' }
+    expect(mockDensity(pink)).toEqual({ density_g_cm3: '1.26', profile: 'Bambu PLA Basic @base (spool preset GFA00)' })
+    const clear = { material: 'PETG', brand: 'Insignia', colour: '#000000', alpha: 0 }
+    expect(mockDensity(clear)).toEqual({ density_g_cm3: '1.25', profile: 'Bambu PETG Basic @base (tray preset GFG00)' })
+    expect(mockDensity({ ...clear, alpha: 255 })).toBeNull()
+  })
 
   it('carries the minor unit on the book and on every order', async () => {
     const book = await api.priceBook()

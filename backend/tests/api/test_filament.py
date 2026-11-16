@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
@@ -15,6 +17,8 @@ from fastapi.testclient import TestClient
 from scadbuddy.api.deps import STATE_ATTR, AppState
 from scadbuddy.api.filament import actor
 from scadbuddy.auth.models import ANONYMOUS, AuthSession, Person, PersonalToken, Service
+from scadbuddy.filament.bambuddy_pull import ASSIGNMENTS_TIMEOUT
+from scadbuddy.library.settings_store import SettingsStore
 from scadbuddy.printers.reports import PrinterReportStore
 from tests.api.test_send import API, configure
 from tests.support.printers import bambuddy_printer
@@ -524,6 +528,58 @@ def test_inventory_places_a_linked_spool_by_bambuddys_assignment(
     refused = client.get(INVENTORY)
     assert refused.status_code == 200, refused.text
     assert refused.json()["spools"][0]["loaded"] is None
+
+
+@respx.mock
+def test_a_slow_or_garbled_assignment_read_places_by_the_reports_alone(
+    client: TestClient, pg_conninfo: str
+) -> None:
+    """Fix round 2 (I1, M2): an assignment read that does not answer within
+    `ASSIGNMENTS_TIMEOUT`, or answers 200 with no JSON, places by the reports alone."""
+    configure(client)
+    bambuddy_printer(pg_conninfo, 2)
+    bb = {
+        "id": 15,
+        "material": "PLA",
+        "rgba": "00FF00FF",
+        "label_weight": 1000,
+        "weight_used": 250,
+        "archived_at": None,
+        "updated_at": "2026-11-15T00:00:00Z",
+    }
+    seed_app_sb_spools(client, [bb], offset=100)
+    route = respx.get(f"{API}/inventory/assignments")
+    route.mock(return_value=httpx.Response(200, text="<html>not json</html>"))
+    garbled = client.get(INVENTORY)
+    assert garbled.status_code == 200, garbled.text
+    assert garbled.json()["spools"][0]["loaded"] is None
+
+    async def hang(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(30)
+        return httpx.Response(200, json=[])
+
+    route.mock(side_effect=hang)
+    started = time.monotonic()
+    slow = client.get(INVENTORY)
+    assert time.monotonic() - started < ASSIGNMENTS_TIMEOUT + 1.5
+    assert slow.status_code == 200, slow.text
+    assert slow.json()["spools"][0]["loaded"] is None
+
+
+def test_a_settings_read_that_fails_is_a_503(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """M1: the inventory and a spool's summary answer 503 when the settings cannot be
+    read, as when the spools cannot."""
+    made = _spool(client)
+
+    def down(self: object) -> None:
+        raise psycopg.OperationalError("the database is not answering")
+
+    monkeypatch.setattr(SettingsStore, "load", down)
+    for url in (INVENTORY, f"{SPOOLS}/{made['id']}/summary"):
+        response = client.get(url)
+        assert response.status_code == 503, (url, response.text)
 
 
 def test_a_spool_summary_prices_it_and_counts_its_filament(client: TestClient) -> None:

@@ -7,17 +7,25 @@ SB number would fail. An opaque and a translucent spool of one hue are two filam
 
 from __future__ import annotations
 
+import asyncio
+import time
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
+import httpx
+import psycopg
 import pytest
+import respx
 
 from scadbuddy.bambuddy.filaments import FilamentPlan
 from scadbuddy.bambuddy.models import SlotChoice, SpoolAssignment
 from scadbuddy.core.problems import ApiError
+from scadbuddy.filament.bambuddy_pull import ASSIGNMENTS_TIMEOUT
 from scadbuddy.filament.models import EffectivePreset, FilamentInventorySpool, TrayPlace
+from scadbuddy.library.settings_store import SettingsStore, StoredSettings
+from scadbuddy.orders.bambuddy import BambuddyIntegrations
 from scadbuddy.orders.integrations import NOT_LINKED, LocalDensity, NotLinked, SpoolDensity
 from scadbuddy.orders.models import Actor, Filament, FilamentInput, QuoteLine
 from scadbuddy.orders.printing import quoted_setup
@@ -338,6 +346,67 @@ async def test_a_spool_bambuddy_loads_in_the_run_printer_is_preferred(shop: Shop
     )
 
     assert _slots(plan) == [(1, 41)]
+
+
+class Settings:
+    """A settings store with a Bambuddy linked, or one whose read fails."""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+
+    def load(self) -> StoredSettings:
+        if self.error is not None:
+            raise self.error
+        return StoredSettings(bambuddy_url=BB, bambuddy_api_key="bb_test")
+
+
+BB = "https://bambuddy.test"
+
+
+def seam(settings: Settings | None = None) -> BambuddyIntegrations:
+    """The real Bambuddy seam (its `read_assignments`), over ``respx``."""
+    return BambuddyIntegrations(cast(SettingsStore, settings or Settings()))
+
+
+@pytest.mark.requires_postgres
+@respx.mock
+async def test_a_refused_assignment_read_places_by_the_reports_alone(shop: Shop) -> None:
+    """Fix round 2 (I1, M2, M4): an assignment read Bambuddy refuses, answers in no JSON
+    or does not answer within `ASSIGNMENTS_TIMEOUT` places the spools by the reports
+    alone: the spool Bambuddy would put in printer 2 is on the shelf, and is taken."""
+    item_id = priced_item(shop)
+    route = respx.get(f"{BB}/api/v1/inventory/assignments")
+    for answer in (
+        httpx.Response(403, json={"detail": "no"}),
+        httpx.Response(200, text="<html>not json</html>"),
+    ):
+        route.mock(return_value=answer)
+        inventory = Inventory(bb_linked(41, 15), registry={2: "printer-2"})
+        plan = await item_plan(
+            shop.rows, inventory, seam(), item_id, FilamentPlan(ids="sb"), PRINTER
+        )
+        assert _slots(plan) == [(1, 41)], answer
+
+    async def hang(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(30)
+        return httpx.Response(200, json=[])
+
+    route.mock(side_effect=hang)
+    inventory = Inventory(bb_linked(41, 15), registry={2: "printer-2"})
+    started = time.monotonic()
+    plan = await item_plan(shop.rows, inventory, seam(), item_id, FilamentPlan(ids="sb"), PRINTER)
+    assert _slots(plan) == [(1, 41)]
+    assert time.monotonic() - started < ASSIGNMENTS_TIMEOUT + 1
+
+
+@pytest.mark.requires_postgres
+async def test_a_settings_read_that_fails_is_a_503(shop: Shop) -> None:
+    """M1: the seam's settings read failing is a 503, as the spools' own read is."""
+    item_id = priced_item(shop)
+    down = Settings(psycopg.OperationalError("the database is not answering"))
+    with pytest.raises(ApiError) as raised:
+        await item_plan(shop.rows, Inventory(row(41)), seam(down), item_id, FilamentPlan(), PRINTER)
+    assert raised.value.status == 503
 
 
 @pytest.mark.requires_postgres

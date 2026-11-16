@@ -1,8 +1,8 @@
-"""A price-book filament's density from ScadBuddy's spools (#6136, #6262 Task 9): their
-slicer preset's (a Bambuddy local preset's while one is linked, else the image's vendor
-preset's), else the spools' own. The spool import and "Fill densities" write it where a
-record has none, the book says where each came from, and the estimate says which density
-it used."""
+"""A price-book filament's density from ScadBuddy's spools (#6136, #6262 Task 9 review
+ruling): the newest spool's own, else its slicer preset's (a Bambuddy local preset's while
+one is linked, else the image's vendor preset's), else that of the preset the tray holding
+it reports. The spool import and "Fill densities" write it where a record has none, the
+book says where each came from, and the estimate says which density it used."""
 
 from __future__ import annotations
 
