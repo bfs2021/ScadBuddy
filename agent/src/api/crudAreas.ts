@@ -61,6 +61,13 @@ export const GATE_AREAS = ['gate', 'pending-input', 'audit', 'approvals', 'quest
  */
 export const SESSION_AREAS = ['sessions', 'session-resources', 'transcripts', 'session-events', 'session-order-costs'] as const
 
+/**
+ * The NOTIFYs sent outside a store's write (a `session.*` bus event, a warm eviction) and a
+ * session's last event reads (its open calls, a child's reasoning) (#6501; backend
+ * api/crud_agent_publish.py; sessions/publish.ts, sessions/sessionReads.ts).
+ */
+export const REST_AREAS = ['publish', 'session-reads'] as const
+
 export type CrudAreasOptions = {
   fetch?: typeof fetch
   /** The areas the agent waits for. */
