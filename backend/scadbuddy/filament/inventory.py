@@ -426,6 +426,7 @@ class FilamentInventory:
         material = (seen.material or "").strip()
         if (seen.ams_id, seen.tray_id) != (ams_id, tray_id) or not material:
             raise TrayNotFilledError()
+        defaults = self._spools.defaults()
         with self._pool.connection() as conn:
             printer = conn.execute(
                 "SELECT name FROM printers WHERE id = %s", (printer_id,)
@@ -460,7 +461,7 @@ class FilamentInventory:
                 "UPDATE filament_spools SET tray_fingerprint = %s WHERE id = %s",
                 (tray_fingerprint(material, seen.rgba or seen.colour), spool_id),
             )
-            linked = FilamentSpoolStore.read(conn, spool_id)
+            linked = FilamentSpoolStore.read(conn, spool_id, defaults=defaults)
         assert linked is not None
         return linked
 

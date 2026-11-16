@@ -215,16 +215,28 @@ class FilamentSpoolStore:
     def list(self, *, include_archived: bool = False, needs_type: bool | None = None) -> _Spools:
         """By number. ``needs_type`` keeps only the spools with no type (``True``) or only
         those with one (``False``)."""
+        return self._list(self._defaults(), include_archived, needs_type)
+
+    def _list(
+        self,
+        defaults: FilamentDefaults,
+        include_archived: bool = False,
+        needs_type: bool | None = None,
+    ) -> _Spools:
         where = [] if include_archived else ["archived_at IS NULL"]
         if needs_type is not None:
             where.append("type_id IS NULL" if needs_type else "type_id IS NOT NULL")
         clause = f" WHERE {' AND '.join(where)}" if where else ""
-        defaults = self._defaults()
         with self._pool.connection() as conn:
             rows = conn.execute(
                 f"SELECT {_SPOOL_COLUMNS} FROM filament_spools{clause} ORDER BY number"
             ).fetchall()
             return _hydrate(conn, rows, defaults)
+
+    def defaults(self) -> FilamentDefaults:
+        """The Filament settings as they are now, for a caller that reads a spool with
+        `read` on its own connection: call it before taking that connection."""
+        return self._defaults()
 
     def get(self, spool_id: UUID) -> m.Spool | None:
         defaults = self._defaults()
@@ -286,8 +298,9 @@ class FilamentSpoolStore:
         """The unarchived spools in total; a spool's value is its grams left at its
         effective cost per kg, else ``filament_default_cost_per_kg``. A spool is loaded when
         its place is a printer's tray (``printer_id`` set, `filament/inventory.py`)."""
-        default_cost = self._defaults().cost_per_kg
-        spools = self.list()
+        defaults = self._defaults()
+        default_cost = defaults.cost_per_kg
+        spools = self._list(defaults)
         with self._pool.connection() as conn:
             trays = {
                 row["id"]
@@ -695,10 +708,16 @@ class FilamentSpoolStore:
             yield conn
 
     @staticmethod
-    def read(conn: Conn, spool_id: UUID, *, check: bool = False) -> m.Spool | None:
+    def read(
+        conn: Conn,
+        spool_id: UUID,
+        *,
+        check: bool = False,
+        defaults: FilamentDefaults = _SETTING_DEFAULTS,
+    ) -> m.Spool | None:
         """The spool with its effective values, on ``conn``; with ``check``, a backwards
         effective temperature range is `TypeTempError`."""
-        spool = FilamentSpoolStore._spool(conn, spool_id)
+        spool = FilamentSpoolStore._spool(conn, spool_id, defaults)
         if check and spool is not None:
             _check_temps(spool.effective)
         return spool

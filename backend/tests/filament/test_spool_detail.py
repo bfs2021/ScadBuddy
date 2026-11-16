@@ -6,11 +6,12 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
 from scadbuddy.filament.catalog import CatalogStore
+from scadbuddy.filament.inventory import FilamentInventory
 from scadbuddy.filament.ledger import basis, grams_left, record
 from scadbuddy.filament.models import (
     Material,
@@ -22,6 +23,7 @@ from scadbuddy.filament.models import (
 )
 from scadbuddy.filament.spools import FilamentDefaults, FilamentSpoolStore
 from scadbuddy.filament.types import SpoolTypeStore
+from scadbuddy.spools.models import SeenTray
 from tests.conftest import PgPool, open_pg_pool
 
 pytestmark = pytest.mark.requires_postgres
@@ -224,6 +226,21 @@ def test_no_read_of_the_settings_holds_a_pool_connection(pg_conninfo: str, pg_po
         assert store.detail(made.id) is not None
         assert store.summary().spools == 1
         assert store.update(made.id, SpoolPatch(low_stock_pct=5), actor="ann") is not None
+        printer = uuid4()
+        with small.connection() as conn:
+            conn.execute(
+                "INSERT INTO printers (id, serial, name) VALUES (%s, %s, 'Garage')",
+                (printer, f"SN{printer.hex[:8]}"),
+            )
+        linked = FilamentInventory(small, defaults).link(
+            printer,
+            0,
+            1,
+            made.id,
+            SeenTray(ams_id=0, tray_id=1, material="PLA", colour="#FF0000FF"),
+            actor="ann",
+        )
+        assert linked.id == made.id
     finally:
         small.close()
 

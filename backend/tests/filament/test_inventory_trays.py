@@ -21,7 +21,7 @@ from scadbuddy.filament.inventory import (
 )
 from scadbuddy.filament.locations import LocationStore
 from scadbuddy.filament.models import Material, SpoolCreate
-from scadbuddy.filament.spools import FilamentSpoolStore
+from scadbuddy.filament.spools import FilamentDefaults, FilamentSpoolStore
 from scadbuddy.printers.reports import PrinterReportStore
 from scadbuddy.spools.models import SeenTray
 from tests.conftest import PgPool
@@ -91,6 +91,23 @@ def test_a_tagged_tray_is_its_bound_spool(pg_pool: PgPool) -> None:
     found = [(t.tray_id, t.spool.id if t.spool else None, t.found_by) for t in view.trays]
     assert found == [(0, a, "tag"), (1, b, "tag"), (2, None, None)]
     assert view.shelf == []
+
+
+def test_a_link_answers_low_stock_by_the_setting(pg_pool: PgPool) -> None:
+    material = next(
+        r.id
+        for r in CatalogStore(pg_pool).list("materials")
+        if isinstance(r, Material) and r.name == "PLA"
+    )
+    made = FilamentSpoolStore(pg_pool).create(
+        SpoolCreate(material_id=material, label_weight_g=1000, grams_left=150), actor="ann"
+    )
+    printer = _printer(pg_pool)
+    percent = 10
+    inventory = FilamentInventory(pg_pool, lambda: FilamentDefaults(percent, None))
+    assert inventory.link(printer, 0, 1, made.id, _seen(), actor="ann").low_stock is False
+    percent = 20
+    assert inventory.link(printer, 0, 1, made.id, _seen(), actor="ann").low_stock is True
 
 
 def test_an_untagged_link_holds_while_the_tray_matches(pg_pool: PgPool) -> None:
