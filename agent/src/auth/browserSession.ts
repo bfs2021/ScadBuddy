@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { Context, MiddlewareHandler } from 'hono'
 import { getCookie } from 'hono/cookie'
 import type { Sql } from 'postgres'
+import { crudOf, type CrudTarget } from '../api/crudStores.js'
 import type { AuthMode } from '../config.js'
 import type { BusEvent, EventSource } from '../events/bus.js'
 import { BROWSER_USER } from '../routes/approvals.js'
@@ -10,8 +11,9 @@ import type { Owner } from '../sessions/protocol.js'
 // #4975 phase 5 (spec 2026-11-01 §5.6): the ingress sends `/api/v1/ai/*` to the agent, so
 // the agent reads the person's session cookie itself. It looks the cookie's SHA-256 up in
 // `auth_sessions_agent`, the backend's view of live `auth_sessions` rows granted to the
-// agent's role (principal, name, kind, the expiries; nothing else), caches each answer a few
-// seconds, and drops it when the backend publishes `auth.session_revoked`.
+// agent's role (principal, name, kind, the expiries; nothing else), through the API's
+// `…/agent/auth-sessions/lookup` once it lists area `auth-sessions` (#6501), caches each
+// answer a few seconds, and drops it when the backend publishes `auth.session_revoked`.
 //
 // The browser user (routes/approvals.ts `BROWSER_USER`, `id: 'browser'`) becomes the
 // signed-in person: `kind: 'browser'` stays, `id` is the session's principal. A request
@@ -38,14 +40,55 @@ export function sessionIdHash(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex')
 }
 
+/** Where a session is looked up by its id's hex SHA-256: undefined for no live one; throws when it cannot be read. */
+export interface SessionLookup {
+  byHash(id: string): Promise<PersonSession | undefined>
+}
+
+/** The view `auth_sessions_agent` over the agent's own SQL. */
+export class PgSessionLookup implements SessionLookup {
+  readonly #sql: Sql
+
+  constructor(sql: Sql) {
+    this.#sql = sql
+  }
+
+  async byHash(id: string): Promise<PersonSession | undefined> {
+    const rows = await this.#sql<PersonSession[]>`
+      SELECT principal, name, kind FROM auth_sessions_agent
+      WHERE id_hash = ${Buffer.from(id, 'hex')}`
+    return rows[0]
+  }
+}
+
+/** The same lookup through the API's route (area `auth-sessions`, backend api/crud_agent_start.py, #6501): only the hash travels. */
+export class CrudSessionLookup implements SessionLookup {
+  readonly #call: ReturnType<typeof crudOf>
+
+  constructor(target: CrudTarget) {
+    this.#call = crudOf(target)
+  }
+
+  async byHash(id: string): Promise<PersonSession | undefined> {
+    // A hash the API would refuse is no session's (`sessionIdHash` always makes a good one).
+    if (!/^[0-9a-f]{64}$/.test(id)) return undefined
+    const { session } = await this.#call<{ session: PersonSession | null }>('a signed-in session', '/auth-sessions/lookup', {
+      method: 'POST',
+      body: { id_hash: id },
+    })
+    return session ?? undefined
+  }
+}
+
 export class BrowserSessions {
   private readonly cache = new Map<string, Cached>()
   private readonly watchers = new Set<Watcher>()
-  private readonly sql: Sql
+  private readonly sessions: SessionLookup
   private readonly now: () => number
 
-  constructor(sql: Sql, now: () => number = Date.now) {
-    this.sql = sql
+  /** `sessions`: `gated` in main.ts, the view over SQL until the API lists area `auth-sessions`. */
+  constructor(sessions: SessionLookup, now: () => number = Date.now) {
+    this.sessions = sessions
     this.now = now
   }
 
@@ -89,10 +132,7 @@ export class BrowserSessions {
     if (cached && now - cached.at < CACHE_MS) return cached.session
     let session: PersonSession | undefined
     try {
-      const rows = await this.sql<PersonSession[]>`
-        SELECT principal, name, kind FROM auth_sessions_agent
-        WHERE id_hash = ${Buffer.from(id, 'hex')}`
-      session = rows[0]
+      session = await this.sessions.byHash(id)
     } catch (error) {
       // The type only: a driver's message can carry the connection's host and user.
       console.error(`could not read a signed-in session (${(error as Error).name})`)
