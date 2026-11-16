@@ -262,16 +262,23 @@ def _bb_presets(conn: Conn, spool_id: UUID, bb: BbSpool, actor: str) -> bool:
     on Bambuddy's path finds the preset Bambuddy's spool named. True when a row changed.
 
     The value Bambuddy sent last is kept on the link (``bb_slicer_filament`` and its
-    name). A key is written only where the spool has no row for it, or where its row
-    still holds that last value; any other row (a person's, or a ``migrated`` one the
-    native API or the native migration wrote) is never touched. A clear in Bambuddy
-    deletes only the rows that still hold its last value. Rows that change record one
-    ``synced_from_bb`` event with the spool's own rows before and after
-    (``changes.presets``). A spool with a type takes none: its type gives its presets
-    (F27, `drop_migrated`)."""
+    name). Nothing is written unless Bambuddy's value changed since then, so a preset a
+    person deleted stays deleted; a link with no last value (from before it was kept)
+    fills its empty keys once. On a change, a key is written only where the spool has no
+    row for it, or where its row still holds that last value; any other row (a
+    person's, or a ``migrated`` one the native API or the native migration wrote) is
+    never touched. A clear in Bambuddy deletes only the rows that still hold its last
+    value. Rows that change record one ``synced_from_bb`` event with the spool's own
+    rows before and after (``changes.presets``). A spool with a type takes none: its
+    type gives its presets (F27, `drop_migrated`).
+
+    The spool's row is locked first (after the pull's advisory lock and any tags, the
+    pull's order), as `FilamentSpoolStore.set_presets` locks it, so a person's edit in
+    flight is waited for and then seen (re-review 2 I-A)."""
     # Here, not at the top: `filament.presets` reads `bambuddy.resolver`.
     from scadbuddy.bambuddy.resolver import PRINTER_MODEL
 
+    conn.execute("SELECT 1 FROM filament_spools WHERE id = %s FOR UPDATE", (spool_id,))
     sent = (
         _text(bb.slicer_filament),
         _text(bb.slicer_filament_name) if bb.slicer_filament else None,
@@ -291,7 +298,7 @@ def _bb_presets(conn: Conn, spool_id: UUID, bb: BbSpool, actor: str) -> bool:
         " IS DISTINCT FROM (%s, %s)",
         (*sent, spool_id, *sent),
     )
-    if link["typed"]:
+    if link["typed"] or sent == last:
         return False
     rows = {
         row["nozzle_diameter"]: (row["slicer_filament"], row["slicer_filament_name"])

@@ -4,6 +4,8 @@ changed since the last pull."""
 
 from __future__ import annotations
 
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -348,6 +350,131 @@ def test_a_preset_change_is_an_update_with_one_event(pg_pool: PgPool) -> None:
     before, after = event.data["changes"]["presets"]
     assert {row["slicer_filament"] for row in before} == {"GFA00"}
     assert {row["slicer_filament"] for row in after} == {"GFA05"}
+
+
+def test_the_preset_sync_waits_for_a_persons_edit_and_keeps_it(pg_pool: PgPool) -> None:
+    """#6262 Task 7 re-review 2 I-A: the pull locks the spool before it reads its rows,
+    so a person's edit in flight (`set_presets` holds the spool's lock) is waited for,
+    then seen and kept. Bambuddy's ``updated_at`` is unchanged, the common pull, where
+    nothing else takes the spool's lock."""
+    f = _filament(pg_pool)
+    pull(f, [bb(slicer_filament="GFA00", slicer_filament_name="Bambu PLA Basic")], now=NOW)
+    (spool,) = f.spools.list()
+    workers = ThreadPoolExecutor(1)
+    try:
+        with pg_pool.connection() as conn, conn.transaction():
+            conn.execute("SELECT 1 FROM filament_spools WHERE id = %s FOR UPDATE", (spool.id,))
+            conn.execute(
+                "DELETE FROM filament_spool_presets WHERE spool_id = %s"
+                " AND nozzle_diameter = '0.4'",
+                (spool.id,),
+            )
+            conn.execute(
+                "INSERT INTO filament_spool_presets (spool_id, printer_model, nozzle_diameter,"
+                " slicer_filament, slicer_filament_name, migrated)"
+                " VALUES (%s, 'H2C', '0.4', 'MINE', 'MINE name', false)",
+                (spool.id,),
+            )
+            pulled = workers.submit(
+                pull,
+                f,
+                [bb(slicer_filament="GFA05", slicer_filament_name="Bambu PLA Silk")],
+                now=NOW,
+            )
+            time.sleep(1)
+            assert not pulled.done()
+        pulled.result(timeout=60)
+    finally:
+        workers.shutdown(wait=True)
+
+    assert _own_presets(pg_pool, spool.id) == [
+        ("0.2", "GFA05", "Bambu PLA Silk", True),
+        ("0.4", "MINE", "MINE name", False),
+        ("0.6", "GFA05", "Bambu PLA Silk", True),
+        ("0.8", "GFA05", "Bambu PLA Silk", True),
+    ]
+
+
+def test_a_preset_a_person_deletes_stays_deleted(pg_pool: PgPool) -> None:
+    """Re-review 2 I-B: a key with no row is filled only when Bambuddy's value changed
+    since it last sent one, so a person's deletion survives an unchanged pull (no
+    event, not an update); Bambuddy's next change fills it again."""
+    f = _filament(pg_pool)
+    pull(f, [bb(slicer_filament="GFA00", slicer_filament_name="Bambu PLA Basic")], now=NOW)
+    (spool,) = f.spools.list()
+    with pg_pool.connection() as conn:
+        conn.execute(
+            "DELETE FROM filament_spool_presets WHERE spool_id = %s AND nozzle_diameter = '0.4'",
+            (spool.id,),
+        )
+    events = len(_preset_events(f, spool.id))
+
+    report = pull(
+        f,
+        [
+            bb(
+                slicer_filament="GFA00",
+                slicer_filament_name="Bambu PLA Basic",
+                updated_at=_bb_time(1),
+            )
+        ],
+        now=NOW,
+    )
+
+    assert [size for size, *_ in _own_presets(pg_pool, spool.id)] == ["0.2", "0.6", "0.8"]
+    assert len(_preset_events(f, spool.id)) == events
+    assert report.updated == 0
+
+    pull(
+        f,
+        [
+            bb(
+                slicer_filament="GFA05",
+                slicer_filament_name="Bambu PLA Silk",
+                updated_at=_bb_time(2),
+            )
+        ],
+        now=NOW,
+    )
+    assert _own_presets(pg_pool, spool.id) == [
+        (size, "GFA05", "Bambu PLA Silk", True) for size in ("0.2", "0.4", "0.6", "0.8")
+    ]
+
+
+def test_a_link_with_no_last_value_fills_only_its_empty_keys(pg_pool: PgPool) -> None:
+    """Re-review 2 M-1: a link from before the last value was kept (NULL), on a spool
+    with ``migrated`` rows from the native migration or the native API: its empty keys
+    are filled once, and no row is rewritten."""
+    f = _filament(pg_pool)
+    pull(f, [bb()], now=NOW)
+    (spool,) = f.spools.list()
+    with pg_pool.connection() as conn:
+        for size in ("0.4", "0.6"):
+            conn.execute(
+                "INSERT INTO filament_spool_presets (spool_id, printer_model, nozzle_diameter,"
+                " slicer_filament, slicer_filament_name, migrated)"
+                " VALUES (%s, 'H2C', %s, 'NATIVE', 'NATIVE name', true)",
+                (spool.id, size),
+            )
+
+    pull(
+        f,
+        [
+            bb(
+                slicer_filament="GFA00",
+                slicer_filament_name="Bambu PLA Basic",
+                updated_at=_bb_time(1),
+            )
+        ],
+        now=NOW,
+    )
+
+    assert _own_presets(pg_pool, spool.id) == [
+        ("0.2", "GFA00", "Bambu PLA Basic", True),
+        ("0.4", "NATIVE", "NATIVE name", True),
+        ("0.6", "NATIVE", "NATIVE name", True),
+        ("0.8", "GFA00", "Bambu PLA Basic", True),
+    ]
 
 
 def test_a_typed_spool_takes_no_preset_from_bambuddy(pg_pool: PgPool) -> None:

@@ -4,8 +4,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -113,34 +111,9 @@ def test_a_plans_bambuddy_ids_key_as_they_did_before_6262() -> None:
     slots = [{"slot_id": 1, "spool_id": 5}]
     bb = request(printer_id=1, filament_plan={"slots": slots, "ids": "bb"})
     sb = request(printer_id=1, filament_plan={"slots": slots, "ids": "sb"})
-    # The key the model before the field gave: its dump, which had no ``ids`` (re-review
-    # M-g: two parsed requests both carry the default, so they cannot tell).
-    old = bb.model_dump(
-        mode="json",
-        exclude={
-            **dict.fromkeys(
-                (
-                    "request_id",
-                    "print_sequence",
-                    "rack_position",
-                    "rack_algorithm",
-                    "filament_profiles",
-                    "supports",
-                    "prime_tower",
-                    "plate_ids",
-                    "folder_id",
-                    "printer",
-                    "accepted_fixes",
-                    "path",
-                    "part_settings",
-                ),
-                True,
-            ),
-            "filament_plan": {"ids"},
-        },
-    )
-    canonical = json.dumps(old, sort_keys=True, separators=(",", ":"))
-    before = hashlib.sha256(f"{'o' * 32}\n{canonical}".encode()).hexdigest()
+    # The key the model before the field gave this body, computed with `run_key` at
+    # 7526a2db9, the commit before Task 7 (re-review M-3).
+    before = "31ada27f898071ef5bcc1add6a6202b4a9bb78eef54482061a7ce1a67bcff1fe"
     assert run_key("o" * 32, bb) == before
     assert run_key("o" * 32, sb) != before
 
