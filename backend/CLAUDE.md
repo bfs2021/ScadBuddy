@@ -338,7 +338,21 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   agent's `PgSessionRows` and `PgResourceRows` statement for statement, an insert counted under
   the owner's `ai_sessions.start:<kind>:<id>` lock and a fork's checked under its parent's
   payload-key lock, shared, so an agent pod still on SQL excludes it (tests
-  `tests/crud/test_crud_agent_sessions.py`).
+  `tests/crud/test_crud_agent_sessions.py`). `transcripts.py` is a session's transcript, for
+  `api/crud_agent_transcripts.py` (area `transcripts`, #5299 step 9, part b): the agent's
+  `PgTranscriptRows` statement for statement, each entry sealed and opened here under the
+  session's payload key (`payload_keys.py` `key_in`, no audit row) with the agent's AAD
+  (`ai_session_entries:<session>:<subpath>:<uuid or #id>`, so the ids are reserved with `nextval`
+  first); an append's tombstone check (under the subject's payload-key lock, shared), its fence
+  (`turn_attempt`, `durable_turn_id`, `FOR SHARE`) and its insert are one transaction, and a
+  fork's transcript is read through its chain (`LEAST(bound, cut)`) in one snapshot, read again
+  when an ancestor was forgotten meanwhile (tests `tests/crud/test_crud_agent_transcripts.py`).
+  `events.py` is a session's event log, for `api/crud_agent_events.py` (area `session-events`,
+  #5299 step 9, part b): the agent's `PgEventRows` statement for statement, a seq taken from
+  `ai_sessions.event_seq` in the insert's statement, a turn's append fenced `FOR UPDATE` on its
+  placement, a fork's read through its chain (`LEAST(bound, cut)`) in one statement, and a new
+  fork's log under its parent's payload-key lock, shared (tests
+  `tests/crud/test_crud_agent_events.py`).
 - The agent's small stores (#5299 step 5): `api/crud_agent_stores.py` (areas
   `activity-kinds`, `browser-origins`, `bridge-tabs`, `pairings`, `mcp-tokens`) and
   `api/crud_agent_notify.py` (area `notify`, sealed with the KEK under the agent's AAD), each

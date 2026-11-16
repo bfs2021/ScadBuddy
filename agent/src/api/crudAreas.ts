@@ -54,9 +54,12 @@ export const GATE_AREAS = ['gate', 'pending-input', 'audit', 'approvals', 'quest
 
 /**
  * The areas of the sessions' rows and of what their tool calls touched (#5299 step 9, part a;
- * backend api/crud_agent_sessions.py; sessions/rows.ts, sessions/touched.ts).
+ * backend api/crud_agent_sessions.py; sessions/rows.ts, sessions/touched.ts), and of their
+ * transcripts, sealed and opened by the API, and their event logs (part b;
+ * api/crud_agent_transcripts.py, api/crud_agent_events.py; sessions/crudTranscripts.ts,
+ * sessions/crudEvents.ts).
  */
-export const SESSION_AREAS = ['sessions', 'session-resources'] as const
+export const SESSION_AREAS = ['sessions', 'session-resources', 'transcripts', 'session-events'] as const
 
 export type CrudAreasOptions = {
   fetch?: typeof fetch
