@@ -727,3 +727,4 @@ fewer clicks; the builder cites the Bambu Studio source they compare against.
 - Task 7 (review): `FilamentInventory.rows` places a spool by its SB tray place on a registry printer with no stored report too, so a tray answer on a Bambuddy-only printer shows the spool loaded.
 - Task 7 (re-review): the filament step names each option's preset for the printer's mounted nozzle when the route knows it (`options.nozzles`), else 0.4.
 - Task 7 (re-review 2): the pull's preset sync locks the spool row first (advisory → tags → spool), so a person's concurrent PUT /presets is never overwritten or deleted.
+- Task 7 (re-review 3): only a `migrated` row that still holds Bambuddy's last value counts as Bambuddy's; a person's row is never rewritten by the pull, even when it holds the same value.
