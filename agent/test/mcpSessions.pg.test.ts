@@ -455,6 +455,42 @@ describe.skipIf(!TEST_DATABASE_URL).each(['sql', 'crud'] as const)(`/mcp session
     }
   })
 
+  it('answers 413 over the CRUD routes for a request whose relay message is past the API gate, sending nothing', async () => {
+    // A 4 MiB body (the MCP SDK's limit) of backslashes doubles when the row escapes it: past
+    // the API's 8 MiB JSON gate, which over SQL never applied.
+    const { token } = await tokens.mint({ name: 't', tier: 'read' })
+    const client = await connect(token, () => a)
+    const head = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_models","arguments":{"x":"'
+    const tail = '"}}}'
+    const fill = 4 * 1024 * 1024 - head.length - tail.length
+    const raw = head + '\\\\'.repeat(Math.floor(fill / 2)) + 'x'.repeat(fill % 2) + tail
+    expect(Buffer.byteLength(raw)).toBe(4 * 1024 * 1024)
+    const sent = (await db.sql`SELECT count(*)::int AS n FROM ai_mcp_relay_messages`)[0]!.n as number
+    const res = await b.app.fetch(
+      new Request(MCP_URL, {
+        method: 'POST',
+        headers: {
+          host: new URL(MCP_URL).host,
+          authorization: `Bearer ${token}`,
+          'mcp-session-id': sessionOf(client),
+          'mcp-protocol-version': '2025-06-18',
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+        },
+        body: raw,
+      }),
+      { incoming: { socket: { remoteAddress: LOOPBACK } } },
+    )
+    if (over === 'sql') {
+      // Postgres takes the row: the owner answers it.
+      expect(res.status).toBe(200)
+      return
+    }
+    expect(res.status).toBe(413)
+    expect(await res.json()).toMatchObject({ error: { message: 'Request body too large to relay' } })
+    expect((await db.sql`SELECT count(*)::int AS n FROM ai_mcp_relay_messages`)[0]!.n).toBe(sent)
+  })
+
   /** Busy for longer than the beats a peer may miss: nothing else in this process runs. */
   function stall(): void {
     const until = performance.now() + BEAT_MS * 6

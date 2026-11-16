@@ -146,6 +146,20 @@ def test_an_inline_chunk_rides_in_the_notify(agent: Agent, heard: psycopg.Connec
     assert payloads[2]["error"] is True
 
 
+def test_a_non_ascii_chunk_the_agent_sized_rides_in_the_notify(
+    agent: Agent, heard: psycopg.Connection[Any]
+) -> None:
+    # The agent inlines a chunk whose JSON is at most 7 500 UTF-8 bytes (sessionRelay.ts
+    # INLINE_MAX_BYTES); written as \uXXXX escapes this one would pass 7 999.
+    text = "data: " + "漢°—" * 900 + "\n\n"
+    header = {"t": "chunk", "req": str(uuid.uuid4()), "to": REPLICA, "text": text}
+    assert len(json.dumps(header, separators=(",", ":"), ensure_ascii=False).encode()) <= 7500
+    assert len(json.dumps(header, separators=(",", ":")).encode()) > 7999
+    agent.post("/mcp-relay/send", {"header": header})
+    [payload] = [json.loads(p) for p in _notified(heard)]
+    assert payload["text"] == text
+
+
 def test_a_withdrawn_request_is_gone(agent: Agent) -> None:
     row = str(uuid.uuid4())
     header = {"t": "req", "req": str(uuid.uuid4()), "to": REPLICA, "row": row}

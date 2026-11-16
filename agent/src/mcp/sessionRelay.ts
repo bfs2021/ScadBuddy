@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { type Principal, TIERS } from '../auth/principal.js'
-import { MCP_CHANNEL, type RelayRows } from './relayRows.js'
+import { MCP_CHANNEL, RelayBodyTooLargeError, type RelayRows } from './relayRows.js'
 
 // /mcp sessions across agent replicas (#2086). A session is its transport, its
 // McpServer, its resource subscriptions and its replay log: live objects in
@@ -369,10 +369,14 @@ export class SharedMcpSessionRelay implements McpSessionRelay {
         },
         (err: unknown) => {
           done()
-          if (!settled) {
-            settled = true
-            reject(err)
+          if (settled) return
+          if (err instanceof RelayBodyTooLargeError) {
+            // Too large to relay through the API, whatever the MCP SDK takes: said, not a 500.
+            settle(Response.json({ jsonrpc: '2.0', error: { code: -32000, message: 'Request body too large to relay' }, id: null }, { status: 413 }))
+            return
           }
+          settled = true
+          reject(err)
         },
       )
     })
