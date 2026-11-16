@@ -1657,7 +1657,7 @@ async def rack_settle_lan_ended(
     )
 
 
-# -- spools, native spools, held presets, native slices (Q28-Q30, area ``spools``) -------
+# -- spools, held presets, native slices (Q28, Q30, area ``spools``) ---------------------
 
 
 class SpoolRecords(BaseModel):

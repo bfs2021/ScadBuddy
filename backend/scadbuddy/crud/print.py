@@ -1366,7 +1366,7 @@ def _when(value: str | None) -> datetime | None:
 _refuse(RemoteRackUsage, "RackUsageStore", RACK_API_ONLY)
 
 
-# -- spools, native spools, held presets, native slices (Q28-Q30, #5298 Task 31) ---------
+# -- spools, held presets, native slices (Q28, Q30, #5298 Task 31) ---------------------
 
 #: The route's reason for a refresh's write that ran past its deadline
 #: (`api/crud_print.py`): it rolled back, as `SpoolStore.replace_records`' does.

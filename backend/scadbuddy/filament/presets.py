@@ -18,7 +18,6 @@ from psycopg.rows import DictRow
 from psycopg_pool import ConnectionPool
 
 from scadbuddy.bambuddy.models import NozzleSize
-from scadbuddy.bambuddy.resolver import PRINTER_MODEL
 from scadbuddy.filament import models as m
 
 Conn = Connection[DictRow]
@@ -30,19 +29,6 @@ _TYPE_K_COLUMNS = ", ".join(m.TypeKValue.model_fields)
 
 #: The nozzle diameters a row for any nozzle becomes: the resolver's sizes.
 NOZZLES: tuple[str, ...] = get_args(NozzleSize)
-#: The printer models a row for any printer becomes, as the 0706Z migration picks them:
-#: the resolver's model and each registry printer's, trimmed and upper-cased.
-_MODELS = (
-    "SELECT %s AS model UNION SELECT upper(btrim(model)) FROM printers"
-    " WHERE nullif(btrim(model), '') IS NOT NULL"
-)
-
-
-def any_printer_keys(conn: Conn) -> list[tuple[str, str]]:
-    """The keys a preset for any printer and nozzle is kept under: each model of
-    `_MODELS` with each of `NOZZLES`, by model and nozzle."""
-    rows = conn.execute(f"SELECT model FROM ({_MODELS}) k ORDER BY model", (PRINTER_MODEL,))
-    return [(row["model"], nozzle) for row in rows.fetchall() for nozzle in NOZZLES]
 
 
 def drop_migrated(conn: Conn, spool_id: UUID) -> list[list[dict[str, Any]]] | None:
