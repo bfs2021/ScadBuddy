@@ -716,7 +716,8 @@ class FilamentSpoolStore:
         defaults: FilamentDefaults = _SETTING_DEFAULTS,
     ) -> m.Spool | None:
         """The spool with its effective values, on ``conn``; with ``check``, a backwards
-        effective temperature range is `TypeTempError`."""
+        effective temperature range is `TypeTempError`. Its ``low_stock`` follows
+        ``defaults``: a caller that returns the spool passes the settings' `defaults()`."""
         spool = FilamentSpoolStore._spool(conn, spool_id, defaults)
         if check and spool is not None:
             _check_temps(spool.effective)
