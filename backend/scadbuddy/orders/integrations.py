@@ -26,6 +26,7 @@ from scadbuddy.orders.models import FilamentEffect
 from scadbuddy.orders.problems import PROBLEMS
 
 if TYPE_CHECKING:
+    from scadbuddy.bambuddy.models import SpoolAssignment
     from scadbuddy.bambuddy.projects import FolderlessProjects
 
 
@@ -65,8 +66,13 @@ class SpoolGroup(BaseModel):
     #: (a preset the Bambuddy pull carried, #6262 Task 7 ruling R1).
     local_preset: LocalDensity | None = None
     #: The newest spool's own effective density (its, else its type's, subtype's or
-    #: material's), after every preset.
+    #: material's), before every preset (Task 9 review ruling).
     spool_density: SpoolDensity | None = None
+    #: The preset id (``tray_info_idx``) of the tray a registry printer's latest report
+    #: holds the newest held spool in: the last step, after the spool's own presets.
+    tray_filament: str | None = None
+    #: The Bambuddy local preset ``tray_filament`` names, when it is one with a density.
+    tray_local_preset: LocalDensity | None = None
 
     @property
     def rgba(self) -> str | None:
@@ -94,8 +100,12 @@ class ShelfSpool(BaseModel):
     rgba: str | None = None
     remaining_g: float = 0.0
     archived: bool = False
-    #: The registry printer it is loaded in; None on the shelf.
+    #: The registry printer it is loaded in; None on the shelf or in a printer the
+    #: registry does not hold.
     loaded_printer: str | None = None
+    #: In a tray of any printer (a registry printer's, or Bambuddy's assignment to one
+    #: the registry does not hold); False on the shelf.
+    loaded: bool = False
 
 
 class ArchiveSlot(BaseModel):
@@ -188,6 +198,12 @@ class OrderIntegrations(Protocol):
         preset names them by (#6136); :class:`NotLinkedError` without a Bambuddy."""
         ...
 
+    async def spool_assignments(self) -> list[SpoolAssignment]:
+        """Bambuddy's tray assignments, which place a linked SB spool no registry printer
+        reports (plan Decision 3, until #6263); none when Bambuddy refuses, so the spools
+        are placed by the reports alone. :class:`NotLinkedError` without a Bambuddy."""
+        ...
+
     async def archive(self, archive_id: int) -> ArchiveFacts | None:
         """One archive's facts (§8.2); None for one Bambuddy deleted.
         :class:`NotLinkedError` without a Bambuddy."""
@@ -234,6 +250,9 @@ class NotLinked:
         return False
 
     async def local_densities(self) -> dict[str, LocalDensity]:
+        raise NotLinkedError
+
+    async def spool_assignments(self) -> list[SpoolAssignment]:
         raise NotLinkedError
 
     async def archive(self, archive_id: int) -> ArchiveFacts | None:

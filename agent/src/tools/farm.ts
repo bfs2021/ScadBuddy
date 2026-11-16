@@ -161,9 +161,11 @@ export const farmTools: Tool[] = [
     description:
       "ScadBuddy's spool inventory: every spool by `id` (a uuid) and `number` (#N), with its effective material, " +
       'brand, colour (`rgba`, `#RRGGBBAA`: an alpha below FF is a translucent spool), label weight, grams left ' +
-      "and cost per kg, its presets, and `loaded`: the registry printer and tray it is in (null on the shelf). " +
+      "and cost per kg, its presets, and `loaded`: the registry printer and tray it is in (null on the shelf; " +
+      "while Bambuddy is linked, a spool no registry printer reports is in the tray Bambuddy assigns it). " +
       "`trays` lists each registry printer's reported trays (label, material, `rgba`) with the spool each holds. " +
-      'Archived spools only with `include_archived`. Bambuddy is not read.',
+      'Archived spools only with `include_archived`. Needs no Bambuddy: a refused assignment read places the ' +
+      'spools by the reports alone.',
     input: z.object({ include_archived: z.boolean().optional() }),
     risk: 'read',
     source: SPOOLS,

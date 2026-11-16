@@ -5,17 +5,21 @@ A quote names a price-book filament per colour slot (§3.3), never a spool, so t
 fills ``filament_plan.slots`` when it starts, on the printer it runs on, with SB spool
 numbers (``ids`` ``"sb"``). A spool is of a filament as the spool import matches them
 (#6209, ``orders/spool_import.py`` ``_matches``): the same material, subtype and brand,
-upper-cased, and the record's link to it (its ``spool_ids``), else the spools'
-``#RRGGBB`` at the last import (``spool_colour``) with the record's alpha, else, for a
-record the import never linked, its own colour and alpha (:func:`record_rgba`). Either
-way the spool and the record are both opaque or both translucent (`same_opacity`, #6316):
-a translucent spool is never an opaque record's by its RGB. So a colour a person set
-never hides the record's spools. For each slot whose filament the item names:
+upper-cased, and the record's link to it (its ``spool_ids``, whatever the spools' alpha:
+a link by id is not a match by colour, spec §5.1), else the spools' ``#RRGGBB`` at the
+last import (``spool_colour``) with the record's alpha, else, for a record the import
+never linked, its own colour and alpha (:func:`record_rgba`). A match by colour needs the
+spool and the record both opaque or both translucent (`same_opacity`, #6316): a
+translucent spool is never an opaque record's by its RGB. So a colour a person set never
+hides the record's spools. For each slot whose filament the item names:
 
 - a spool the request names must be of that filament, else ``spool_not_filament``;
 - otherwise the spool of that filament loaded on the run's registry printer with the
-  most grams left; with none loaded there, the unarchived shelf spool (loaded nowhere) of
-  it with the most grams left, as the dialog's spool-first order ranks them
+  most grams left (a spool is in the tray a registry printer's report holds it in, else,
+  while Bambuddy is linked, the one Bambuddy assigns its linked BB spool to: plan
+  Decision 3, until #6263; a failed assignment read places by the reports alone); with
+  none loaded there, the unarchived shelf spool (loaded nowhere) of it with the most
+  grams left, as the dialog's spool-first order ranks them
   (``bambuddy/filaments.py`` ``_display_order``). A spool loaded in another printer is
   never taken: using it means unloading it there, which is a person's call.
 - no such spool at all is ``needs_spool_choice``, naming every such slot.
@@ -34,11 +38,11 @@ from typing import Protocol
 from fastapi import status
 
 from scadbuddy.bambuddy.filaments import FilamentPlan
-from scadbuddy.bambuddy.models import SlotChoice
+from scadbuddy.bambuddy.models import SlotChoice, SpoolAssignment
 from scadbuddy.core.problems import DATABASE_ERRORS, ApiError
 from scadbuddy.filament.colour import same_opacity
 from scadbuddy.filament.models import FilamentInventorySpool
-from scadbuddy.orders.integrations import ShelfSpool
+from scadbuddy.orders.integrations import OrderIntegrations, ShelfSpool
 from scadbuddy.orders.models import Filament
 from scadbuddy.orders.problems import PROBLEMS
 from scadbuddy.orders.store import OrderStore, SpoolLink
@@ -58,7 +62,12 @@ class SpoolRows(Protocol):
     """What the fill reads of ScadBuddy's spools (`filament/inventory.py`
     `FilamentInventory`): blocking, so it is called in a thread."""
 
-    def rows(self, *, include_archived: bool = False) -> list[FilamentInventorySpool]: ...
+    def rows(
+        self,
+        *,
+        include_archived: bool = False,
+        bb_assignments: Sequence[SpoolAssignment] = (),
+    ) -> list[FilamentInventorySpool]: ...
 
     def bb_to_sb(self, ids: Iterable[int]) -> dict[int, int]: ...
 
@@ -76,6 +85,7 @@ def shelf_spools(rows: Iterable[FilamentInventorySpool]) -> list[ShelfSpool]:
             remaining_g=row.spool.grams_left or 0.0,
             archived=row.spool.archived_at is not None,
             loaded_printer=None if row.loaded is None else row.loaded.printer_id,
+            loaded=row.loaded is not None,
         )
         for row in rows
     ]
@@ -108,10 +118,10 @@ def _of(spool: ShelfSpool, record: Filament, link: SpoolLink | None) -> bool:
         record.material, record.subtype, record.brand
     ):
         return False
-    if not same_opacity(spool.rgba, record_rgba(record)):
-        return False
     if link is not None and spool.id in link.spool_ids:
         return True
+    if not same_opacity(spool.rgba, record_rgba(record)):
+        return False
     if link is not None and link.spool_colour is not None:
         wanted = link.spool_colour.upper() + f"{record.alpha:02X}"
     else:
@@ -146,7 +156,7 @@ def fill_plan(
             continue
         matching = [s for s in spools if not s.archived and _of(s, record, link)]
         here = [s for s in matching if printer is not None and s.loaded_printer == printer]
-        shelf = [s for s in matching if s.loaded_printer is None]
+        shelf = [s for s in matching if not s.loaded and s.loaded_printer is None]
         pick = max(here or shelf, key=lambda s: s.remaining_g, default=None)
         if pick is None:
             missing.append(slot)
@@ -189,6 +199,7 @@ def _item_filaments(
 async def item_plan(
     store: OrderStore,
     inventory: SpoolRows,
+    integrations: OrderIntegrations,
     item_id: str,
     plan: FilamentPlan,
     printer: str | None,
@@ -197,13 +208,17 @@ async def item_plan(
     registry printer ``printer`` (None: no printer's loaded spools count), naming SB
     spool numbers; None when the item names no filament. 409 ``needs_spool_choice`` or
     ``spool_not_filament`` naming the colour slots; 503 when ScadBuddy's spools cannot
-    be read. Bambuddy is never read."""
+    be read. While ``integrations`` is linked, Bambuddy's tray assignments place the
+    spools no registry printer reports; nothing else is read from Bambuddy."""
     filaments, links = await asyncio.to_thread(_item_filaments, store, item_id)
     if not filaments:
         return None
     supplied = {slot.slot_id: slot.spool_id for slot in plan.slots}
+    assignments = await integrations.spool_assignments() if integrations.linked else []
     try:
-        rows = await asyncio.to_thread(inventory.rows, include_archived=True)
+        rows = await asyncio.to_thread(
+            inventory.rows, include_archived=True, bb_assignments=assignments
+        )
         if plan.ids == "bb":
             named = [spool_id for spool_id in supplied.values() if spool_id > 0]
             mapped = await asyncio.to_thread(inventory.bb_to_sb, named) if named else {}

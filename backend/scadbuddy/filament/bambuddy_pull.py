@@ -59,6 +59,8 @@ from pydantic import BaseModel, Field, ValidationError
 
 from scadbuddy.bambuddy.client import client_for
 from scadbuddy.bambuddy.models import Spool as BbSpool
+from scadbuddy.bambuddy.models import SpoolAssignment
+from scadbuddy.core.problems import ApiError
 from scadbuddy.filament import ledger
 from scadbuddy.filament import models as m
 from scadbuddy.filament.colour import normalise_rgba
@@ -842,6 +844,23 @@ async def read_and_pull(
     report.invalid = len(bad)
     report.invalid_bb_ids = [i for i in bad if i is not None]
     return report
+
+
+async def read_assignments(settings: StoredSettings) -> list[SpoolAssignment]:
+    """Bambuddy's tray assignments (``GET /inventory/assignments``), which place a linked
+    SB spool where no registry printer reports it (plan Decision 3, until #6263): none
+    with no BB URL, and none, logged, when Bambuddy refuses or answers in another shape,
+    so the spools are placed by the reports alone."""
+    if not settings.bambuddy_url:
+        return []
+    try:
+        async with client_for(settings) as client:
+            return await client.spool_assignments()
+    except ApiError as error:
+        logger.warning("no tray assignments from Bambuddy: %s", error.detail)
+    except ValidationError as error:
+        logger.warning("no tray assignments from Bambuddy: an answer of another shape: %s", error)
+    return []
 
 
 async def scheduled_pull(store: Filament, load: Callable[[], StoredSettings]) -> Outcome:

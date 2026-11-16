@@ -17,6 +17,7 @@ from typing import Any, cast
 import pytest
 
 from scadbuddy.api.orders import record_fulfilment, update_fulfilment
+from scadbuddy.bambuddy.models import SpoolAssignment
 from scadbuddy.core.events import OrderItemChanged, PrintOutcome
 from scadbuddy.core.problems import ApiError
 from scadbuddy.operations.claims import ClaimStore
@@ -66,6 +67,9 @@ class Archives:
         self.downloads: list[tuple[int, str, str | None]] = []
 
     async def local_densities(self) -> dict[str, LocalDensity]:
+        raise AssertionError("not asked")
+
+    async def spool_assignments(self) -> list[SpoolAssignment]:
         raise AssertionError("not asked")
 
     async def maintenance_tasks(self, printer_id: int) -> list[MaintenanceTask]:

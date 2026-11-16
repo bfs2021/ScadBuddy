@@ -34,7 +34,7 @@ import { acceptOperation } from './operations'
  * and Playwright's `page.request` never reaches the service worker, so the spec sets it
  * with `addInitScript`. Unit tests call `setHotPath`.
  *
- * Every Bambuddy-only route (the camera, the inventory, Bambuddy's tray assignment, the
+ * Every Bambuddy-only route (the camera, Bambuddy's tray assignment, the
  * projects and their default without `native`) answers 409 "no Bambuddy URL is
  * configured", as the backend does with none set, so a component that still asks
  * Bambuddy shows an error a test catches.

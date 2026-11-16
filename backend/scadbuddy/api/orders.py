@@ -70,7 +70,7 @@ from scadbuddy.orders.costs import (
 from scadbuddy.orders.density import DensityTable, ProfileDensity, used_density
 from scadbuddy.orders.estimate import EstimatedPart, OrderEstimate, filament_estimate
 from scadbuddy.orders.history import UnitCostHistory, unit_cost_history
-from scadbuddy.orders.integrations import ArchiveMedia
+from scadbuddy.orders.integrations import ArchiveMedia, SpoolGroup
 from scadbuddy.orders.lifecycle import (
     FulfilLine,
     FulfilmentInput,
@@ -998,17 +998,30 @@ async def unarchive_filament(filament_id: str, orders: OrdersDep) -> Filament:
         " differ, and its `spool_ids` are SB spool numbers. A filament known only by its"
         " colour's name, or with no priced spool, is `skipped` with its `reason`. Run on"
         " click only: no quote reads the spools (Ruling 3). A record with no density gets"
-        " the one its spools' slicer preset gives, else the spools' own (#6136,"
-        " `orders/density.py`); a density a record has is never changed. Needs no Bambuddy."
+        " the newest spool's own density, else the one its slicer preset gives, else the"
+        " one its tray's reported preset gives (#6136, `orders/density.py`); a density a"
+        " record has is never changed. Needs no Bambuddy. 503 when ScadBuddy's spools"
+        " cannot be read."
     ),
 )
 async def import_spools(orders: OrdersDep) -> SpoolImport:
-    groups = await inventory_groups(orders.inventory, orders.integrations)
+    groups = await _spool_groups(orders)
     densities = await _vendor_densities(orders)
     try:
         return await asyncio.to_thread(import_spools_into, orders.store, groups, densities)
     except FilamentExistsError as error:
         raise _filament_exists(error) from None
+
+
+async def _spool_groups(orders: OrdersComponent) -> list[SpoolGroup]:
+    """`inventory_groups`; 503 when ScadBuddy's spools cannot be read."""
+    try:
+        return await inventory_groups(orders.inventory, orders.integrations)
+    except DATABASE_ERRORS as error:
+        raise ApiError(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "ScadBuddy's spools could not be read; try again",
+        ) from error
 
 
 @router.post(
@@ -1018,15 +1031,16 @@ async def import_spools(orders: OrdersDep) -> SpoolImport:
     description=(
         "Every record not archived with no density gets the one ScadBuddy's spools of its"
         " material, subtype, brand and `#RRGGBBAA` give (#6136, #6262, `orders/density.py`):"
-        " the newest spool's slicer preset id, that preset's density (Bambuddy's local"
-        " preset while one is linked, else the image's Bambu Studio preset), else the"
-        " spool's own effective density. One row per such record; a row with no"
-        " `density_g_cm3` is one no source covers, which still has none. A density a record"
-        " has is never changed. Needs no Bambuddy."
+        " the newest spool's own effective density, else its slicer preset id's density"
+        " (Bambuddy's local preset while one is linked, else the image's Bambu Studio"
+        " preset), else that of the preset id its tray reports. One row per such record; a"
+        " row with no `density_g_cm3` is one no source covers, which still has none. A"
+        " density a record has is never changed. Needs no Bambuddy. 503 when ScadBuddy's"
+        " spools cannot be read."
     ),
 )
 async def fill_densities(orders: OrdersDep) -> DensityFill:
-    groups = await inventory_groups(orders.inventory, orders.integrations)
+    groups = await _spool_groups(orders)
     densities = await _vendor_densities(orders)
     return await asyncio.to_thread(fill_densities_in, orders.store, densities, groups)
 

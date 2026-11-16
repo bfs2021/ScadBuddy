@@ -257,11 +257,33 @@ class FilamentInventory:
             )
         return found
 
-    def view(self, *, include_archived: bool = False) -> m.FilamentInventoryView:
-        """Every SB spool with its tray (:meth:`rows`, no Bambuddy assignment read), and
-        each registry printer's reported trays with the SB spool each holds, as its latest
-        stored report shows them (`_Keys.hold`), by printer name (#6262 Task 9)."""
-        rows = self.rows(include_archived=include_archived)
+    def tray_presets(self) -> dict[UUID, str]:
+        """Each SB spool a registry printer's latest report holds (`_Keys.hold`), by the
+        preset id (``tray_info_idx``) that tray reports: the last step of a price-book
+        record's density (`orders/density.py`, #6262 Task 9 review)."""
+        with self._pool.connection() as conn:
+            keys = _Keys(conn)
+        printers = {row.id: row for row in PrinterStore(self._pool, None).list()}
+        found: dict[UUID, str] = {}
+        for printer_id, seen in self._reported(printers):
+            for tray in seen:
+                spool_id, _ = keys.hold(printer_id, tray)
+                preset = (tray.tray_info_idx or "").strip()
+                if spool_id is not None and preset and spool_id not in found:
+                    found[spool_id] = preset
+        return found
+
+    def view(
+        self,
+        *,
+        include_archived: bool = False,
+        bb_assignments: Sequence[SpoolAssignment] = (),
+    ) -> m.FilamentInventoryView:
+        """Every SB spool with its tray (:meth:`rows`, placed by ``bb_assignments`` where no
+        report holds it), and each registry printer's reported trays with the SB spool
+        each holds, as its latest stored report shows them (`_Keys.hold`), by printer name
+        (#6262 Task 9)."""
+        rows = self.rows(include_archived=include_archived, bb_assignments=bb_assignments)
         numbers = {row.spool.id: row.spool.number for row in rows}
         with self._pool.connection() as conn:
             keys = _Keys(conn)
@@ -291,12 +313,17 @@ class FilamentInventory:
         found.sort(key=lambda p: (p.printer_name.casefold(), p.printer_id))
         return m.FilamentInventoryView(spools=rows, trays=found)
 
-    def summary(self, spool_id: UUID, grams: float | None = None) -> m.FilamentSpoolSummary | None:
+    def summary(
+        self,
+        spool_id: UUID,
+        grams: float | None = None,
+        bb_assignments: Sequence[SpoolAssignment] = (),
+    ) -> m.FilamentSpoolSummary | None:
         """One SB spool's stock, tray and price, and its filament's stock: the
         unarchived spools of its effective material, subtype, brand and ``#RRGGBBAA``
-        (its colour's name for one with none). An archived spool is still summarised.
-        ``None`` for no such spool."""
-        rows = self.rows(include_archived=True)
+        (its colour's name for one with none), placed as :meth:`rows` places them. An
+        archived spool is still summarised. ``None`` for no such spool."""
+        rows = self.rows(include_archived=True, bb_assignments=bb_assignments)
         row = next((r for r in rows if r.spool.id == spool_id), None)
         if row is None:
             return None

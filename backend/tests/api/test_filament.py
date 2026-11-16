@@ -18,6 +18,7 @@ from scadbuddy.auth.models import ANONYMOUS, AuthSession, Person, PersonalToken,
 from scadbuddy.printers.reports import PrinterReportStore
 from tests.api.test_send import API, configure
 from tests.support.printers import bambuddy_printer
+from tests.support.sb_rows import seed_app_sb_spools
 
 pytestmark = pytest.mark.requires_postgres
 
@@ -431,7 +432,8 @@ def _garage_reports_tray(client: TestClient, pg_conninfo: str) -> str:
 
 def test_inventory_route_lists_sb_spools(client: TestClient, pg_conninfo: str) -> None:
     """Every SB spool by number with its ``#RRGGBBAA`` and tray, and each registry
-    printer's reported trays with the SB spool each holds. Bambuddy is never read."""
+    printer's reported trays with the SB spool each holds. With no Bambuddy linked, the
+    reports alone place the spools."""
     white = _spool(client, rgba="#FFFFFF", grams_left=500)
     clear = _spool(client, rgba="#FFFFFF80", grams_left=300)
     gone = _spool(client, rgba="#000000")
@@ -479,6 +481,49 @@ def test_inventory_route_lists_sb_spools(client: TestClient, pg_conninfo: str) -
         clear["id"],
         gone["id"],
     }
+
+
+@respx.mock
+def test_inventory_places_a_linked_spool_by_bambuddys_assignment(
+    client: TestClient, pg_conninfo: str
+) -> None:
+    """Task 9 review ruling (plan Decision 3, until #6263): while Bambuddy is linked, a
+    spool no registry printer reports is in the tray Bambuddy assigns its linked Bambuddy
+    spool to; a failed read places the spools by the reports alone."""
+    configure(client)
+    printer = bambuddy_printer(pg_conninfo, 2)
+    bb = {
+        "id": 15,
+        "material": "PLA",
+        "rgba": "00FF00FF",
+        "label_weight": 1000,
+        "weight_used": 250,
+        "archived_at": None,
+        "updated_at": "2026-11-15T00:00:00Z",
+    }
+    seed_app_sb_spools(client, [bb], offset=100)
+    place = {"id": 1, "spool_id": 15, "printer_id": 2, "ams_id": 0, "tray_id": 1}
+    assignments = respx.get(f"{API}/inventory/assignments").mock(
+        return_value=httpx.Response(200, json=[place | {"printer_name": "Workshop"}])
+    )
+
+    [row] = client.get(INVENTORY).json()["spools"]
+
+    assert (row["spool"]["number"], row["bb_spool_id"]) == (115, 15)
+    assert row["loaded"] == {
+        "printer_id": printer,
+        "bambuddy_printer_id": 2,
+        "printer_name": "Workshop",
+        "ams_id": 0,
+        "tray_id": 1,
+    }
+    summary = client.get(f"{SPOOLS}/{row['spool']['id']}/summary").json()
+    assert summary["spool"]["loaded"]["printer_id"] == printer
+
+    assignments.mock(return_value=httpx.Response(403, json={"detail": "no"}))
+    refused = client.get(INVENTORY)
+    assert refused.status_code == 200, refused.text
+    assert refused.json()["spools"][0]["loaded"] is None
 
 
 def test_a_spool_summary_prices_it_and_counts_its_filament(client: TestClient) -> None:

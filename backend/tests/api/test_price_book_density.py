@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 import httpx
 import psycopg
@@ -23,10 +25,12 @@ from scadbuddy.core.settings import Settings
 from scadbuddy.filament.component import FILAMENT, Filament
 from scadbuddy.filament.models import SpoolPatch
 from scadbuddy.orders import component as orders_component
+from scadbuddy.printers.reports import PrinterReportStore
 from scadbuddy.slicing.profiles import ProfileImageError
+from tests.api.test_filament import TRAY_UUID
 from tests.api.test_order_estimate import ESTIMATE, box, output_of
 from tests.api.test_price_book import BOOK, add_filament
-from tests.api.test_price_book_spools import IMPORT, _inventory, spool
+from tests.api.test_price_book_spools import IMPORT, OFFSET, _ids, _inventory, spool
 from tests.api.test_send import API, configure
 from tests.orders.test_density import PROFILES
 
@@ -47,9 +51,10 @@ def _filament(client: TestClient) -> Filament:
 
 
 def own_density(client: TestClient, number: int, density: str) -> None:
-    """SB spool #``number`` with its own density."""
+    """The SB spool of Bambuddy id ``number`` (`_inventory` numbers it plus ``OFFSET``)
+    with its own density."""
     filament = _filament(client)
-    found = filament.inventory.by_number(number)
+    found = filament.inventory.by_number(number + OFFSET)
     assert found is not None, number
     patch = SpoolPatch.model_validate({"density_g_cm3": density})
     assert filament.spools.update(found[0], patch, actor="test") is not None
@@ -168,7 +173,7 @@ def test_the_spool_import_follows_the_chain(client: TestClient) -> None:
     response = client.post(IMPORT)
 
     assert response.status_code == 200, response.text
-    rows = {row["spool_ids"][0]: row for row in response.json()["rows"]}
+    rows = {_ids(row)[0]: row for row in response.json()["rows"]}
     assert (rows[1]["density_g_cm3"], rows[1]["density_profile"]) == ("1.3", None)
     assert (rows[2]["density_g_cm3"], rows[2]["density_profile"]) == ("1.32", SILK)
     assert (rows[3]["density_g_cm3"], rows[3]["density_profile"]) == (
@@ -177,7 +182,7 @@ def test_the_spool_import_follows_the_chain(client: TestClient) -> None:
     )
     assert (rows[4]["density_g_cm3"], rows[4]["density_profile"]) == (
         "1.27",
-        "ScadBuddy spool #4",
+        "ScadBuddy spool #104",
     )
     assert (rows[6]["action"], rows[6]["density_g_cm3"]) == ("created", None)
     assert {f["id"]: f for f in client.get(BOOK).json()["filaments"]}[own["id"]][
@@ -194,6 +199,52 @@ def test_no_local_read_when_every_spool_names_a_bambu_preset(client: TestClient)
     _inventory(client, spool(1, cost_per_kg=20, slicer_filament="GFA00"))
     assert client.post(IMPORT).status_code == 200
     assert local.call_count == 0
+
+
+def test_a_spool_with_no_preset_takes_its_trays(client: TestClient, pg_conninfo: str) -> None:
+    """Task 9 review ruling: last in the chain, the preset id (``tray_info_idx``) the tray
+    a registry printer reports holding the spool in."""
+    _inventory(client, spool(1, cost_per_kg=20))
+    found = _filament(client).inventory.by_number(1 + OFFSET)
+    assert found is not None
+    tag = {"tray_uuid": TRAY_UUID, "kind": "bambu_mifare"}
+    bound = client.post(f"/api/v1/filament/spools/{found[0]}/tags", json=tag)
+    assert bound.status_code == 201, bound.text
+    printer = str(uuid4())
+    with psycopg.connect(pg_conninfo, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO printers (id, serial, name, lan_host) VALUES (%s, %s, %s, %s)",
+            (printer, "SN-SILK", "Silk", "10.0.0.8"),
+        )
+    tray = {"id": "1", "tray_type": "PLA", "tray_color": "FFFFFFFF", "state": 11}
+    tray |= {"tray_uuid": TRAY_UUID, "tray_info_idx": "GFA05"}
+    state: AppState = getattr(client.app.state, STATE_ATTR)  # type: ignore[attr-defined]
+    PrinterReportStore(state.settings_store.pool).put(
+        printer, {"ams": {"ams": [{"id": "0", "tray": [tray]}]}}, datetime.now(UTC)
+    )
+
+    response = client.post(IMPORT)
+
+    assert response.status_code == 200, response.text
+    [row] = response.json()["rows"]
+    assert (row["density_g_cm3"], row["density_profile"]) == (
+        "1.32",
+        "Bambu PLA Silk @base (tray preset GFA05)",
+    )
+
+
+def test_a_spool_read_that_fails_is_a_503(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ScadBuddy's spools that cannot be read stop the import and the fill with a 503."""
+
+    def down(*args: object, **kwargs: object) -> None:
+        raise psycopg.OperationalError("the database is not answering")
+
+    monkeypatch.setattr(type(_filament(client).inventory), "rows", down)
+    for route in (IMPORT, FILL):
+        response = client.post(route)
+        assert response.status_code == 503, (route, response.text)
 
 
 def test_without_bambuddy_a_local_preset_gives_no_density(client: TestClient) -> None:
@@ -365,11 +416,11 @@ def test_an_unreadable_vendor_tree_leaves_the_spools_own(
     assert made["density_g_cm3"] is None
     response = client.post(IMPORT)
     assert response.status_code == 200, response.text
-    rows = {row["spool_ids"][0]: row for row in response.json()["rows"]}
+    rows = {_ids(row)[0]: row for row in response.json()["rows"]}
     assert rows[1]["density_g_cm3"] is None
     assert (rows[2]["density_g_cm3"], rows[2]["density_profile"]) == (
         "1.27",
-        "ScadBuddy spool #2",
+        "ScadBuddy spool #102",
     )
     filled = client.post(FILL)
     assert filled.status_code == 200, filled.text

@@ -19,7 +19,7 @@ from scadbuddy.auth.component import CallerDep
 from scadbuddy.auth.models import Caller, Person, PersonalToken, Service
 from scadbuddy.core.problems import ApiError
 from scadbuddy.filament import models as m
-from scadbuddy.filament.bambuddy_pull import PullReport, read_and_pull
+from scadbuddy.filament.bambuddy_pull import PullReport, read_and_pull, read_assignments
 from scadbuddy.filament.catalog import (
     CATALOGS,
     CatalogExistsError,
@@ -709,14 +709,20 @@ async def get_summary(filament: FilamentDep) -> m.InventorySummary:
         "report holds it in, else the tray it was last linked to on a printer with no "
         "report; `null` on the shelf), and its linked Bambuddy spool. `trays` is each "
         "registry printer's reported trays, with the spool each holds and how it was found "
-        "(`tag` or `link`). Archived spools only with `include_archived`. Bambuddy is never "
-        "read (#6262)."
+        "(`tag` or `link`). Archived spools only with `include_archived`. While Bambuddy is "
+        "linked, a spool no registry printer reports is in the tray Bambuddy assigns its "
+        "linked Bambuddy spool to (`GET /inventory/assignments`; plan Decision 3, until "
+        "#6263); a failed read places the spools by the reports alone. Nothing else is read "
+        "from Bambuddy."
     ),
 )
 async def get_inventory(
-    filament: FilamentDep, include_archived: bool = False
+    filament: FilamentDep, store: SettingsStoreDep, include_archived: bool = False
 ) -> m.FilamentInventoryView:
-    return await asyncio.to_thread(filament.inventory.view, include_archived=include_archived)
+    assignments = await read_assignments(await asyncio.to_thread(store.load))
+    return await asyncio.to_thread(
+        filament.inventory.view, include_archived=include_archived, bb_assignments=assignments
+    )
 
 
 @router.get(
@@ -729,19 +735,21 @@ async def get_inventory(
         "grams cost; and every unarchived spool of the same filament (effective material, "
         "subtype, brand and `#RRGGBBAA`, so a translucent spool is not an opaque one's) with "
         "their total grams left and where they are loaded. An archived spool is still "
-        "summarised. With no cost per kg every price and cost is `null`. 404 for no such "
-        "spool."
+        "summarised. With no cost per kg every price and cost is `null`. Each spool is placed "
+        "as `GET /filament/inventory` places it. 404 for no such spool."
     ),
 )
 async def get_spool_summary(
     filament: FilamentDep,
+    store: SettingsStoreDep,
     spool_id: UUID,
     grams: Annotated[
         float | None,
         Query(ge=0, description="Grams to price at this spool's cost, e.g. a plate's use"),
     ] = None,
 ) -> m.FilamentSpoolSummary:
-    found = await asyncio.to_thread(filament.inventory.summary, spool_id, grams)
+    assignments = await read_assignments(await asyncio.to_thread(store.load))
+    found = await asyncio.to_thread(filament.inventory.summary, spool_id, grams, assignments)
     if found is None:
         raise _no_spool(spool_id)
     return found

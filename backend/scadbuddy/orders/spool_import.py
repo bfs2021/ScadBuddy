@@ -29,6 +29,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import replace
 from decimal import Decimal, InvalidOperation
 from typing import Literal, Protocol, cast, get_args
+from uuid import UUID
 
 from scadbuddy.filament.models import EffectivePreset, FilamentInventorySpool
 from scadbuddy.orders.density import DensityTable, ProfileDensity, density_text, resolve
@@ -105,6 +106,8 @@ class SpoolRows(Protocol):
 
     def rows(self, *, include_archived: bool = False) -> list[FilamentInventorySpool]: ...
 
+    def tray_presets(self) -> dict[UUID, str]: ...
+
 
 def _effect(name: str | None) -> FilamentEffect | None:
     """An effect catalog name (``Dual Color``) as a record spells it (``dual-color``);
@@ -123,7 +126,9 @@ def _preset(presets: list[EffectivePreset]) -> str | None:
 
 
 def spool_groups(
-    rows: Iterable[FilamentInventorySpool], local: Mapping[str, LocalDensity] | None = None
+    rows: Iterable[FilamentInventorySpool],
+    local: Mapping[str, LocalDensity] | None = None,
+    trays: Mapping[UUID, str] | None = None,
 ) -> list[SpoolGroup]:
     """Every unarchived SB spool of ``rows`` with a material, by the record identity it
     would price: its effective material, subtype and brand (upper-cased) and its
@@ -131,7 +136,8 @@ def spool_groups(
     groups (#6316). A spool with no ``rgba`` keeps its colour's name as its key, never
     matched to an rgba one (#2918). A group's names, stops and effect are its newest
     spool's (the highest number). ``local`` is Bambuddy's local presets with a density,
-    by id (#6136)."""
+    by id (#6136); ``trays`` the preset id of the tray each held spool is in, by spool
+    (`FilamentInventory.tray_presets`)."""
     groups: dict[tuple[str, str, str, str], list[FilamentInventorySpool]] = defaultdict(list)
     for row in rows:
         spool = row.spool
@@ -156,6 +162,9 @@ def spool_groups(
             ),
             None,
         )
+        tray_filament = next(
+            (p for r in newest_first if (p := (trays or {}).get(r.spool.id))), None
+        )
         rgba = latest.effective.rgba
         out.append(
             SpoolGroup(
@@ -171,6 +180,8 @@ def spool_groups(
                 slicer_filament=slicer_filament,
                 local_preset=(local or {}).get(slicer_filament or ""),
                 spool_density=density,
+                tray_filament=tray_filament,
+                tray_local_preset=(local or {}).get(tray_filament or ""),
             )
         )
     return out
@@ -179,17 +190,21 @@ def spool_groups(
 async def inventory_groups(
     inventory: SpoolRows, integrations: OrderIntegrations
 ) -> list[SpoolGroup]:
-    """:func:`spool_groups` of ScadBuddy's spools, with Bambuddy's local presets read
-    only when a group's preset id is a numeric local id and a Bambuddy is linked."""
+    """:func:`spool_groups` of ScadBuddy's spools and the trays holding them, with
+    Bambuddy's local presets read only when a group's preset id (its spools' or its
+    tray's) is a numeric local id and a Bambuddy is linked."""
     rows = await asyncio.to_thread(inventory.rows)
-    groups = spool_groups(rows)
-    if not any((g.slicer_filament or "").isdigit() for g in groups):
+    trays = await asyncio.to_thread(inventory.tray_presets)
+    groups = spool_groups(rows, trays=trays)
+    if not any(
+        (g.slicer_filament or "").isdigit() or (g.tray_filament or "").isdigit() for g in groups
+    ):
         return groups
     try:
         local = await integrations.local_densities()
     except NotLinkedError:
         return groups
-    return spool_groups(rows, local)
+    return spool_groups(rows, local, trays)
 
 
 # -- the match -------------------------------------------------------------------------
@@ -199,7 +214,8 @@ def _same_names(
     group: SpoolGroup, records: list[ImportRecord], claimed: set[str]
 ) -> list[ImportRecord]:
     """The records not yet taken that have ``group``'s material, subtype and brand. A spool
-    whose material was corrected in Bambuddy is another filament's, never its old record's."""
+    whose material was corrected (in ScadBuddy, or by the Bambuddy pull) is another
+    filament's, never its old record's."""
     names = _names(group.material, group.subtype, group.brand)
     return [
         r

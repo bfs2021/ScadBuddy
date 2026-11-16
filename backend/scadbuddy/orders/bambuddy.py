@@ -30,6 +30,7 @@ from scadbuddy.bambuddy.models import (
     LocalPreset,
     PrinterMaintenanceOverview,
     SliceJob,
+    SpoolAssignment,
 )
 from scadbuddy.bambuddy.preview import PreviewStarted, preview_job, start_preview_plates
 from scadbuddy.bambuddy.print_run import PrintRunRequest
@@ -37,6 +38,7 @@ from scadbuddy.bambuddy.print_source import LibrarySource, PrintSource
 from scadbuddy.bambuddy.projects import FolderlessProjects, ProjectRequest, ensure_project
 from scadbuddy.bambuddy.uploads import BambuddyUploadStore
 from scadbuddy.core.problems import ApiError
+from scadbuddy.filament.bambuddy_pull import read_assignments
 from scadbuddy.library.settings_store import SettingsStore, StoredSettings
 from scadbuddy.orders.density import density_text
 from scadbuddy.orders.integrations import (
@@ -145,6 +147,11 @@ class BambuddyIntegrations:
             )
             return {}
         return _local_densities(presets.filament)
+
+    async def spool_assignments(self) -> list[SpoolAssignment]:
+        """``GET /inventory/assignments``, as `filament/bambuddy_pull.py`
+        `read_assignments` reads it."""
+        return await read_assignments(await asyncio.to_thread(self.settings.load))
 
     async def archive(self, archive_id: int) -> ArchiveFacts | None:
         stored = await asyncio.to_thread(self.settings.load)

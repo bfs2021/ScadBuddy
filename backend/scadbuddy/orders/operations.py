@@ -642,6 +642,7 @@ def order_kinds(core: Core, components: Components) -> list[OperationKind]:
             plan = await item_plan(
                 orders.store,
                 orders.inventory,
+                orders.integrations,
                 request["item_id"],
                 body.filament_plan,
                 printer,

@@ -1,7 +1,7 @@
 """`POST /orders/price-book/import-spools` (#4253, spec 2026-10-18 §8.3, Ruling 3): the
 price book's filaments imported from ScadBuddy's own spools (#6262 Task 9), on click,
 with or without a Bambuddy. Each test writes the SB spools as a Bambuddy pull would
-(`_inventory`), numbered by the ids it names, so it reads as before."""
+(`_inventory`), numbered by the ids it names plus `OFFSET`."""
 
 from __future__ import annotations
 
@@ -19,6 +19,8 @@ from scadbuddy.api.deps import STATE_ATTR, AppState
 from scadbuddy.bambuddy.models import Spool as BbSpool
 from scadbuddy.filament.bambuddy_pull import pull
 from scadbuddy.filament.component import FILAMENT, Filament
+from scadbuddy.orders.component import ORDERS
+from scadbuddy.orders.spools import fill_plan, shelf_spools
 from tests.api.test_price_book import BOOK, add_filament
 from tests.api.test_send import API, configure
 from tests.support.sb_rows import seed_sb_spools
@@ -42,6 +44,15 @@ def spool(spool_id: int, **fields: Any) -> dict[str, Any]:
     }
 
 
+#: An SB spool's number is its Bambuddy id plus this, so a reader that took one for the
+#: other fails; `_ids` reads a row's spool numbers back as the Bambuddy ids the test names.
+OFFSET = 100
+
+
+def _ids(row: dict[str, Any]) -> tuple[int, ...]:
+    return tuple(number - OFFSET for number in row["spool_ids"])
+
+
 #: Each `_inventory` writes as a later Bambuddy change than the last.
 _CLOCK = itertools.count(1)
 
@@ -57,8 +68,8 @@ def _inventory(client: TestClient, *spools: dict[str, Any]) -> None:
         if filament.inventory.bb_to_sb([bb.id]):
             assert not pull(filament, [bb], now=stamp).failed_bb_ids, bb.id
         else:
-            seed_sb_spools(filament, [bb])
-    listed = {row["id"] for row in spools}
+            seed_sb_spools(filament, [bb], offset=OFFSET)
+    listed = {row["id"] + OFFSET for row in spools}
     for kept in filament.spools.list():
         if kept.number not in listed:
             filament.spools.archive(kept.id, True, actor="test")
@@ -73,7 +84,7 @@ def test_the_import_needs_no_bambuddy(client: TestClient) -> None:
 
     assert response.status_code == 200, response.text
     [row] = response.json()["rows"]
-    assert (row["action"], row["spool_ids"], row["cost_per_kg"]) == ("created", [3], "24")
+    assert (row["action"], list(_ids(row)), row["cost_per_kg"]) == ("created", [3], "24")
 
 
 def test_spools_make_and_update_the_records(client: TestClient) -> None:
@@ -95,7 +106,7 @@ def test_spools_make_and_update_the_records(client: TestClient) -> None:
     response = client.post(IMPORT)
 
     assert response.status_code == 200, response.text
-    rows = {tuple(row["spool_ids"]): row for row in response.json()["rows"]}
+    rows = {_ids(row): row for row in response.json()["rows"]}
     white = rows[(3, 5, 8)]
     assert white["action"] == "updated"
     assert white["filament_id"] == priced["id"]
@@ -133,7 +144,7 @@ def test_two_alphas_of_one_colour_are_two_records(client: TestClient) -> None:
         spool(5, rgba="FFFFFF", cost_per_kg=40),
     )
 
-    rows = {tuple(row["spool_ids"]): row for row in client.post(IMPORT).json()["rows"]}
+    rows = {_ids(row): row for row in client.post(IMPORT).json()["rows"]}
 
     assert (rows[(3, 5)]["action"], rows[(3, 5)]["alpha"], rows[(3, 5)]["cost_per_kg"]) == (
         "created",
@@ -173,7 +184,7 @@ def test_a_clear_spool_keeps_its_alpha_stops_and_effect(client: TestClient) -> N
         spool(4, color_name="Aurora", extra_colors="7f3696,3a8fd2ff", cost_per_kg=26),
     )
 
-    rows = {tuple(r["spool_ids"]): r for r in client.post(IMPORT).json()["rows"]}
+    rows = {_ids(r): r for r in client.post(IMPORT).json()["rows"]}
 
     clear = rows[(3,)]
     assert (clear["action"], clear["colour"], clear["alpha"], clear["effect"]) == (
@@ -234,9 +245,45 @@ def test_a_persons_colour_is_kept_and_never_duplicated(client: TestClient) -> No
     # Another filament whose colour is the one the person set: skipped, not a duplicate.
     other = {**CLEAR, "rgba": "EEF3F400"}
     _inventory(client, spool(9, **CLEAR, cost_per_kg=23), spool(10, **other, cost_per_kg=5))
-    rows = {tuple(r["spool_ids"]): r for r in client.post(IMPORT).json()["rows"]}
+    rows = {_ids(r): r for r in client.post(IMPORT).json()["rows"]}
     assert (rows[(10,)]["action"], rows[(10,)]["reason"]) == ("skipped", "colour_taken")
     assert len(client.get(BOOK).json()["filaments"]) == 1
+
+
+def test_an_opaque_stand_in_keeps_its_clear_spools_by_their_link(client: TestClient) -> None:
+    """Task 9 review ruling: prod's two clear stand-ins (`20261114T1607Z`) are opaque
+    records (alpha 255, a colour a person set) linked to clear spools (``#00000000``). A
+    link by id matches its spools whatever their alpha: the import updates the record and
+    makes no second one, and an item print takes its linked clear spool."""
+    _inventory(client, spool(3, **CLEAR, cost_per_kg=20))
+    made = client.post(IMPORT).json()["rows"][0]
+    url = f"{BOOK}/filaments/{made['filament_id']}"
+    edited = client.patch(url, json={"colour": "#EEF3F4", "alpha": 255}).json()
+    assert (edited["colour_source"], edited["alpha"]) == ("manual", 255)
+
+    # The same spool, a new price, and a second spool of it: matched by the link.
+    _inventory(
+        client,
+        spool(3, **CLEAR, weight_used=600.0, cost_per_kg=22),
+        spool(9, **CLEAR, cost_per_kg=23),
+    )
+    [again] = client.post(IMPORT).json()["rows"]
+    assert (again["action"], again["filament_id"]) == ("updated", made["filament_id"])
+    assert (again["colour"], again["alpha"], again["colour_source"]) == ("#EEF3F4", 255, "manual")
+    book = client.get(BOOK).json()["filaments"]
+    assert [(f["id"], f["alpha"], f["cost_per_kg"]) for f in book] == [
+        (made["filament_id"], 255, "23")
+    ]
+
+    # An item print of the record takes its linked clear spool (the fullest).
+    state: AppState = getattr(client.app.state, STATE_ATTR)  # type: ignore[attr-defined]
+    orders = state.components.get(ORDERS)
+    record = orders.store.filament(made["filament_id"])
+    assert record is not None
+    links = orders.store.spool_links([record.id])
+    spools = shelf_spools(state.components.get(FILAMENT).inventory.rows())
+    assert {s.rgba for s in spools} == {"#00000000"}
+    assert fill_plan({0: record}, spools, None, {}, links) == {1: 9 + OFFSET}
 
 
 def test_the_import_fills_the_look_of_an_imported_record(client: TestClient) -> None:
@@ -266,12 +313,12 @@ def test_a_spool_with_a_corrected_material_is_another_filaments(client: TestClie
     red = {"rgba": "FF0000FF", "color_name": "Red"}
     _inventory(client, spool(1, **red, cost_per_kg=20), spool(2, **red, cost_per_kg=21))
     made = client.post(IMPORT).json()["rows"][0]
-    assert (made["action"], made["spool_ids"]) == ("created", [1, 2])
+    assert (made["action"], list(_ids(made))) == ("created", [1, 2])
 
     _inventory(
         client, spool(1, **red, cost_per_kg=20), spool(2, **red, material="PETG", cost_per_kg=30)
     )
-    rows = {tuple(r["spool_ids"]): r for r in client.post(IMPORT).json()["rows"]}
+    rows = {_ids(r): r for r in client.post(IMPORT).json()["rows"]}
 
     assert (rows[(1,)]["action"], rows[(1,)]["filament_id"]) == ("updated", made["filament_id"])
     assert rows[(1,)]["cost_per_kg"] == "20"
@@ -338,7 +385,7 @@ def test_a_record_from_before_the_link_follows_a_colour_fix(
     typo = {"rgba": "0000EEFF", "color_name": "Blue"}
     _inventory(client, spool(1, **blue, cost_per_kg=25), spool(2, **typo, cost_per_kg=30))
 
-    rows = {tuple(r["spool_ids"]): r for r in client.post(IMPORT).json()["rows"]}
+    rows = {_ids(r): r for r in client.post(IMPORT).json()["rows"]}
 
     assert (rows[(1,)]["action"], rows[(1,)]["filament_id"]) == ("updated", made["id"])
     assert rows[(2,)]["action"] == "created"
@@ -361,7 +408,7 @@ def test_a_spool_link_wins_over_a_colour_in_any_group_order(client: TestClient) 
     assert [r["colour"] for r in rows] == ["#0000FF", "#FF0000"]
     blue_row, red_row = rows
     assert (red_row["action"], red_row["filament_id"]) == ("updated", made["filament_id"])
-    assert (blue_row["action"], blue_row["spool_ids"]) == ("created", [2])
+    assert (blue_row["action"], list(_ids(blue_row))) == ("created", [2])
     book = {f["id"]: f for f in client.get(BOOK).json()["filaments"]}
     assert book[made["filament_id"]]["colour"] == "#FF0000"
     assert book[blue_row["filament_id"]]["colour"] == "#0000FF"
@@ -405,7 +452,7 @@ def test_a_group_keeps_the_linked_record_of_its_colour(client: TestClient) -> No
     _inventory(client, *(spool(i, **blue, cost_per_kg=30) for i in (1, 2, 3)))
     [row] = client.post(IMPORT).json()["rows"]
 
-    assert (row["filament_id"], row["spool_ids"]) == (made["#0000FF"], [1, 2, 3])
+    assert (row["filament_id"], list(_ids(row))) == (made["#0000FF"], [1, 2, 3])
 
 
 def test_two_records_whose_spools_swap_colours_both_move_in_one_import(

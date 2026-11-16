@@ -70,7 +70,7 @@ describe('farm-context tools (#1912)', () => {
     expect(t.source).toMatch(/Bambuddy/)
   })
 
-  it.each(Object.entries(SPOOL_TOOLS))('%s reads ScadBuddy, asking Bambuddy nothing', (name, route) => {
+  it.each(Object.entries(SPOOL_TOOLS))('%s reads ScadBuddy, needing no Bambuddy scope', (name, route) => {
     const t = tool(name)
     expect(t.risk).toBe('read')
     expect(t.readOnly).toBe(true)

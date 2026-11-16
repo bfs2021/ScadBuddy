@@ -11,20 +11,26 @@ is a Bambu ``filament_id`` (``GFA00``) or a numeric Bambuddy local preset id (th
 ``v1.3.2b1-daily.20261113``). A Bambuddy local preset has ``filament_density``
 (``backend/app/models/local_preset.py``, same tag).
 
-So the chain is, for one filament of the inventory (:func:`resolve`):
+So the chain is, for one filament of the inventory (:func:`resolve`, Task 9 review
+ruling):
 
-1. Its preset id: the newest spool's effective preset that names one.
-2. That preset's ``filament_density``: Bambuddy's local preset when the id names one
-   (read only while Bambuddy is linked), else the Bambu Studio vendor preset with that
-   ``filament_id`` or ``setting_id`` in the image's tree (``slicing/profiles.py``,
-   Bambu Studio v02.08.02.61).
-3. Only then the newest spool's own effective density (the spool's, else its type's,
-   subtype's or material's, `filament/types.py` `effective`).
+1. The newest spool's own effective density (the spool's, else its type's, subtype's
+   or material's, `filament/types.py` `effective`) that is set.
+2. Its preset id: the newest spool's effective preset that names one. That preset's
+   ``filament_density``: Bambuddy's local preset when the id names one (read only while
+   Bambuddy is linked), else the Bambu Studio vendor preset with that ``filament_id`` or
+   ``setting_id`` in the image's tree (``slicing/profiles.py``, Bambu Studio
+   v02.08.02.61).
+3. The preset id (``tray_info_idx``) of the tray a registry printer's latest report
+   holds the newest held spool in, read the same way.
 
-No preset is found by a subtype's name: Bambu's "Dual Color" and "Tri Color" PLA have no
+The Bambuddy K-profile and filament-catalogue steps went with Bambuddy's inventory read
+(#6262 Task 9): a record they alone filled keeps its density (one is never overwritten),
+and a new record they alone could have filled has none until a person types it. No
+preset is found by a subtype's name: Bambu's "Dual Color" and "Tri Color" PLA have no
 preset of that name; the sliced files of Bambuddy archives 40 and 41 (read 2026-11-13)
-show they print as ``GFA05``, Bambu PLA Silk, which is what the chain reads from their
-spools' preset ids. When every step is empty there is no source, and the record keeps
+show they print as ``GFA05``, Bambu PLA Silk, the preset id their spools and the trays
+holding them carry. When every step is empty there is no source, and the record keeps
 no density.
 
 In the vendor tree, the presets that share a ``filament_id`` (one per printer) give
@@ -45,7 +51,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from scadbuddy.orders.integrations import SpoolGroup
+from scadbuddy.orders.integrations import LocalDensity, SpoolGroup
 from scadbuddy.orders.models import Filament
 from scadbuddy.slicing.profiles import Profiles
 
@@ -174,26 +180,34 @@ class DensityTable:
 def resolve(group: SpoolGroup, table: DensityTable | None) -> ProfileDensity | None:
     """The density of one filament of the inventory, by the module's chain; ``None``
     when no step gives one."""
-    preset_id = group.slicer_filament
-    if preset_id:
-        local = group.local_preset
-        if local is not None:
-            return ProfileDensity(
-                density_g_cm3=local.density_g_cm3,
-                profile=f"Bambuddy local preset {local.name} (spool preset {preset_id})",
-            )
-        found = None if table is None else table.for_preset(preset_id)
-        if found is not None:
-            return ProfileDensity(
-                density_g_cm3=found.density_g_cm3,
-                profile=f"{found.profile} (spool preset {preset_id})",
-            )
     if group.spool_density is not None:
         return ProfileDensity(
             density_g_cm3=group.spool_density.density_g_cm3,
             profile=f"ScadBuddy spool #{group.spool_density.number}",
         )
-    return None
+    return _preset_density(
+        group.slicer_filament, group.local_preset, table, "spool preset"
+    ) or _preset_density(group.tray_filament, group.tray_local_preset, table, "tray preset")
+
+
+def _preset_density(
+    preset_id: str | None, local: LocalDensity | None, table: DensityTable | None, where: str
+) -> ProfileDensity | None:
+    """The density preset ``preset_id`` gives: its Bambuddy local preset ``local``, else
+    the vendor preset in ``table``; ``where`` names the id's source in the profile."""
+    if not preset_id:
+        return None
+    if local is not None:
+        return ProfileDensity(
+            density_g_cm3=local.density_g_cm3,
+            profile=f"Bambuddy local preset {local.name} ({where} {preset_id})",
+        )
+    found = None if table is None else table.for_preset(preset_id)
+    if found is None:
+        return None
+    return ProfileDensity(
+        density_g_cm3=found.density_g_cm3, profile=f"{found.profile} ({where} {preset_id})"
+    )
 
 
 class UsedDensity(BaseModel):

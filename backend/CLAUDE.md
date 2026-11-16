@@ -1461,22 +1461,29 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   `orders/integrations.py` `OrderIntegrations` (`OrdersComponent.integrations`, chosen for
   the running `bambuddy_url`; `NotLinked` without one); the quote's Bambuddy slice calls
   live there too. The orders read ScadBuddy's own spools, never Bambuddy's (#6262 Task 9):
-  `OrdersComponent.inventory` is the filament component's `FilamentInventory`, and
-  `OrderIntegrations` keeps only `local_densities` (Bambuddy's local presets, `{}` when
-  Bambuddy is unlinked or refuses). `POST /orders/price-book/import-spools`
+  `OrdersComponent.inventory` is the filament component's `FilamentInventory`, and of
+  spools `OrderIntegrations` keeps only `local_densities` (Bambuddy's local presets, `{}`
+  when Bambuddy refuses) and `spool_assignments` (Bambuddy's tray assignments,
+  `filament/bambuddy_pull.py` `read_assignments`, `[]` when Bambuddy refuses). `POST /orders/price-book/import-spools`
   (`orders/spool_import.py` `inventory_groups`) makes or updates filament records from the
   SB spools, on click only, with or without Bambuddy (`PriceBook.spool_import` is always
   true); a group is the spools' effective names and `#RRGGBBAA` (#6316: an opaque and a
   translucent spool of one hue are two records), its `spool_ids` are spool numbers, and the
   newest priced spool (highest number) prices it. `GET /filament/inventory` and
   `GET /filament/spools/{spool_id}/summary` (`api/filament.py`, `filament/inventory.py`
-  `view`, `summary`) replace the removed `/farm/inventory` and `/farm/spools/{id}/summary`.
-  A record with no density gets one there, from a manual add sent with no density, and
-  from `POST …/price-book/fill-densities` (#6136, `orders/density.py`): the newest spool
-  of its names and `#RRGGBBAA` names a slicer preset, whose density is Bambuddy's local
-  preset's (while linked), else the image's Bambu Studio preset's; else the spool's own
-  effective density (`ScadBuddy spool #N`). No preset is found by a subtype's name. A
-  density read Bambuddy refuses leaves the density empty and fails nothing. `filaments.density_profile` keeps where it came from; a
+  `view`, `summary`) replace the removed `/farm/inventory` and `/farm/spools/{id}/summary`;
+  they, and an item print's fill on the Bambuddy path, place a spool by the tray a
+  registry printer's report holds it in, else, while Bambuddy is linked, by Bambuddy's
+  assignment of its linked BB spool (plan Decision 3, until #6263; a failed read places by
+  the reports alone). A record with no density gets one there, from a manual add sent with
+  no density, and from `POST …/price-book/fill-densities` (#6136, `orders/density.py`,
+  Task 9 review ruling), from the spools of its names and `#RRGGBBAA`: the newest spool's
+  own effective density (`ScadBuddy spool #N`), else its slicer preset's density
+  (Bambuddy's local preset's while linked, else the image's Bambu Studio preset's), else
+  that of the preset id (`tray_info_idx`) the tray holding it reports
+  (`FilamentInventory.tray_presets`). The K-profile and Bambuddy-catalogue steps are gone.
+  No preset is found by a subtype's name. A density read Bambuddy refuses leaves the
+  density empty and fails nothing; a spool read that fails is a 503. `filaments.density_profile` keeps where it came from; a
   person's density clears it. An estimate reads only the record's own density.
   A record's whole colour (#6209, migration `20261114T1607Z_filaments_alpha_effect.sql`):
   `colour` stays `#RRGGBB` (the render splits parts by it; a clear filament is its RGB with
@@ -1489,25 +1496,32 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   `colour_source: "import"` in a PATCH hands it back; the editor's "Use spool colour"
   sends it only for a record an import linked to spools (`Filament.spool_linked`:
   `spool_colour` or `spool_ids` set). The import matches only a record of
-  the group's material, subtype and brand: by its link to the group's spools (`spool_ids`),
-  else by the spools' `#RRGGBBAA` (`spool_colour` plus `alpha`, then `colour` plus `alpha`;
-  never a spool of another alpha, `filament/colour.py` `same_opacity`), never by a colour a person set, so
-  it makes no duplicate, and a spool whose material was corrected is another filament's
-  (`spool_import.py` `_matches`, in three passes over every group, so the groups' order
-  never decides: a record linked to a group whose RGB its spools had, then a record linked
-  to any group's spools, then a record by colour (`_by_colour`); a spool link always wins
-  over a colour. `_movers` picks the matched `import` records whose colour changes and
-  whose new RGB no staying record of their names holds (a record held back stays too,
+  the group's material, subtype and brand: by its link to the group's spools (`spool_ids`,
+  whatever the spools' alpha: a link by id is not a match by colour), else by the spools'
+  `#RRGGBBAA` (`spool_colour` plus the record's `alpha`; a record with no link by its own
+  `colour` plus `alpha`; a colour match never takes a spool of another alpha,
+  `filament/colour.py` `same_opacity`), so a colour a person set on a linked record is
+  never matched, it makes no duplicate, and a spool whose material was corrected is
+  another filament's (`spool_import.py` `_matches`, in three passes over every group, so
+  the groups' order never decides: a record linked to a group whose `#RRGGBBAA` its spools
+  had, then a record linked to any group's spools, then a record by colour
+  (`_by_colour`); a spool link always wins over a colour. `_movers` picks the matched
+  `import` records whose `#RRGGBBAA` changes and whose new `#RRGGBBAA` no staying record
+  of their names holds (a record held back stays too,
   until none changes); the import parks them out of the identity index
   (`OrderStore.park_filaments`, `archived_at` set inside its transaction) and puts each
   back with its new colour (`set_import_look` `unpark`), so a chain or a swap of colours
   settles in one import. A matched record held back keeps its whole look with
   `colour_taken`. The matched groups are written before the new ones, and a new group
-  whose RGB is another record's colour is skipped `colour_taken`). The migration sets no
-  link (`spool_colour` NULL, `spool_ids` empty) on every existing record but two: the two
-  prod stand-ins for clear spools (ids and colours pinned in it) get `colour_source`
-  `manual` and `spool_colour` `#000000`, so the import finds them by their spools'
-  `#000000`. The next import links every other record by its own `colour`. Until that
+  whose colour and alpha are another record's is skipped `colour_taken`). The migration
+  sets no link (`spool_colour` NULL, `spool_ids` empty) on every existing record but two:
+  the two prod stand-ins for clear spools (ids and colours pinned in it) get
+  `colour_source` `manual` and `spool_colour` `#000000`, which found them by their
+  spools' RGB at the first import after it; that import set their `spool_ids` (SB numbers
+  since `20261116T0034Z_filament_plan_spool_numbers.sql`), and the import and an item
+  print now find them by those, whatever the alpha: they are opaque records (alpha 255)
+  of clear spools (`#00000000`). The next import links every other record by its own
+  `colour`. Until that
   first import after the deploy, a record with no link is found only by its own colour:
   change its colour by hand before then, and the import makes a second record of its
   spools' colour. So run "Import from spools" once after the deploy, before any colour

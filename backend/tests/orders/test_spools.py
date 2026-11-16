@@ -15,10 +15,10 @@ from typing import Any
 import pytest
 
 from scadbuddy.bambuddy.filaments import FilamentPlan
-from scadbuddy.bambuddy.models import SlotChoice
+from scadbuddy.bambuddy.models import SlotChoice, SpoolAssignment
 from scadbuddy.core.problems import ApiError
 from scadbuddy.filament.models import EffectivePreset, FilamentInventorySpool, TrayPlace
-from scadbuddy.orders.integrations import LocalDensity, SpoolDensity
+from scadbuddy.orders.integrations import NOT_LINKED, LocalDensity, NotLinked, SpoolDensity
 from scadbuddy.orders.models import Actor, Filament, FilamentInput, QuoteLine
 from scadbuddy.orders.printing import quoted_setup
 from scadbuddy.orders.spool_import import import_spools, spool_groups
@@ -148,9 +148,16 @@ def test_a_spool_matches_a_record_of_its_alpha_only() -> None:
     assert fill_plan({0: clear}, translucent, PRINTER, {}) == {1: 41}
     with pytest.raises(SpoolChoiceError):
         fill_plan({0: clear}, [spool(42)], PRINTER, {})
-    # A link from an import that grouped both alphas names both: only one of its alpha.
-    linked = {opaque.id: SpoolLink("#FF0000", frozenset({41, 42}))}
-    assert fill_plan({0: opaque}, [*translucent, spool(42)], PRINTER, {}, linked) == {1: 42}
+    # Task 9 review ruling: a link by id is not a match by colour, so it takes its spools
+    # whatever their alpha (prod's opaque stand-ins of clear spools, `20261114T1607Z`).
+    linked = {opaque.id: SpoolLink("#000000", frozenset({41}))}
+    assert fill_plan({0: opaque}, translucent, PRINTER, {}, linked) == {1: 41}
+
+
+def test_a_spool_in_a_tray_of_a_printer_the_registry_lacks_is_not_on_the_shelf() -> None:
+    """Bambuddy's assignment to a printer the registry does not hold still loads it."""
+    with pytest.raises(SpoolChoiceError):
+        fill_plan({0: filament()}, [spool(41, loaded=True)], PRINTER, {})
 
 
 # -- the item print, on ScadBuddy's spools ---------------------------------------------
@@ -179,16 +186,48 @@ def row(
 
 
 class Inventory:
-    """`orders.spools.SpoolRows` over fixed rows, and the Bambuddy links of an older plan."""
+    """`orders.spools.SpoolRows` over fixed rows, and the Bambuddy links of an older plan.
+    A row with a ``bb_spool_id`` and no tray is placed by an assignment of that Bambuddy
+    spool, as `FilamentInventory.rows` places it (``registry``: Bambuddy printer id to
+    registry printer id)."""
 
-    def __init__(self, *rows: FilamentInventorySpool, links: dict[int, int] | None = None) -> None:
+    def __init__(
+        self,
+        *rows: FilamentInventorySpool,
+        links: dict[int, int] | None = None,
+        registry: dict[int, str] | None = None,
+    ) -> None:
         self._rows = list(rows)
         self._links = links or {}
+        self._registry = registry or {}
         self.reads = 0
+        self.assignments: list[SpoolAssignment] = []
 
-    def rows(self, *, include_archived: bool = False) -> list[FilamentInventorySpool]:
+    def rows(
+        self,
+        *,
+        include_archived: bool = False,
+        bb_assignments: Sequence[SpoolAssignment] = (),
+    ) -> list[FilamentInventorySpool]:
         self.reads += 1
-        return [r for r in self._rows if include_archived or r.spool.archived_at is None]
+        self.assignments = list(bb_assignments)
+        assigned = {a.spool_id: a for a in bb_assignments}
+        found = []
+        for r in self._rows:
+            if not include_archived and r.spool.archived_at is not None:
+                continue
+            a = assigned.get(r.bb_spool_id) if r.bb_spool_id is not None else None
+            if r.loaded is None and a is not None:
+                place = TrayPlace(
+                    printer_id=self._registry.get(a.printer_id),
+                    bambuddy_printer_id=a.printer_id,
+                    printer_name=a.printer_name,
+                    ams_id=a.ams_id,
+                    tray_id=a.tray_id,
+                )
+                r = r.model_copy(update={"loaded": place})
+            found.append(r)
+        return found
 
     def bb_to_sb(self, ids: Iterable[int]) -> dict[int, int]:
         return {i: self._links[i] for i in ids if i in self._links}
@@ -239,10 +278,66 @@ async def test_the_item_print_fills_its_plan_from_its_filaments(shop: Shop) -> N
     item_id = priced_item(shop)
     inventory = Inventory(row(41, loaded=PRINTER), row(42, grams=900))
 
-    plan = await item_plan(shop.rows, inventory, item_id, FilamentPlan(ids="sb"), PRINTER)
+    plan = await item_plan(
+        shop.rows, inventory, NOT_LINKED, item_id, FilamentPlan(ids="sb"), PRINTER
+    )
 
     assert _slots(plan) == [(1, 41)]
     assert plan is not None and plan.force_colour_match
+
+
+class Linked(NotLinked):
+    """The orders seam with a Bambuddy whose tray assignments are ``assignments``."""
+
+    @property
+    def linked(self) -> bool:
+        return True
+
+    def __init__(self, *assignments: SpoolAssignment) -> None:
+        self._assignments = list(assignments)
+
+    async def spool_assignments(self) -> list[SpoolAssignment]:
+        return self._assignments
+
+
+def assigned(bb_spool_id: int, bambuddy_printer: int) -> SpoolAssignment:
+    return SpoolAssignment(
+        id=1, spool_id=bb_spool_id, printer_id=bambuddy_printer, ams_id=0, tray_id=1
+    )
+
+
+def bb_linked(number: int, bb_spool_id: int, **fields: Any) -> FilamentInventorySpool:
+    return row(number, **fields).model_copy(update={"bb_spool_id": bb_spool_id})
+
+
+@pytest.mark.requires_postgres
+async def test_a_spool_bambuddy_loads_in_another_printer_is_not_taken(shop: Shop) -> None:
+    """Task 9 review ruling (Decision 3): on the Bambuddy path a spool no registry
+    printer reports is where Bambuddy assigns its linked BB spool: one in printer 2 is
+    not taken for a print on printer 1, whether or not the registry holds printer 2."""
+    item_id = priced_item(shop)
+    plan = FilamentPlan(ids="sb")
+    for registry in ({2: "printer-2"}, {}):
+        inventory = Inventory(bb_linked(41, 15, grams=900), registry=registry)
+        with pytest.raises(ApiError) as raised:
+            await item_plan(shop.rows, inventory, Linked(assigned(15, 2)), item_id, plan, PRINTER)
+        assert raised.value.type.endswith("/needs_spool_choice")
+        assert [a.spool_id for a in inventory.assignments] == [15]
+
+
+@pytest.mark.requires_postgres
+async def test_a_spool_bambuddy_loads_in_the_run_printer_is_preferred(shop: Shop) -> None:
+    """On its own printer, the spool Bambuddy loads there is taken over a fuller shelf one."""
+    item_id = priced_item(shop)
+    inventory = Inventory(
+        bb_linked(41, 15, grams=100), row(42, grams=900), registry={2: "printer-2"}
+    )
+
+    plan = await item_plan(
+        shop.rows, inventory, Linked(assigned(15, 2)), item_id, FilamentPlan(ids="sb"), "printer-2"
+    )
+
+    assert _slots(plan) == [(1, 41)]
 
 
 @pytest.mark.requires_postgres
@@ -251,7 +346,9 @@ async def test_item_print_needs_no_bambuddy(shop: Shop) -> None:
     item_id = priced_item(shop)
     inventory = Inventory(row(42, grams=900))
 
-    assert _slots(await item_plan(shop.rows, inventory, item_id, FilamentPlan(), None)) == [(1, 42)]
+    assert _slots(
+        await item_plan(shop.rows, inventory, NOT_LINKED, item_id, FilamentPlan(), None)
+    ) == [(1, 42)]
     assert inventory.reads == 1
 
 
@@ -264,11 +361,15 @@ async def test_item_print_fills_the_spool_of_its_alpha(shop: Shop) -> None:
         row(41, "#FF000080", loaded=PRINTER, grams=900), row(42, "#FF0000FF", grams=100)
     )
 
-    plan = await item_plan(shop.rows, inventory, opaque_item, FilamentPlan(ids="sb"), PRINTER)
+    plan = await item_plan(
+        shop.rows, inventory, NOT_LINKED, opaque_item, FilamentPlan(ids="sb"), PRINTER
+    )
     assert _slots(plan) == [(1, 42)]
 
     clear_item = priced_item(shop, alpha=0x80)
-    plan = await item_plan(shop.rows, inventory, clear_item, FilamentPlan(ids="sb"), PRINTER)
+    plan = await item_plan(
+        shop.rows, inventory, NOT_LINKED, clear_item, FilamentPlan(ids="sb"), PRINTER
+    )
     assert _slots(plan) == [(1, 41)]
 
 
@@ -278,7 +379,12 @@ async def test_the_item_print_keeps_force_colour_match_off_when_asked(shop: Shop
     inventory = Inventory(row(41, loaded=PRINTER), row(42, grams=900))
 
     plan = await item_plan(
-        shop.rows, inventory, item_id, FilamentPlan(force_colour_match=False, ids="sb"), PRINTER
+        shop.rows,
+        inventory,
+        NOT_LINKED,
+        item_id,
+        FilamentPlan(force_colour_match=False, ids="sb"),
+        PRINTER,
     )
 
     assert plan is not None
@@ -289,7 +395,9 @@ async def test_the_item_print_keeps_force_colour_match_off_when_asked(shop: Shop
 async def test_the_item_print_refuses_with_no_spool(shop: Shop) -> None:
     item_id = priced_item(shop)
     with pytest.raises(ApiError) as raised:
-        await item_plan(shop.rows, Inventory(), item_id, FilamentPlan(ids="sb"), PRINTER)
+        await item_plan(
+            shop.rows, Inventory(), NOT_LINKED, item_id, FilamentPlan(ids="sb"), PRINTER
+        )
     assert raised.value.status == 409
     assert raised.value.type.endswith("/needs_spool_choice")
 
@@ -306,12 +414,18 @@ async def test_a_supplied_spool_is_an_sb_number_and_an_older_plan_is_mapped(
     asked = [SlotChoice(slot_id=1, spool_id=43)]
 
     sb = FilamentPlan(slots=asked, ids="sb")
-    assert _slots(await item_plan(shop.rows, inventory, item_id, sb, PRINTER)) == [(1, 43)]
+    assert _slots(await item_plan(shop.rows, inventory, NOT_LINKED, item_id, sb, PRINTER)) == [
+        (1, 43)
+    ]
     bb = FilamentPlan(slots=[SlotChoice(slot_id=1, spool_id=BB_RED)], ids="bb")
-    assert _slots(await item_plan(shop.rows, inventory, item_id, bb, PRINTER)) == [(1, 43)]
+    assert _slots(await item_plan(shop.rows, inventory, NOT_LINKED, item_id, bb, PRINTER)) == [
+        (1, 43)
+    ]
     # A Bambuddy id with no link names no spool: the slot is filled.
     unlinked = FilamentPlan(slots=[SlotChoice(slot_id=1, spool_id=99)], ids="bb")
-    assert _slots(await item_plan(shop.rows, inventory, item_id, unlinked, PRINTER)) == [(1, 41)]
+    assert _slots(
+        await item_plan(shop.rows, inventory, NOT_LINKED, item_id, unlinked, PRINTER)
+    ) == [(1, 41)]
 
 
 @pytest.mark.requires_postgres
@@ -344,7 +458,7 @@ async def test_the_plan_a_stored_quote_names_is_kept_by_sb_number(shop: Shop) ->
     inventory = Inventory(row(41, loaded=PRINTER), row(44, grams=10), row(BB_RED, "#00FF00FF"))
     quoted = FilamentPlan.model_validate(setup["filament_plan"])
 
-    plan = await item_plan(shop.rows, inventory, item_id, quoted, PRINTER)
+    plan = await item_plan(shop.rows, inventory, NOT_LINKED, item_id, quoted, PRINTER)
 
     assert _slots(plan) == [(1, 44)]
 
@@ -380,6 +494,13 @@ def book_row(store: OrderStore, alpha: int, *, first: bool = False) -> str:
     with store.transaction() as conn:
         conn.execute("UPDATE filaments SET id = '0-first' WHERE id = %s", (made.id,))
     return "0-first"
+
+
+@pytest.mark.requires_postgres
+def test_a_name_too_long_for_a_record_is_skipped(rows: OrderStore) -> None:
+    """A group whose names a record cannot hold (over 100 characters) is skipped."""
+    [imported] = _import(rows, [priced(41, "#FFFFFFFF", "24", material="X" * 101)])
+    assert (imported["action"], imported["reason"]) == ("skipped", "too_long")
 
 
 def test_groups_are_sb_spools_by_names_and_rgba() -> None:
