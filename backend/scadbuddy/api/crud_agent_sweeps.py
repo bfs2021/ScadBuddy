@@ -96,7 +96,7 @@ def _forget_rows(state: Any, session_id: str) -> int:
                 ).fetchall()
             ]
             entries = conn.execute(
-                "DELETE FROM ai_session_entries WHERE session_id = %s::uuid", (session_id,)
+                "DELETE FROM ai_session_entries WHERE session_id = %s", (session_id,)
             ).rowcount
             sessions = conn.execute(
                 "DELETE FROM ai_sessions WHERE id = %s::uuid", (session_id,)

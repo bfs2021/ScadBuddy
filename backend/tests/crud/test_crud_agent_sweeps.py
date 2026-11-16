@@ -178,7 +178,7 @@ def test_a_forgotten_sessions_rows_go_with_its_unnamed_bytes(
     _file(tables, other, "b.txt", b"shared")
     _sql(
         tables,
-        "INSERT INTO ai_session_entries (session_id, subpath, entry) VALUES (%s, '', '{}')",
+        "INSERT INTO ai_session_entries (project_key, session_id, subpath, entry) VALUES ('p', %s, '', '{}')",
         (sid,),
     )
     _sql(tables, "INSERT INTO ai_forgotten_subjects (subject) VALUES (%s)", (f"session-{sid}",))
