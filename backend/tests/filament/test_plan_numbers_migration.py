@@ -159,10 +159,19 @@ def test_stored_bambuddy_ids_become_sb_numbers(pg_conninfo: str) -> None:
         request = {"plate_id": 1, "filament_plan": {"slots": PLAN}}
         conn.execute(
             "INSERT INTO print_batch_items (batch_id, position, library_file_id, filename,"
-            " request, refused_request) VALUES ('b1', 0, 1, 'f', %s, %s),"
-            " ('b1', 1, 2, 'g', NULL, NULL)",
-            (Jsonb(request), Jsonb(request)),
+            " request, refused_request, outcome) VALUES"
+            " ('b1', 0, 1, 'f', %s, %s, '{\"status\": \"refused\"}'),"
+            " ('b1', 1, 2, 'g', NULL, NULL, NULL),"
+            " ('b1', 2, 3, 'h', %s, %s, '{\"status\": \"pending\"}'),"
+            " ('b1', 3, 4, 'i', %s, %s, '{\"status\": \"started\"}')",
+            (Jsonb(request),) * 6,
         )
+        # A file whose run may have started keeps its request byte for byte: Queue all
+        # resends it, and its run key hashes it (Task 7 maps its unmarked plan at read).
+        in_flight = conn.execute(
+            "SELECT position, request::text, refused_request::text FROM print_batch_items"
+            " WHERE position >= 2 ORDER BY position"
+        ).fetchall()
 
         _operation(conn, "op-run", "running", request)
         _operation(conn, "op-preview", "running", {"request": request, "plate": 1})
@@ -217,9 +226,17 @@ def test_stored_bambuddy_ids_become_sb_numbers(pg_conninfo: str) -> None:
 
         rewritten = {"plate_id": 1, "filament_plan": {"slots": MAPPED, "ids": "sb"}}
         rows = conn.execute(
-            "SELECT request, refused_request FROM print_batch_items ORDER BY position"
+            "SELECT request, refused_request FROM print_batch_items WHERE position < 2"
+            " ORDER BY position"
         ).fetchall()
         assert rows == [(rewritten, rewritten), (None, None)]
+        assert (
+            conn.execute(
+                "SELECT position, request::text, refused_request::text FROM print_batch_items"
+                " WHERE position >= 2 ORDER BY position"
+            ).fetchall()
+            == in_flight
+        )
 
         ops: dict[str, Any] = dict(conn.execute("SELECT id, request FROM operations").fetchall())
         assert ops["op-run"] == rewritten
@@ -245,7 +262,9 @@ def test_stored_bambuddy_ids_become_sb_numbers(pg_conninfo: str) -> None:
             (4, -2, "tray"),
         ]
 
-        # A second run (the file's SQL again) does not fail; a marked plan stays as it is.
+        # A second run (the file's SQL again) does not fail, and a marked plan stays as it
+        # is. The unmarked stores (remembered choices, `spool_ids`, rack picks, the slice
+        # profile) are not idempotent: they rely on the migration ledger to run once.
         sql = next(m.sql for m in MIGRATIONS if m.id.endswith(SLUG))
         conn.execute(sql.encode())
         assert plan_of(quote) == {"slots": MAPPED, "force_colour_match": False, "ids": "sb"}

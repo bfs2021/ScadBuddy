@@ -95,10 +95,16 @@ WHERE jsonb_typeof(choices) = 'object' AND jsonb_typeof(choices -> 'filament_pla
 UPDATE order_item_quotes SET filament_plan = pg_temp.sb_plan(filament_plan)
 WHERE jsonb_typeof(filament_plan) = 'object';
 
+-- A file whose run may have started (outcome `pending` or `started`, `batches/store.py`)
+-- keeps its request byte for byte: Queue all resends it, and its batch request id and
+-- run key hash it, so a changed body would start a second print. Its unmarked plan is
+-- mapped where it is read (`bambuddy/filaments.py` `sb_plan`).
 UPDATE print_batch_items
 SET request = pg_temp.sb_request(request),
     refused_request = pg_temp.sb_request(refused_request)
-WHERE request IS NOT NULL OR refused_request IS NOT NULL;
+WHERE (request IS NOT NULL OR refused_request IS NOT NULL)
+  AND (outcome ->> 'status') IS DISTINCT FROM 'pending'
+  AND (outcome ->> 'status') IS DISTINCT FROM 'started';
 
 -- Only operations not yet ended (F14): an ended one's request is history.
 UPDATE operations SET request = pg_temp.sb_request(request) WHERE status = 'running';
