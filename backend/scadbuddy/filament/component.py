@@ -1,6 +1,5 @@
 """Filament as a component (`core/components.py`): ScadBuddy's own filament inventory
-(#6261, epic #6260). Every store is built over the settings store's pool, as the native
-spool provider's is."""
+(#6261, epic #6260). Every store is built over the settings store's pool."""
 
 from __future__ import annotations
 

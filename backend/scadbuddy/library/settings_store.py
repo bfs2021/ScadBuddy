@@ -1626,9 +1626,8 @@ class SettingsReader(Protocol):
     def plate_clear_required(self) -> bool: ...
 
 
-#: The sealed settings the print worker gets opened (#5298, plan D8): the Bambuddy key,
-#: which is also the Bambuddy spool provider's key (`bambuddy/spool_providers.py`). No
-#: other spool provider has a key. `print_projection` leaves every other sealed field null.
+#: The sealed settings the print worker gets opened (#5298, plan D8): the Bambuddy key.
+#: `print_projection` leaves every other sealed field null.
 PRINT_SECRETS = frozenset({"bambuddy_api_key"})
 #: The S3 store's connection, which the print worker never reads (it reaches blobs
 #: through the API's routes): `print_projection` answers each as null, or as its default

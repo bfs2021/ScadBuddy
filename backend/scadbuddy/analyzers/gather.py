@@ -95,7 +95,7 @@ async def gather_context(
 
     ``route`` is the dialog's native route (#4629): the printer is its registry row, and
     ``trays`` reads the filament step as the dialog's native read does (the LAN report's
-    trays under the spool overlay), so nothing is asked of Bambuddy, configured or not.
+    trays with the SB spools they hold), so nothing is asked of Bambuddy, configured or not.
     ``refused`` is why the registry printer the request named cannot be judged (gone, a
     disagreeing pair): the printer is then unavailable for that reason, the rest read as
     before. On Bambuddy's path the spools are ScadBuddy's own, read from ``reads``
@@ -318,7 +318,7 @@ async def _read_trays(
     context: AnalysisContext, trays: Callable[[], Awaitable[FilamentOptions | None]] | None
 ) -> None:
     """A native run's filaments and inventory (#4629): each slot's spool as the printer's
-    trays and the spool overlay describe it, read as the dialog's filament step does."""
+    trays and the SB spools they hold describe it, read as the dialog's filament step does."""
     plan = context.request.filament_plan
     if plan is None or not plan.slots:
         context.unavailable["filaments"] = "no filament plan was chosen"

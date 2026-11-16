@@ -2269,9 +2269,10 @@ checked per run from the settings as they are then (`printers/hot_path.py`
    answers).
 
 `bambuddy_url` may stay set. A native run never builds a Bambuddy client; what still
-calls Bambuddy are the housekeeping sweeps and the spool providers' refresh (the
-`scadbuddy-spool-providers-<queue>` Schedule, `spool_overlay_refresh_seconds` (restart),
-300 s by default), on their own traces, and any run whose printer's path is `bambuddy`. The
+calls Bambuddy are the housekeeping sweeps and the spool refresh, which pulls Bambuddy's
+spools into ScadBuddy's own (the `scadbuddy-spool-providers-<queue>` Schedule,
+`spool_overlay_refresh_seconds` (restart), 300 s by default), on their own traces, and
+any run whose printer's path is `bambuddy`. The
 dialog's filament step reads the loaded trays from the LAN report, each with the
 ScadBuddy spool it holds (found by its RFID tag or a person's tray link, #6262).
 The same refresh keeps a copy of Bambuddy's local presets (its OrcaSlicer imports,

@@ -24,9 +24,7 @@ this order:
    reading and counts under the lock (`_book`). A BB unlock clears the lock only when a
    pull set it (`_lock_from_bb`).
 2. Else an SB spool already is that spool: it holds the BB spool's ``tag_uid`` or
-   ``tray_uuid`` through an open binding, or the BB record's `spool_record_links` row
-   (provider ``bambuddy``) names it (a native spool migrated onto its physical spool's
-   id, `20261114T1302Z_filament_from_native.sql`). It is linked; a spool that needs a
+   ``tray_uuid`` through an open binding. It is linked; a spool that needs a
    type takes the one BB's values match, and one with no weight takes BB's.
 3. Else a new SB spool: its type by ``material_number`` (`SpoolTypeStore.match`), else
    by identity (brand, material, subtype, colour, label weight), else none (it needs a
@@ -491,9 +489,8 @@ def _tag_holders(conn: Conn, uid: str | None, tray: str | None) -> list[dict[str
 def _holder(conn: Conn, after: dict[str, Any], bb_id: int) -> tuple[UUID, bool] | None:
     """The SB spool that already is this BB spool, and whether it is archived: the
     unlinked, unarchived spool with the oldest binding of the BB spool's tag (an archived
-    one's tag is free to re-use: a new spool takes it), else the spool the BB record's
-    link names, archived or not. Keys that name two spools are logged, and the oldest
-    binding is kept."""
+    one's tag is free to re-use: a new spool takes it). Keys that name two spools are
+    logged, and the oldest binding is kept."""
     live = [
         h for h in _tag_holders(conn, after["tag_uid"], after["tray_uuid"]) if not h["archived"]
     ]
@@ -506,14 +503,7 @@ def _holder(conn: Conn, after: dict[str, Any], bb_id: int) -> tuple[UUID, bool] 
     if free:
         found: UUID = free[0]["spool_id"]
         return found, False
-    row = conn.execute(
-        "SELECT s.id, s.archived_at IS NOT NULL AS archived FROM spool_record_links r"
-        " JOIN filament_spools s ON s.id = r.physical_spool_id"
-        " WHERE r.provider = 'bambuddy' AND r.record_id = %s"
-        " AND NOT EXISTS (SELECT 1 FROM filament_bb_links l WHERE l.spool_id = s.id)",
-        (str(bb_id),),
-    ).fetchone()
-    return None if row is None else (row["id"], row["archived"])
+    return None
 
 
 def _link(

@@ -593,7 +593,7 @@ class AmsTray(BambuddyModel):
     #: The RFID tag's UID and the spool's UUID (#3818), all zeros for an untagged spool:
     #: OpenBambuAPI ``mqtt.md`` at ``cc383a2c``, the ``pushing.pushall`` example, and
     #: ``tests/bambuddy/recordings/printer-status-rack.json``. `spools.models` cleans them.
-    #: Read in the backend only, by the spool overlay (`trays.seen_trays`): never in a
+    #: Read in the backend only, by the SB tray resolution (`trays.seen_trays`): never in a
     #: status the API serves (#4336 review M6), so a dump of this model drops them.
     tag_uid: SkipJsonSchema[str | None] = Field(default=None, exclude=True)
     tray_uuid: SkipJsonSchema[str | None] = Field(default=None, exclude=True)

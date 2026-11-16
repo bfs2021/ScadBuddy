@@ -94,8 +94,6 @@ from scadbuddy.render.projection import JobProjection
 from scadbuddy.slicing.component import SLICING
 from scadbuddy.slicing.held_presets import HeldPresetStore
 from scadbuddy.slicing.store import NativeSliceStore
-from scadbuddy.spools.component import SPOOLS
-from scadbuddy.spools.store import SpoolStore
 from scadbuddy.store import BlobRefs
 from scadbuddy.store.content import ContentStore
 from scadbuddy.store.content_models import BlobRef, BlobStat
@@ -603,7 +601,7 @@ def print_crud_app(
     project records and outputs' last prints on ``store``'s pool. A LAN-only printer's
     print records go to the watcher's store on ``store``'s pool, matched against
     ``catalogue`` (none when not given), and the rack hotends' usage goes through
-    ``rack`` (no rack route answers without one), and the spools, kept
+    ``rack`` (no rack route answers without one), and the kept
     presets, native slices and a native run's SB spools through the API's own stores on
     ``store``'s pool; the
     exchange too, of the proofs ``bootstrap`` takes, when given (#5298 Task 33)."""
@@ -623,12 +621,8 @@ def print_crud_app(
             reports=PrinterReportStore(store.pool),
         ),
         RACK_USAGE: rack,
-        # The spools, the kept presets and native slices: the API's
-        # own stores on ``store``'s pool (#5298 Task 31).
-        SPOOLS: SimpleNamespace(
-            store=SpoolStore(store.pool),
-            providers=[],
-        ),
+        # The kept presets and native slices: the API's own stores on ``store``'s pool
+        # (#5298 Task 31).
         SLICING: SimpleNamespace(
             store=NativeSliceStore(store.pool), held=HeldPresetStore(store.pool)
         ),

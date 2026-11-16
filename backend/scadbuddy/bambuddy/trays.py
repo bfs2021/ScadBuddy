@@ -290,11 +290,11 @@ def _sorted_trays(status: PrinterStatus) -> list[tuple[int, AmsTray]]:
 
 
 def seen_trays(status: PrinterStatus) -> list[SeenTray]:
-    """Every filled tray as the SB tray resolution (`FilamentInventory.trays`) and, until
-    #6262 Task 12 drops it, the spool overlay (`SpoolStore.overlay`) read it: its RFID
-    keys (cleaned there, so zeros are no key), material, colour and ``tray_info_idx``;
-    its fingerprint is `spools.models.tray_fingerprint`, never its state. ``rgba`` keeps
-    the alpha the report gives (`tray_rgba`) for the SB tray fingerprint."""
+    """Every filled tray as the SB tray resolution (`FilamentInventory.trays`) reads it:
+    its RFID keys (cleaned there, so zeros are no key), material, colour and
+    ``tray_info_idx``; its fingerprint is `spools.models.tray_fingerprint`, never its
+    state. ``rgba`` keeps the alpha the report gives (`tray_rgba`) for the SB tray
+    fingerprint."""
     return [
         SeenTray(
             ams_id=ams_id,

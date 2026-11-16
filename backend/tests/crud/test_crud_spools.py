@@ -1,75 +1,47 @@
-"""The print worker's spools, the kept presets and a native
-slice's start through its CRUD routes (#5298 Task 31, inventory Q28, Q30): the reads answer
-as the SQL stores do, a natural write sent twice leaves what one left, a provider's
-records answer once per ``Idempotency-Key`` (428 without one), a
+"""The print worker's kept presets and a native slice's start through its CRUD routes
+(area ``spools``, #5298 Task 31, inventory Q30): the reads answer as the SQL stores do, a
 native slice's start sent twice starts once, another caller's credential is refused, and
-every method the worker does not call is refused on it. Invented tags only (spec
-2026-10-01 §7)."""
+every method the worker does not call is refused on it. The spool overlay's routes went
+with it (#6262 Task 12): they answer 404."""
 
 from __future__ import annotations
 
-import asyncio
 import inspect
-import uuid
 from collections.abc import AsyncIterator, Iterator
-from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import httpx
 import pytest
-from fastapi import FastAPI
 
 from scadbuddy.api import crud_print
-from scadbuddy.api.components import getter_for
 from scadbuddy.api.crud_areas import CRUD_AREAS
 from scadbuddy.auth.caller_grants import GRANTS
 from scadbuddy.auth.service_auth import ServiceAuth
 from scadbuddy.bambuddy.models import LocalPresetDetail
-from scadbuddy.core.problems import install_problem_handlers
 from scadbuddy.core.settings import Settings
-from scadbuddy.crud.client import (
-    CrudClient,
-    CrudRefusedError,
-    CrudSyncClient,
-    CrudUnavailableError,
-)
+from scadbuddy.crud.client import CrudClient, CrudRefusedError, CrudSyncClient
 from scadbuddy.crud.guard import CRUD_HEADERS
-from scadbuddy.crud.idempotency import KEY_REQUIRED_PROBLEM
 from scadbuddy.crud.print import (
     BASE,
-    DEADLINE_MARGIN,
     HELD_PRESETS_API_ONLY,
     NATIVE_SLICES_API_ONLY,
-    PAST_DEADLINE,
     SLICE_SUBJECT,
-    SPOOLS_API_ONLY,
     ApiOnlyError,
     RemoteHeldPresets,
     RemoteNativeSlices,
-    RemoteSpoolStore,
 )
 from scadbuddy.library.settings_store import SettingsStore
 from scadbuddy.slicing.held_presets import HeldPresetStore
 from scadbuddy.slicing.store import NativeSliceStore, SliceSubjectError
-from scadbuddy.spools.component import SPOOLS
-from scadbuddy.spools.models import SeenTray, SpoolSnapshot
-from scadbuddy.spools.store import SpoolStore
 from scadbuddy.worker import PRINT_CRUD_AREAS
 from tests.conftest import UNUSED_TEMPORAL_ADDRESS
 from tests.crud.crud_support import FixedToken, served_print_crud, threaded_print_crud
 
-PRINTER = uuid.UUID("5d0c8f1e-0000-4000-8000-000000005298")
-NOW = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
-#: An invented tag, as a tray reports one.
-TAG = "A1B2C3D4E5F60718"
-RUN = "run-5298-spools"
-
 #: The `(store, remote, refused, composed)` of each store: the composed methods only call
 #: others of the store's own, each of which the worker sends over a route. None here.
 STORES: list[tuple[type, type, tuple[str, ...], set[str]]] = [
-    (SpoolStore, RemoteSpoolStore, SPOOLS_API_ONLY, set()),
     (HeldPresetStore, RemoteHeldPresets, HELD_PRESETS_API_ONLY, set()),
     (NativeSliceStore, RemoteNativeSlices, NATIVE_SLICES_API_ONLY, set()),
 ]
@@ -121,8 +93,6 @@ def test_a_method_only_the_api_calls_is_refused(remote: type, name: str) -> None
 
 
 def test_the_worker_stores_hold_no_pool() -> None:
-    with pytest.raises(ApiOnlyError):
-        _ = RemoteSpoolStore(None).pool  # type: ignore[arg-type]
     # Neither of these SQL stores has a public pool; the remote ones keep none of their own.
     assert not hasattr(RemoteHeldPresets(None), "_pool")  # type: ignore[arg-type]
     assert not hasattr(RemoteNativeSlices(None), "_pool")  # type: ignore[arg-type]
@@ -202,17 +172,14 @@ async def test_the_remote_documents_drop_a_print_host_credential() -> None:
 
 async def test_the_routes_refusals_are_raised_as_the_sql_stores_raise() -> None:
     def answer(request: httpx.Request) -> httpx.Response:
-        reason = SLICE_SUBJECT if request.url.path.endswith("/start") else PAST_DEADLINE
         return httpx.Response(
             409,
-            json={"type": "about:blank", "detail": "slice x belongs to y", "reason": reason},
+            json={"type": "about:blank", "detail": "slice x belongs to y", "reason": SLICE_SUBJECT},
             headers=CRUD_HEADERS,
         )
 
     client, blocking = _stand_in(answer)
     try:
-        with pytest.raises(TimeoutError):
-            await RemoteSpoolStore(client).replace_records("native", [], NOW, timeout=5)
         with pytest.raises(SliceSubjectError):
             await RemoteNativeSlices(client).start(
                 workflow_id="slice-1-x",
@@ -224,87 +191,6 @@ async def test_the_routes_refusals_are_raised_as_the_sql_stores_raise() -> None:
     finally:
         await client.aclose()
         blocking.close()
-
-
-class _PastDeadlineStore:
-    """A `SpoolStore` stand-in whose write is past its deadline: what the route gets."""
-
-    pool = object()
-
-    def __init__(self) -> None:
-        self.timeouts: list[float | None] = []
-
-    def deadline(self, timeout: float | None) -> float | None:
-        self.timeouts.append(timeout)
-        return None if timeout is None else 100.0 + timeout
-
-    def replace_records_in(self, *args: Any) -> None:
-        raise TimeoutError("past")
-
-
-async def test_a_write_past_its_deadline_is_409_and_raised_as_a_timeout(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The route maps a write past its deadline to 409 ``past-deadline``, and the remote
-    store raises it as `TimeoutError`, as the SQL store does. The route's deadline is the
-    caller's ``timeout`` less `DEADLINE_MARGIN`, so the API gives up first."""
-    store = _PastDeadlineStore()
-    monkeypatch.setattr(
-        crud_print, "_once_on", lambda pool, key, route, body, write: write(object())
-    )
-    app = FastAPI()
-    install_problem_handlers(app)
-    app.include_router(crud_print.router, prefix="/api/v1")
-    [guard] = crud_print.router.dependencies
-    assert guard.dependency is not None
-    app.dependency_overrides[guard.dependency] = lambda: None
-    app.dependency_overrides[getter_for(SPOOLS)] = lambda: SimpleNamespace(store=store)
-    client = CrudClient(
-        "http://api",
-        "print",
-        ServiceAuth(FixedToken()),
-        transport=httpx.ASGITransport(app=app),
-    )
-    try:
-        with pytest.raises(TimeoutError):
-            await RemoteSpoolStore(client).replace_records("native", [], NOW, timeout=5)
-        answer = await client._http.post(
-            f"{BASE}/spools/records",
-            json={"provider": "native", "snapshots": [], "at": NOW.isoformat(), "timeout": 2},
-            headers={"Idempotency-Key": "k"},
-        )
-    finally:
-        await client.aclose()
-    assert store.timeouts == [5 - DEADLINE_MARGIN, 2]
-    assert answer.status_code == 409 and answer.json()["reason"] == PAST_DEADLINE
-
-
-async def test_a_write_with_a_timeout_is_sent_once_and_waits_it_out() -> None:
-    """No answer: no retry, and the call raises only once its ``timeout`` has passed, by
-    when the API's own deadline has passed too."""
-    asked: list[httpx.Request] = []
-
-    def answer(request: httpx.Request) -> httpx.Response:
-        asked.append(request)
-        return httpx.Response(503, json={"type": "about:blank"}, headers=CRUD_HEADERS)
-
-    client, blocking = _stand_in(answer)
-    loop = asyncio.get_running_loop()
-    started = loop.time()
-    try:
-        with pytest.raises(CrudUnavailableError):
-            await RemoteSpoolStore(client).replace_records(
-                "native", [], NOW, timeout=DEADLINE_MARGIN + 0.2
-            )
-        with pytest.raises(TimeoutError):
-            await RemoteSpoolStore(client).replace_records(
-                "native", [], NOW, timeout=DEADLINE_MARGIN
-            )
-    finally:
-        await client.aclose()
-        blocking.close()
-    assert loop.time() - started >= DEADLINE_MARGIN + 0.2
-    assert len(asked) == 1
 
 
 # -- over the routes ---------------------------------------------------------------------
@@ -345,10 +231,6 @@ def _rows(store: SettingsStore, table: str) -> list[dict[str, Any]]:
     return sorted((dict(row) for row in rows), key=lambda row: repr(sorted(row.items())))
 
 
-def _tray(tag: str | None = TAG) -> SeenTray:
-    return SeenTray(ams_id=0, tray_id=1, tag_uid=tag, material="PLA", colour="#FF0000")
-
-
 def _preset(preset_id: int) -> LocalPresetDetail:
     return LocalPresetDetail(
         id=preset_id,
@@ -364,20 +246,9 @@ def _preset(preset_id: int) -> LocalPresetDetail:
 async def test_the_reads_answer_as_the_sql_stores(
     store: SettingsStore, crud: CrudClient, blocking: CrudSyncClient
 ) -> None:
-    sql = SpoolStore(store.pool)
     held = HeldPresetStore(store.pool)
-    await sql.replace_records(
-        "bambuddy", [SpoolSnapshot(record_id="16", material="PLA", tag_uid=TAG)], NOW
-    )
     await held.keep(_preset(7))
     await held.keep(_preset(9))
-
-    trays = [_tray(), _tray(None)]
-    ask: dict[str, Any] = {"now": NOW, "providers": ["bambuddy"]}
-    remote = RemoteSpoolStore(crud)
-    assert await remote.overlay(PRINTER, trays, **ask) == await sql.overlay(PRINTER, trays, **ask)
-    overlay = await remote.overlay(PRINTER, trays, **ask)
-    assert overlay.trays[0].records["bambuddy"].record_id == "16"
 
     remote_held = RemoteHeldPresets(crud)
     assert await remote_held.rows() == await held.rows()
@@ -386,46 +257,15 @@ async def test_the_reads_answer_as_the_sql_stores(
 
 
 @pytest.mark.requires_postgres
-async def test_natural_writes_sent_twice_leave_what_one_left(
-    store: SettingsStore, crud: CrudClient, blocking: CrudSyncClient
-) -> None:
-    remote = RemoteSpoolStore(crud)
-    await remote.failed("bambuddy", NOW, "ConnectError")
-    once = _rows(store, "spool_provider_refreshes")
-    await remote.failed("bambuddy", NOW, "ConnectError")
-    assert _rows(store, "spool_provider_refreshes") == once
-    assert [(row["provider"], row["failure"]) for row in once] == [("bambuddy", "ConnectError")]
-
-
-@pytest.mark.requires_postgres
-async def test_a_providers_records_are_written_once_per_key(
-    store: SettingsStore, crud: CrudClient
-) -> None:
-    """The records, their RFID links and the refresh's stamp, written whole under the
-    store's lock (plan D6): a resend under its key answers the same and writes nothing
-    more; a write with no key is 428 and writes nothing."""
-    body = {
-        "provider": "bambuddy",
-        "snapshots": [SpoolSnapshot(record_id="16", tag_uid=TAG).model_dump(mode="json")],
-        "at": NOW.isoformat(),
-        "timeout": None,
-    }
-    url = f"{BASE}/spools/records"
-    with pytest.raises(CrudRefusedError) as keyless:
-        await crud.request("POST", url, json=body)
-    assert keyless.value.status == 428
-    assert keyless.value.problem["type"] == KEY_REQUIRED_PROBLEM
-    assert _rows(store, "spool_provider_records") == []
-
-    first = await crud.request("POST", url, json=body, idempotency_key="records-1")
-    once = [_rows(store, table) for table in ("spool_provider_records", "physical_spools")]
-    again = await crud.request("POST", url, json=body, idempotency_key="records-1")
-    assert first.status_code == again.status_code == 204
-    assert [_rows(store, t) for t in ("spool_provider_records", "physical_spools")] == once
-    assert len(once[1]) == 1
-
-    await RemoteSpoolStore(crud).replace_records("bambuddy", [], NOW)
-    assert _rows(store, "spool_provider_records") == []
+@pytest.mark.parametrize(
+    "path", ["/spools/records", "/spools/refreshes/native/failed", "/spools/overlay"]
+)
+async def test_the_overlays_routes_are_gone(crud: CrudClient, path: str) -> None:
+    """#6262 Task 12: nothing serves them, so a call from a print worker from before
+    Task 6 is never answered from tables nothing keeps (the client reads a route with no
+    CRUD header as missing)."""
+    answer = await crud._http.post(f"{BASE}{path}", json={}, headers={"Idempotency-Key": "k"})
+    assert answer.status_code == 404
 
 
 @pytest.mark.requires_postgres
@@ -453,9 +293,6 @@ async def test_a_native_slice_sent_twice_starts_once(
 def test_another_callers_credential_is_refused(store: SettingsStore) -> None:
     with threaded_print_crud(store, caller="projects") as client:
         for method, path in (
-            ("POST", f"{BASE}/spools/records"),
-            ("POST", f"{BASE}/spools/refreshes/native/failed"),
-            ("POST", f"{BASE}/spools/overlay"),
             ("GET", f"{BASE}/held-presets"),
             ("GET", f"{BASE}/held-presets/documents?id=1"),
             ("POST", f"{BASE}/native-slices/start"),

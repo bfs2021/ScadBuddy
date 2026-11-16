@@ -19,7 +19,7 @@ The row's ``running_subtask`` changes once per job, under the row's lock, so one
 gives one start, also across a reconnect's ``pushall`` and a new attempt of the watch.
 
 A stored report reads as the printer's status through `report_status`, as the print
-dialog, the spool overlay and the SB tray resolution (`filament/inventory.py`) read it."""
+dialog and the SB tray resolution (`filament/inventory.py`) read it."""
 
 from __future__ import annotations
 

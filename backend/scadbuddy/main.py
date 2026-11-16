@@ -148,7 +148,6 @@ from scadbuddy.slicing.component import SLICING
 from scadbuddy.slicing.held_presets import HeldPresetStore, held_presets_activity
 from scadbuddy.slicing.start import stop_lost_native_slices, sweep_native_slices
 from scadbuddy.spools.activities import filament_pull_activity, spool_activities
-from scadbuddy.spools.component import SPOOLS
 from scadbuddy.store import sweep_blobs
 from scadbuddy.store.assets import RemoteAssets
 from scadbuddy.store.backends import UnrecordedSweeper
@@ -1817,7 +1816,9 @@ async def _run_library_worker(state: AppState, stop: asyncio.Event) -> None:
     activities = [
         *_housekeeping_activities(state),
         *_preview_activities(state),
-        *spool_activities(state.components.get(SPOOLS)),
+        # The retired spool-provider activities, for runs opened before
+        # spool-providers-gone (#6262 Task 12).
+        *spool_activities(),
         # Bambuddy's spools pulled into ScadBuddy's own (#6261), on the spools' Schedule.
         filament_pull_activity(state.components.get(FILAMENT), lambda: state.settings_store.load()),
         # Bambuddy's local presets kept for native runs (#4645), on the spools' Schedule.
@@ -1894,13 +1895,13 @@ async def _set_up_housekeeping(
     *,
     spool_refresh: float,
 ) -> bool:
-    """The housekeeping Schedules, the spool providers' refresh (every
-    ``spool_refresh`` seconds; 0: none, #3818) and the preview backfill's (``previews``:
-    the scheduler's render bound; None, previews off: none), retried until Temporal
-    takes them: a frontend can answer the connect before it can create one. Each set-up
-    triggers its Schedule, so the preview one comes last: a retry after the
-    housekeeping ones failed does not run the backfill twice (a refresh run twice is
-    only a refresh). True when the sweeps' one is paused."""
+    """The housekeeping Schedules, the spool refresh (Bambuddy's kept presets and its
+    spools pulled, every ``spool_refresh`` seconds; 0: none, #3818, #6262) and the
+    preview backfill's (``previews``: the scheduler's render bound; None, previews off:
+    none), retried until Temporal takes them: a frontend can answer the connect before
+    it can create one. Each set-up triggers its Schedule, so the preview one comes last:
+    a retry after the housekeeping ones failed does not run the backfill twice (a refresh
+    run twice is only a refresh). True when the sweeps' one is paused."""
     while not stop.is_set():
         try:
             paused = await ensure_schedules(client, queue, interval)

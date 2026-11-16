@@ -1,12 +1,11 @@
 """#3818 tier A Task 6c, #6262 Task 4: a person says which SB spool is in an untagged
 tray, on the native path: the spool's tray place (`filament/inventory.py`), never
-Bambuddy's assignment. The overlay tests below read the spool providers' records, which
-stay until #6262 Task 12."""
+Bambuddy's assignment."""
 
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -23,9 +22,6 @@ from scadbuddy.filament.models import Material, SpoolCreate
 from scadbuddy.printers.component import PRINTERS, Printers
 from scadbuddy.printers.models import LanLink, PrinterCreate
 from scadbuddy.printers.reports import report_status
-from scadbuddy.spools.component import SPOOLS, Spools
-from scadbuddy.spools.models import SpoolSnapshot
-from scadbuddy.spools.overlay import printer_overlay
 from tests.printers.conftest import KEK
 from tests.support.no_bambuddy import forbid_bambuddy
 
@@ -46,10 +42,6 @@ def _state(client: TestClient) -> AppState:
 
 def _printers(client: TestClient) -> Printers:
     return _state(client).components.get(PRINTERS)
-
-
-def _spools(client: TestClient) -> Spools:
-    return _state(client).components.get(SPOOLS)
 
 
 def _report(white: str = "FFFFFFFF") -> dict[str, Any]:
@@ -100,39 +92,8 @@ def lan_printer(client: TestClient) -> Iterator[str]:
     yield row.id
 
 
-def _bambuddy_record(client: TestClient, record_id: str = "16", **fields: Any) -> None:
-    snapshot = SpoolSnapshot.model_validate(
-        {
-            "record_id": record_id,
-            "material": "PLA",
-            "colour": "#FFFFFF",
-            "brand": "Inland",
-            "remaining_g": 515.0,
-            **fields,
-        }
-    )
-    client.portal.call(  # type: ignore[union-attr]
-        _spools(client).store.replace_records, "bambuddy", [snapshot], datetime.now(UTC)
-    )
-
-
 def _path(printer_id: str, ams_id: int = 0, tray_id: int = 1) -> str:
     return f"/api/v1/printers/{printer_id}/trays/{ams_id}/{tray_id}/spool"
-
-
-def _overlay(client: TestClient, printer_id: str) -> Any:
-    row = _printers(client).store.require(printer_id)
-    report = _printers(client).reports.get(printer_id)
-    assert report is not None
-
-    async def read() -> Any:
-        return await printer_overlay(_spools(client), row, report, now=datetime.now(UTC))
-
-    return client.portal.call(read)  # type: ignore[union-attr]
-
-
-def _tray(overlay: Any, ams_id: int, tray_id: int) -> Any:
-    return next(t for t in overlay.trays if (t.ams_id, t.tray_id) == (ams_id, tray_id))
 
 
 def _filament(client: TestClient) -> Filament:
@@ -275,28 +236,6 @@ def test_a_reported_trays_alpha_is_part_of_its_fingerprint(
     assert _held(client, lan_printer) is None
 
 
-def test_an_rfid_tray_resolves_by_its_tag(client: TestClient, lan_printer: str) -> None:
-    _bambuddy_record(client, "3", tray_uuid=UUID_A, colour="#000000")
-    tray = _tray(_overlay(client, lan_printer), 0, 0)
-    assert tray.linked_by == "rfid" and tray.records["bambuddy"].record_id == "3"
-
-
-def test_the_overlay_names_a_stale_provider(client: TestClient, lan_printer: str) -> None:
-    snapshot = SpoolSnapshot(record_id="3", tray_uuid=UUID_A)
-    client.portal.call(  # type: ignore[union-attr]
-        _spools(client).store.replace_records,
-        "bambuddy",
-        [snapshot],
-        datetime.now(UTC) - timedelta(minutes=31),
-    )
-    # With no Bambuddy configured there is no one to name (#4601).
-    assert "bambuddy" not in _overlay(client, lan_printer).stale
-    put = client.put("/api/v1/settings", json={"bambuddy_url": "https://bambuddy.test"})
-    assert put.status_code == 200, put.text
-    overlay = _overlay(client, lan_printer)
-    assert "bambuddy" in overlay.stale and _tray(overlay, 0, 0).records == {}
-
-
 def test_a_link_names_an_sb_spool(client: TestClient, lan_printer: str) -> None:
     for body in (
         {},
@@ -393,29 +332,3 @@ def test_a_unit_no_printer_has_is_422(
     external holders 255 with trays 0-1 (`trays.unit_label`'s spaces)."""
     assert client.put(_path(lan_printer, ams_id, tray_id), json=_ANY).status_code == 422
     assert client.delete(_path(lan_printer, ams_id, tray_id)).status_code == 422
-
-
-def test_bambuddys_own_assignment_seeds_the_registry_printers_tray(
-    client: TestClient, lan_printer: str
-) -> None:
-    """#4336 review M4, the #4180 handoff end to end: the registry row's Bambuddy link
-    (`BambuddyProvider.printer_key`) is the ``located`` the overlay matches a record's
-    own location against."""
-    _printers(client).store.link_bambuddy(lan_printer, 5)
-    _bambuddy_record(
-        client,
-        location={"printer": "bambuddy:5", "ams_id": 0, "tray_id": 1, "fingerprint": "PLA|FFFFFF"},
-    )
-    tray = _tray(_overlay(client, lan_printer), 0, 1)
-    assert tray.linked_by == "provider" and tray.records["bambuddy"].record_id == "16"
-
-
-def test_another_bambuddy_printers_assignment_is_not_this_trays(
-    client: TestClient, lan_printer: str
-) -> None:
-    _printers(client).store.link_bambuddy(lan_printer, 5)
-    _bambuddy_record(
-        client,
-        location={"printer": "bambuddy:6", "ams_id": 0, "tray_id": 1, "fingerprint": "PLA|FFFFFF"},
-    )
-    assert _tray(_overlay(client, lan_printer), 0, 1).linked_by is None

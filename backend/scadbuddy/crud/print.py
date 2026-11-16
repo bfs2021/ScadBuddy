@@ -49,18 +49,13 @@ watch's `settle_lan_ended`, whose one long activity repeats `WriteKeys`' keys ac
 attempts. The watch's call is bounded by `WATCH_CALL_BUDGET`. ``spool_history`` is the
 API's (the rack usage route).
 
-`RemoteSpoolStore`, `RemoteHeldPresets` and `RemoteNativeSlices` are `spools/store.py`
-`SpoolStore`, `slicing/held_presets.py` `HeldPresetStore` and `slicing/store.py`
-`NativeSliceStore` (Q28, Q30, #5298 Task 31) for the methods the print worker calls: the
-kept presets a native run reads (``rows``, ``documents``) and a native slice's ``start``.
-Since #6262 Task 6 the worker calls none of `RemoteSpoolStore` (``replace_records`` and
-``failed``): nothing reads the overlay they cached, and #6262 Task 12 drops them with it.
-None holds a pool, and none is called in the printer watch. Each SQL write is one
-transaction, under the spools' advisory lock or the slice key's lock, so each is one route
-run whole on the API (plan D6). ``failed`` and ``start`` are natural (an upsert and the
-key's newest row). ``replace_records`` takes an ``Idempotency-Key`` of its own, a new UUID
-per call, sent again on the client's retries: a refresh's body carries its time. The
-refresh and the tray links are the API's.
+`RemoteHeldPresets` and `RemoteNativeSlices` are `slicing/held_presets.py`
+`HeldPresetStore` and `slicing/store.py` `NativeSliceStore` (Q30, #5298 Task 31) for the
+methods the print worker calls: the kept presets a native run reads (``rows``,
+``documents``) and a native slice's ``start``. Neither holds a pool, and neither is called
+in the printer watch. A start is one transaction under the slice key's lock, so it is one
+route run whole on the API (plan D6), and natural (the key's newest row). The spool
+overlay's `RemoteSpoolStore` went with the overlay (#6262 Task 12).
 
 `RemoteFilamentTrays` and `RemotePrintUses` (area ``filament``, #6262 Task 6) are a native
 run's reads of the SB spools in its printer's trays and their presets
@@ -116,7 +111,6 @@ from collections.abc import (
     Callable,
     Collection,
     Iterable,
-    Mapping,
     Sequence,
 )
 from datetime import datetime, timedelta
@@ -159,7 +153,6 @@ from scadbuddy.crud.client import (
     CrudClient,
     CrudRefusedError,
     CrudSyncClient,
-    CrudUnavailableError,
 )
 from scadbuddy.crud.guard import PREFIX
 from scadbuddy.crud.idempotency import KEY_PROBLEM
@@ -187,8 +180,7 @@ from scadbuddy.rack.rank import Usage
 from scadbuddy.rack.usage import PickedHotend, RackUsageStore
 from scadbuddy.slicing.held_presets import HeldPresetStore, HeldRow
 from scadbuddy.slicing.store import NativeSlice, NativeSliceStore, SliceSubjectError
-from scadbuddy.spools.models import Overlay, SeenTray, SpoolSnapshot
-from scadbuddy.spools.store import SpoolStore
+from scadbuddy.spools.models import SeenTray
 
 logger = logging.getLogger(__name__)
 
@@ -1366,137 +1358,10 @@ def _when(value: str | None) -> datetime | None:
 _refuse(RemoteRackUsage, "RackUsageStore", RACK_API_ONLY)
 
 
-# -- spools, held presets, native slices (Q28, Q30, #5298 Task 31) ---------------------
+# -- held presets, native slices (Q30, #5298 Task 31) -----------------------------------
 
-#: The route's reason for a refresh's write that ran past its deadline
-#: (`api/crud_print.py`): it rolled back, as `SpoolStore.replace_records`' does.
-PAST_DEADLINE = "past-deadline"
-#: Seconds a `RemoteSpoolStore.replace_records` with a timeout keeps between the API's
-#: deadline and its own: the request's way there and the commit after the last check.
-DEADLINE_MARGIN = 1.0
 #: The route's reason for a slice start of a copy another subject's row holds.
 SLICE_SUBJECT = "slice-subject"
-
-#: The `SpoolStore` methods only the API calls: the refresh's ``seen`` half and the
-#: providers' list, on the ``library`` worker (`spools/activities.py`), a person's tray
-#: links (`api/tray_spools.py`), and the ``_in`` write, which runs on the API's connection.
-SPOOLS_API_ONLY = ("seen", "refreshes", "link", "unlink", "replace_records_in", "deadline")
-
-
-class RemoteSpoolStore(SpoolStore):
-    """`spools/store.py` `SpoolStore` (Q28) over ``…/print/spools`` (area ``spools``).
-    Async, as the SQL store is. No pool. The print worker called it for the native
-    provider's recache after a print took its grams and for a native run's overlay;
-    since #6262 Task 6 it calls neither, and Task 12 drops it with the overlay. Every SQL
-    write is one transaction under the store's advisory lock, so each is one route, run
-    whole on the API (plan
-    D6)."""
-
-    def __init__(self, client: CrudClient) -> None:
-        self._client = client
-
-    @property
-    def pool(self) -> ConnectionPool[Connection[DictRow]]:
-        raise ApiOnlyError("SpoolStore.pool is the API's; the worker has none")
-
-    async def replace_records(
-        self,
-        provider: str,
-        snapshots: Sequence[SpoolSnapshot],
-        at: datetime,
-        *,
-        timeout: float | None = None,
-    ) -> None:
-        """Under an ``Idempotency-Key`` of its own, a new UUID per call, which the client
-        sends again on its retries (plan D5): the body carries the refresh's ``at``, so a
-        retried activity's `WriteKeys` key would never replay, and a refresh is a whole
-        new answer, never a replay of an earlier one.
-
-        With a ``timeout`` the API does not commit after this call gives up, as the SQL
-        store never does, as long as the request reaches the route and its last insert
-        and commit end within `DEADLINE_MARGIN`: a longer wait in front of the handler,
-        or a slower commit, can still commit after the raise. The call is sent once,
-        with no retry, and waits ``timeout`` seconds for its answer; the API's deadline
-        is ``timeout`` less `DEADLINE_MARGIN` from its receipt, so it rolls back (409
-        ``past-deadline``, raised here as `TimeoutError`) before this call stops
-        waiting. A call that gets no answer waits out its ``timeout`` before it raises,
-        so the API is past its deadline by then. Less than the margin left raises
-        `TimeoutError` unsent."""
-        body: dict[str, Any] = {
-            "provider": provider,
-            "snapshots": [snapshot.model_dump(mode="json") for snapshot in snapshots],
-            "at": at.isoformat(),
-        }
-        if timeout is None:
-            await self._send_records(provider, body)
-            return
-        if timeout <= DEADLINE_MARGIN:
-            raise TimeoutError(f"the refresh of {provider} ran past its deadline")
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-        try:
-            await self._send_records(
-                provider,
-                {**body, "timeout": timeout - DEADLINE_MARGIN},
-                budget=0.0,
-                timeout=timeout,
-            )
-        except CrudUnavailableError:
-            await asyncio.sleep(max(0.0, deadline - loop.time()))
-            raise
-
-    async def _send_records(
-        self,
-        provider: str,
-        body: dict[str, Any],
-        *,
-        budget: float | None = None,
-        timeout: float | None = None,
-    ) -> None:
-        try:
-            await self._client.request(
-                "POST",
-                f"{BASE}/spools/records",
-                json=body,
-                idempotency_key=uuid.uuid4().hex,
-                budget=budget,
-                timeout=timeout,
-            )
-        except CrudRefusedError as error:
-            if _refused_as(error, PAST_DEADLINE):
-                raise TimeoutError(f"the refresh of {provider} ran past its deadline") from None
-            raise
-
-    async def failed(self, provider: str, at: datetime, failure: str) -> None:
-        """Natural: an upsert of the provider's failure."""
-        await self._client.request(
-            "POST",
-            f"{BASE}/spools/refreshes/{quote(provider, safe='')}/failed",
-            json={"at": at.isoformat(), "failure": failure},
-        )
-
-    async def overlay(
-        self,
-        printer_id: UUID,
-        trays: Sequence[SeenTray],
-        *,
-        now: datetime,
-        providers: Sequence[str],
-        located: Mapping[str, str] | None = None,
-    ) -> Overlay:
-        """A ``POST`` read: the trays' RFID keys stay out of the URL (spec §7)."""
-        body = {
-            "printer_id": str(printer_id),
-            "trays": [tray.model_dump(mode="json") for tray in trays],
-            "now": now.isoformat(),
-            "providers": list(providers),
-            "located": dict(located or {}),
-        }
-        response = await self._client.request("POST", f"{BASE}/spools/overlay", json=body)
-        return Overlay.model_validate(response.json())
-
-
-_refuse(RemoteSpoolStore, "SpoolStore", SPOOLS_API_ONLY)
 
 
 class RemoteFilamentTrays:

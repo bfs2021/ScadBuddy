@@ -432,18 +432,18 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   LAN start books its slots' grams as `print_started` estimates at the plate's start in
   `filament_spool_events`, and the run's settle books each start's `print_ended` actual
   (`done`) or 0 (`filament/print_uses.py`, `print_use_hook`; on the worker through
-  `…/filament/print-uses`, `RemotePrintUses`). The spool providers' overlay (`spools/`,
-  refreshed off the path) still caches Bambuddy's inventory, which nothing on the print
-  path reads; Task 12 drops it. ScadBuddy's own spools are the `filament_*` tables
-  (#6261); the `native` provider, its `/native-spools` routes and Settings' editor went in
-  #6262 Task 11.
+  `…/filament/print-uses`, `RemotePrintUses`). ScadBuddy's own spools are the `filament_*`
+  tables (#6261); the `native` provider, its `/native-spools` routes and Settings' editor
+  went in #6262 Task 11, and the spool providers' overlay in Task 12 (its tables,
+  `physical_spools` and the rest, stay unread until a later PR drops them; a migration
+  carried each person's tray link to the SB spool's tray place).
   `printers/ams_mapping.py` computes `ams_mapping`/`ams_mapping2` from the
   plan's trays and `printers/nozzle_mapping.py` an H2C rack print's `nozzle_mapping`
   (measured values in the spec's §2); `printers/lan.py` is the FTPS upload and MQTT
   command. `slicing/catalogue.py` and `slicing/values.py` give a native run the image's
   presets and a process preset's values in Bambuddy's shapes, with Bambuddy's `local`
   presets from the kept copy `slicing/held_presets.py` (#4645: `held_local_presets`,
-  refreshed on the spool providers' Schedule, read through `Profiles.held`; cloud user
+  refreshed on the spool refresh's Schedule, read through `Profiles.held`; cloud user
   presets are not offered, D5). `print_library/copies.py` files the laid-out per-print copy in the
   native library, marked with its run's subject (`library_files.print_subject`, as is
   its slice); `print_library/sweep.py` `sweep_print_copies` (housekeeping
@@ -568,8 +568,7 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   route and one transaction on the API; every write but `seen` takes an
   `Idempotency-Key`; `spool_history` is the API's), and the kept presets and a native
   slice's start (`RemoteHeldPresets`, `RemoteNativeSlices`, area `spools`, #5298 Task 31:
-  each write runs whole on the API under its lock; `RemoteSpoolStore` has
-  no caller since #6262 Task 6, and Task 12 drops it), and the
+  each write runs whole on the API under its lock), and the
   SB spools in a native run's trays and what its LAN starts use of them
   (`RemoteFilamentTrays`, `RemotePrintUses`, area `filament`, #6262 Task 6: an area of its
   own, so the worker waits for an API that serves it; a start's uses and a run's settle

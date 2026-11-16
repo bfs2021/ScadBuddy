@@ -210,9 +210,9 @@ export const RUNTIME_FIELDS: readonly FieldSpec[] = [
   {
     name: 'spool_overlay_refresh_seconds',
     section: 'administration',
-    label: 'Refresh the spool providers\' records every',
+    label: 'Pull Bambuddy\'s spools and presets every',
     kind: 'seconds',
-    help: "Bambuddy's spool records, copied on a schedule of their own so a print never waits on Bambuddy. 0 turns the refresh off.",
+    help: "Bambuddy's spools pulled into ScadBuddy's own, and its local presets kept, on a schedule of their own so a print never waits on Bambuddy. 0 turns both off.",
   },
   {
     name: 'media_upload_max_bytes',

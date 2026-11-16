@@ -505,9 +505,11 @@ def test_a_typed_spool_takes_no_preset_from_bambuddy(pg_pool: PgPool) -> None:
     assert _own_presets(pg_pool, spool.id) == []
 
 
-def test_a_bb_spool_whose_record_link_names_an_sb_spool_is_linked(pg_pool: PgPool) -> None:
-    """A native spool migrated onto its physical spool's id, which the BB record is
-    linked to (`spool_record_links`), is that BB spool, tag or not."""
+def test_a_retired_record_link_is_not_read(pg_pool: PgPool) -> None:
+    """#6262 Task 12 (F18): the overlay's record links are no longer read. A migration
+    carried each Bambuddy one onto `filament_bb_links`
+    (`20261116T0034Z_filament_plan_spool_numbers.sql`), so a record link alone, with no
+    tag, names no spool: the BB spool is a new one."""
     f = _filament(pg_pool)
     with pg_pool.connection() as conn:
         physical = conn.execute(
@@ -524,9 +526,9 @@ def test_a_bb_spool_whose_record_link_names_an_sb_spool_is_linked(pg_pool: PgPoo
             (physical["id"],),
         )
     report = pull(f, [bb(tray_uuid=None, tag_uid=None)], now=NOW)
-    assert (report.created, report.linked) == (0, 1)
-    assert report.linked_ids == [physical["id"]]
-    assert len(f.spools.list()) == 1
+    assert (report.created, report.linked) == (1, 0)
+    assert report.created_ids != [physical["id"]]
+    assert len(f.spools.list()) == 2
 
 
 def test_a_second_pull_changes_nothing(pg_pool: PgPool) -> None:
@@ -753,33 +755,6 @@ def test_an_archived_holder_with_an_open_binding_gives_up_its_tag(pg_pool: PgPoo
     (made,) = pull(f, [bb()], now=NOW).created_ids
     assert f.spools.open_binding(made) is not None
     assert f.spools.open_binding(old.id) is None
-
-
-def test_an_archived_spool_the_record_link_names_is_left_alone(pg_pool: PgPool) -> None:
-    f = _filament(pg_pool)
-    with pg_pool.connection() as conn:
-        physical = conn.execute(
-            "INSERT INTO physical_spools DEFAULT VALUES RETURNING id"
-        ).fetchone()
-        assert physical is not None
-        conn.execute(
-            "INSERT INTO filament_spools (id, material_id, archived_at) VALUES (%s, %s, now())",
-            (physical["id"], _pla(pg_pool)),
-        )
-        conn.execute(
-            "INSERT INTO spool_record_links (provider, record_id, physical_spool_id, linked_by)"
-            " VALUES ('bambuddy', '7', %s, 'rfid')",
-            (physical["id"],),
-        )
-    for _ in range(2):
-        report = pull(f, [bb(tray_uuid=None, tag_uid=None)], now=NOW)
-        assert (report.created, report.linked, report.archived) == (0, 0, 1)
-        assert report.archived_ids == [physical["id"]]
-    spool = f.spools.get(physical["id"])
-    assert spool is not None
-    assert spool.archived_at is not None
-    assert f.spools.events(physical["id"]) == []
-    assert len(f.spools.list(include_archived=True)) == 1
 
 
 def test_a_linked_spool_archived_in_sb_takes_nothing(pg_pool: PgPool) -> None:

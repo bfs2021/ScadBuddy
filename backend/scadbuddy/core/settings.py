@@ -687,9 +687,10 @@ class Settings(BaseSettings):
     # may set its own, and a run may override both.
     flow_approval_timeout_seconds: int = 0
     # SCADBUDDY_SPOOL_OVERLAY_REFRESH_SECONDS (#3818 tier A, plan 2026-10-18 Task 6b): how
-    # often the spool providers' records, and the kept copy of Bambuddy's local presets
-    # (#4645), are refreshed into Postgres, on their own Schedule
-    # (`workflows/spool_refresh.py`); 0 turns the refresh off.
+    # often the kept copy of Bambuddy's local presets (#4645) is refreshed and Bambuddy's
+    # spools are pulled into ScadBuddy's own (#6261), on their own Schedule
+    # (`workflows/spool_refresh.py`); 0 turns both off. The name is older than the spool
+    # overlay's removal (#6262 Task 12) and stays, so no stored setting moves.
     spool_overlay_refresh_seconds: int = Field(default=300, ge=0)
 
     @field_validator("flow_approval_timeout_seconds")
@@ -1035,7 +1036,7 @@ APPLIES: Final[Mapping[str, Applies]] = MappingProxyType(
         "preview_renders": "restart",
         # Decides at start whether the periodic sweep runs at all.
         "asset_sweep_interval": "restart",
-        # The spool providers' Schedule is set up at start, as the sweeps' is.
+        # The spool refresh's Schedule is set up at start, as the sweeps' is.
         "spool_overlay_refresh_seconds": "restart",
         # Attributes of the stores that read them on every use.
         "library_max_bytes": "live",
