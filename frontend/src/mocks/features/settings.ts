@@ -49,6 +49,7 @@ const NULLABLE = new Set([
   'default_plate',
   'google_fonts_api_key',
   'temporal_ui_url',
+  'filament_default_cost_per_kg',
   'store_s3_endpoint',
   'store_s3_bucket',
   'store_s3_access_key_id',
@@ -223,6 +224,16 @@ function putSettings(body: Record<string, unknown>) {
     }
     if (name === 'storefront_mail_host' && typeof value === 'string' && (/[\s/@]/.test(value.trim()) || !value.trim())) {
       return refused(name, `Value error, ${envName(name)} is a host name, such as smtp.example.com`)
+    }
+    // #6262 Task 13 — `FilamentSync` and the bounds of the two filament fields.
+    if (name === 'filament_sync' && !(value as { spools?: unknown } | null)?.spools?.toString().match(/^(off|bb_to_sb)$/)) {
+      return refused(name, "Input should be 'off' or 'bb_to_sb'")
+    }
+    if (name === 'filament_low_stock_pct' && typeof value === 'number' && value > 100) {
+      return refused(name, 'Input should be less than or equal to 100')
+    }
+    if (name === 'filament_default_cost_per_kg' && typeof value === 'string' && !/^\d+(\.\d+)?$/.test(value.trim())) {
+      return refused(name, 'Input should be greater than or equal to 0')
     }
     if (name === 'temporal_ui_url' && typeof value === 'string' && !/^https?:\/\//.test(value)) {
       return refused(name, `Value error, ${envName(name)} must be an http(s) URL, not '${value}'`)

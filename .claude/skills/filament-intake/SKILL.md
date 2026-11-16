@@ -17,7 +17,8 @@ against what is already in inventory.
 Where the spools live today: Bambuddy (BB) is where the scripts add spools, and
 ScadBuddy (SB) keeps its own spools (#6262), pulled from BB's: the `SpoolRefresh`
 schedule pulls them every `spool_overlay_refresh_seconds` (300 s,
-`backend/scadbuddy/core/settings.py`), and `POST /api/v1/filament/bambuddy/import`
+`backend/scadbuddy/core/settings.py`; Settings → Printing → Filament, which can also
+turn the pull `off`), and `POST /api/v1/filament/bambuddy/import`
 pulls them at once (`backend/scadbuddy/filament/bambuddy_pull.py`). SB's price
 book (`filaments`) is filled only on request (step 8), from SB's spools, not BB's:
 a spool that is only in BB is not priced until a pull has made it an SB spool. So

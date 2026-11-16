@@ -18,6 +18,7 @@ from psycopg.types.json import Jsonb
 
 from scadbuddy.bambuddy.models import Spool as BbSpool
 from scadbuddy.bambuddy.models import SpoolCatalogEntry
+from scadbuddy.core.settings import FilamentSync
 from scadbuddy.filament.bambuddy_pull import (
     ASSIGNMENTS_TIMEOUT,
     pull,
@@ -592,7 +593,22 @@ def test_a_bb_value_gone_never_clears_sb(pg_pool: PgPool) -> None:
 
 async def test_a_scheduled_pull_with_no_bambuddy_is_skipped(pg_pool: PgPool) -> None:
     f = _filament(pg_pool)
-    assert await scheduled_pull(f, lambda: StoredSettings()) == "skipped"
+    assert await scheduled_pull(f, lambda: StoredSettings(), FilamentSync) == "skipped"
+    assert f.spools.list() == []
+
+
+async def test_off_skips_the_pull(pg_pool: PgPool) -> None:
+    f = _filament(pg_pool)
+    settings = StoredSettings(bambuddy_url=BB, bambuddy_api_key="k")
+    with respx.mock(assert_all_called=False) as router:
+        spools = router.get(f"{BB}/api/v1/inventory/spools").respond(
+            json=[bb().model_dump(mode="json")]
+        )
+        assert (
+            await scheduled_pull(f, lambda: settings, lambda: FilamentSync(spools="off"))
+            == "skipped"
+        )
+        assert not spools.called
     assert f.spools.list() == []
 
 
@@ -603,7 +619,7 @@ async def test_a_scheduled_pull_with_bambuddy_down_is_a_logged_no_op(
     settings = StoredSettings(bambuddy_url=BB, bambuddy_api_key="k")
     with respx.mock() as router:
         router.get(f"{BB}/api/v1/inventory/spools").respond(503)
-        assert await scheduled_pull(f, lambda: settings) == "failed"
+        assert await scheduled_pull(f, lambda: settings, FilamentSync) == "failed"
     assert "could not pull Bambuddy's spools" in caplog.text
     assert f.spools.list() == []
 
@@ -616,7 +632,7 @@ async def test_a_pull_reads_bambuddy_and_imports(pg_pool: PgPool) -> None:
         router.get(f"{BB}/api/v1/inventory/catalog").respond(json=[])
         report = await read_and_pull(f, settings)
         assert report.created == 1
-        assert await scheduled_pull(f, lambda: settings) == "pulled"
+        assert await scheduled_pull(f, lambda: settings, FilamentSync) == "pulled"
 
 
 def test_a_bb_unlock_never_clears_an_sb_lock(pg_pool: PgPool) -> None:

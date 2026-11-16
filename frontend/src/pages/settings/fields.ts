@@ -2,13 +2,14 @@ import type { Settings, SettingsUpdate } from '../../api/types'
 
 /**
  * #2171 — the Settings sections that save runtime fields (`RUNTIME_FIELDS`, `HAND_LAID`).
- * `printers` and `inventory` own none, so they are not here.
+ * `printers` owns none, so it is not here.
  */
 export type SectionId =
   | 'connection'
   | 'printing'
   | 'print-watcher'
   | 'orders'
+  | 'filament'
   | 'projects'
   | 'uploads'
   | 'rendering'
@@ -207,12 +208,39 @@ export const RUNTIME_FIELDS: readonly FieldSpec[] = [
     kind: 'url',
     help: 'The Temporal web UI, where render workflows can be inspected. Empty shows no link.',
   },
+  // #6262 Task 13 — the Filament section: how Bambuddy's spools reach ScadBuddy's own, and
+  // the two numbers a spool falls back on.
+  {
+    name: 'filament_sync',
+    section: 'filament',
+    label: 'Spools',
+    kind: 'select',
+    choices: [
+      { value: 'off', label: 'Off' },
+      { value: 'bb_to_sb', label: 'Bambuddy \u2192 ScadBuddy' },
+    ],
+    help: "Off, Bambuddy's spools are never pulled and ScadBuddy's own are the only ones. Bambuddy \u2192 ScadBuddy copies Bambuddy's spools in on the schedule below; ScadBuddy never writes to Bambuddy.",
+  },
   {
     name: 'spool_overlay_refresh_seconds',
-    section: 'administration',
-    label: 'Pull Bambuddy\'s spools and presets every',
+    section: 'filament',
+    label: 'Pull from Bambuddy every',
     kind: 'seconds',
-    help: "Bambuddy's spools pulled into ScadBuddy's own, and its local presets kept, on a schedule of their own so a print never waits on Bambuddy. 0 turns both off.",
+    help: "How often Bambuddy's spools are pulled and its local presets kept, on a schedule of their own so a print never waits on Bambuddy. 0 turns both off. A change applies at the next start.",
+  },
+  {
+    name: 'filament_low_stock_pct',
+    section: 'filament',
+    label: 'Low stock below, percent',
+    kind: 'count',
+    help: "A spool is low when it has less than this percent of its label weight left, unless the spool sets its own. 0 to 100.",
+  },
+  {
+    name: 'filament_default_cost_per_kg',
+    section: 'filament',
+    label: 'Default cost per kg',
+    kind: 'text',
+    help: "What a kilogram of filament costs when its spool and type name no cost, in the shop's currency, such as 24.50. Empty sets none.",
   },
   {
     name: 'media_upload_max_bytes',
@@ -523,6 +551,8 @@ export function serverValue(settings: Settings, name: FieldName): string {
     name === 'storefront_turnstile_secret'
   )
     return ''
+  // #6262 Task 13 — `filament_sync` is one object per data type; the form edits `spools`.
+  if (name === 'filament_sync') return settings.filament_sync?.spools ?? 'bb_to_sb'
   const value = (settings as Record<string, unknown>)[name]
   if (value === null || value === undefined) return ''
   return String(value)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import timedelta
+from decimal import Decimal
 from typing import Any, Literal, Self
 
 import psycopg
@@ -50,6 +51,7 @@ from scadbuddy.core.settings import (
     BOOTSTRAP_FIELDS,
     ENV_SEEDED,
     Applies,
+    FilamentSync,
     Settings,
     env_var,
 )
@@ -262,6 +264,9 @@ class SettingsView(BaseModel):
     event_log_retention_rows: int
     flow_approval_timeout_seconds: int
     spool_overlay_refresh_seconds: int
+    filament_sync: FilamentSync = Field(default_factory=FilamentSync)
+    filament_low_stock_pct: int = 20
+    filament_default_cost_per_kg: Decimal | None = None
     log_level: str
     #: The Temporal web UI, which Settings → Administration links to (#668).
     temporal_ui_url: str | None = None

@@ -40,15 +40,20 @@ FILAMENT: Key[Filament] = Key("filament")
 
 def _build(core: Core, components: Components) -> Filament:
     pool = core.settings_store.pool
+
+    def low_stock() -> int:
+        # One row, read on each use: a change applies to the next read.
+        return int(core.settings_store.read({"filament_low_stock_pct"})["filament_low_stock_pct"])
+
     # What a native print used is settled on its SB spools as the follow reads it settled
     # (#4643, #6262 Task 6); the follow is a core service and imports no feature.
     core.print_follower.on_read.append(print_use_hook(PoolPrintUses(pool)))
     return Filament(
         catalog=CatalogStore(pool),
         types=SpoolTypeStore(pool),
-        spools=FilamentSpoolStore(pool),
+        spools=FilamentSpoolStore(pool, low_stock),
         locations=LocationStore(pool),
-        inventory=FilamentInventory(pool),
+        inventory=FilamentInventory(pool, low_stock),
         presets=PoolSpoolPresets(pool),
     )
 

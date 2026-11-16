@@ -80,6 +80,7 @@ from scadbuddy.bambuddy.client import client_for
 from scadbuddy.bambuddy.models import Spool as BbSpool
 from scadbuddy.bambuddy.models import SpoolAssignment, SpoolCatalogEntry
 from scadbuddy.core.problems import ApiError
+from scadbuddy.core.settings import FilamentSync
 from scadbuddy.filament import ledger
 from scadbuddy.filament import models as m
 from scadbuddy.filament.colour import normalise_rgba
@@ -1110,9 +1111,15 @@ async def read_assignments(settings: StoredSettings) -> list[SpoolAssignment]:
     return []
 
 
-async def scheduled_pull(store: Filament, load: Callable[[], StoredSettings]) -> Outcome:
-    """The Schedule's pull (`SpoolRefresh`): ``skipped`` with no BB URL, ``failed`` when
-    BB or the store fails (logged, never raised), else ``pulled``."""
+async def scheduled_pull(
+    store: Filament, load: Callable[[], StoredSettings], sync: Callable[[], FilamentSync]
+) -> Outcome:
+    """The Schedule's pull (`SpoolRefresh`): ``skipped`` with ``filament_sync.spools``
+    ``off`` or no BB URL, ``failed`` when BB or the store fails (logged, never raised),
+    else ``pulled``. ``sync`` reads the setting as it is now (#6262 Task 13)."""
+    if (await asyncio.to_thread(sync)).spools == "off":
+        logger.info("Bambuddy's spools are not pulled: the Filament sync is off")
+        return "skipped"
     settings = await asyncio.to_thread(load)
     if not settings.bambuddy_url:
         logger.info("no Bambuddy configured; its spools are not pulled")

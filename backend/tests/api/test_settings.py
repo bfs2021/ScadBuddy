@@ -1048,3 +1048,31 @@ def test_a_storefront_mail_setting_out_of_bounds_is_refused(
     client: TestClient, name: str, value: object
 ) -> None:
     assert client.put("/api/v1/settings", json={name: value}).status_code == 422
+
+
+def test_filament_settings_round_trip(client: TestClient) -> None:
+    body = client.get("/api/v1/settings").json()
+    assert body["filament_sync"] == {"spools": "bb_to_sb"}
+    assert body["filament_low_stock_pct"] == 20
+    assert body["filament_default_cost_per_kg"] is None
+    saved = client.put(
+        "/api/v1/settings",
+        json={
+            "filament_sync": {"spools": "off"},
+            "filament_low_stock_pct": 35,
+            "filament_default_cost_per_kg": "24.50",
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    again = client.get("/api/v1/settings").json()
+    assert again["filament_sync"] == {"spools": "off"}
+    assert again["filament_low_stock_pct"] == 35
+    assert Decimal(again["filament_default_cost_per_kg"]) == Decimal("24.50")
+    assert again["applies"]["filament_low_stock_pct"] == "live"
+    assert client.put("/api/v1/settings", json={"filament_low_stock_pct": 101}).status_code == 422
+    assert (
+        client.put("/api/v1/settings", json={"filament_default_cost_per_kg": "-1"}).status_code
+        == 422
+    )
+    for bad in ({"spools": "two_way"}, {"spools": "off", "extra": 1}):
+        assert client.put("/api/v1/settings", json={"filament_sync": bad}).status_code == 422

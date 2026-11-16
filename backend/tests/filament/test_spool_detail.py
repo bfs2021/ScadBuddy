@@ -178,6 +178,21 @@ def test_low_stock_uses_the_spool_then_the_default(pg_pool: PgPool) -> None:
     assert unknown.low_stock is False
 
 
+def test_low_stock_reads_the_setting(pg_pool: PgPool) -> None:
+    percent = 20
+    store = FilamentSpoolStore(pg_pool, low_stock_pct=lambda: percent)
+    made = store.create(
+        SpoolCreate(material_id=_material(pg_pool), label_weight_g=1000, grams_left=150),
+        actor="ann",
+    )
+    assert made.low_stock is True
+    percent = 10
+    spool = store.get(made.id)
+    assert spool is not None
+    assert spool.low_stock is False
+    assert store.summary().low_stock == 0
+
+
 def test_in_use_follows_print_events(pg_pool: PgPool) -> None:
     store, spool_id = _spool(pg_pool)
     detail = store.detail(spool_id)

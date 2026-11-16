@@ -434,7 +434,7 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   (`done`) or 0 (`filament/print_uses.py`, `print_use_hook`; on the worker through
   `…/filament/print-uses`, `RemotePrintUses`). ScadBuddy's own spools are the `filament_*`
   tables (#6261); the `native` provider, its `/native-spools` routes and Settings' editor
-  went in #6262 Task 11, and the spool providers' overlay in Task 12 (its tables,
+  went in #6262 Task 11 (its anchor now resolves to Settings' Filament section, Task 13), and the spool providers' overlay in Task 12 (its tables,
   `physical_spools` and the rest, stay unread until a later PR drops them; a migration
   carried each person's tray link to the SB spool's tray place).
   `printers/ams_mapping.py` computes `ams_mapping`/`ams_mapping2` from the
@@ -502,13 +502,14 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   (instances and tag bindings; every writer locks the tag before the spool; archive closes
   the open binding; `detail()` is the spool page's read: tags, last tag and its holder, the
   grams `basis`, `in_use`; `ledger()` pages every spool's events by an opaque `(at, seq)`
-  cursor; `low_stock` is computed per spool against its effective `low_stock_pct`, else `DEFAULT_LOW_STOCK_PCT`), `presets.py` (a spool's own presets and K values over its type's, by key; `preset_for` is exact, never a near nozzle; no key is `*`: the 0706Z migration made each `*` row one `migrated` row per model and nozzle, `drop_migrated` deletes them when a spool gets its first type), `ledger.py` (`filament_spool_events`, the one source of grams left:
+  cursor; `low_stock` is computed per spool against its effective `low_stock_pct`, else the setting `filament_low_stock_pct` (20 by default, read per call by the store's `low_stock_pct` reader; Settings → Printing → Filament), `presets.py` (a spool's own presets and K values over its type's, by key; `preset_for` is exact, never a near nozzle; no key is `*`: the 0706Z migration made each `*` row one `migrated` row per model and nozzle, `drop_migrated` deletes them when a spool gets its first type), `ledger.py` (`filament_spool_events`, the one source of grams left:
   the newest absolute reading, then the deltas after it (`basis()` returns that anchor and those
   deltas, and `grams_left()` is built on it); events carry their physical time,
   ordered by `(at, seq)`; a time-less event gets a clock-step guard because the WSL clock
   steps back), `locations.py` (a spool moves only through `move()`; AMS trays are keyed by
   printer, AMS and tray, never by name), `bambuddy_pull.py` (import and the scheduled pull,
-  read-only toward Bambuddy). Colour is `#RRGGBBAA` (`colour.py`). Routes: `api/filament.py`.
+  read-only toward Bambuddy; `scheduled_pull` skips when the setting `filament_sync.spools` is
+  `off`, read per run, #6262 Task 13). Colour is `#RRGGBBAA` (`colour.py`). Routes: `api/filament.py`.
 - `backend/scadbuddy/store/` — the blob store. Phase 1: the directory-shaped `BlobStore`
   Protocol and `LocalBlobStore` (`local.py`, a piece in `data/blobs/<piece_key>/`),
   `BlobRefs` (`refs.py`, the `blob_refs` table that keeps a blob alive) and `sweep_blobs`

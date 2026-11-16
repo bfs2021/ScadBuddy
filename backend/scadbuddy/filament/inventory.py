@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Protocol
 from uuid import UUID
@@ -139,9 +139,15 @@ class FilamentInventory:
     """The SB tray resolution over a pool whose connections autocommit and return dict
     rows (the settings store's). Synchronous: callers run it in a thread."""
 
-    def __init__(self, pool: ConnectionPool[Conn]) -> None:
+    def __init__(
+        self, pool: ConnectionPool[Conn], low_stock_pct: Callable[[], int] | None = None
+    ) -> None:
         self._pool = pool
-        self._spools = FilamentSpoolStore(pool)
+        self._spools = (
+            FilamentSpoolStore(pool)
+            if low_stock_pct is None
+            else FilamentSpoolStore(pool, low_stock_pct)
+        )
         self._locations = LocationStore(pool)
 
     def trays(self, printer_id: UUID, seen: Sequence[SeenTray]) -> TrayView:

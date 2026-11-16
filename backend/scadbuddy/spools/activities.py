@@ -15,6 +15,7 @@ from typing import Any
 
 from temporalio import activity
 
+from scadbuddy.core.settings import FilamentSync
 from scadbuddy.filament.bambuddy_pull import scheduled_pull
 from scadbuddy.filament.component import Filament
 from scadbuddy.library.settings_store import StoredSettings
@@ -49,15 +50,16 @@ def spool_activities() -> list[Callable[..., Any]]:
 
 
 def filament_pull_activity(
-    filament: Filament, load: Callable[[], StoredSettings]
+    filament: Filament, load: Callable[[], StoredSettings], sync: Callable[[], FilamentSync]
 ) -> Callable[[], Any]:
     """``filament_bambuddy_pull``: Bambuddy's spools into ScadBuddy's own
     (`filament/bambuddy_pull.py`). It runs on the ``library`` worker, in the API process,
-    which holds the store (`main._run_library_worker`), so it writes it directly. With no
-    Bambuddy, or Bambuddy down, it logs and returns, so the run never fails on it."""
+    which holds the store (`main._run_library_worker`), so it writes it directly. With
+    ``filament_sync.spools`` off (``sync`` reads it), no Bambuddy, or Bambuddy down, it
+    logs and returns, so the run never fails on it."""
 
     @activity.defn(name=FILAMENT_PULL_ACTIVITY)
     async def filament_bambuddy_pull() -> str:
-        return await scheduled_pull(filament, load)
+        return await scheduled_pull(filament, load, sync)
 
     return filament_bambuddy_pull

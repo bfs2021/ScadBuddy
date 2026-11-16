@@ -1820,7 +1820,11 @@ async def _run_library_worker(state: AppState, stop: asyncio.Event) -> None:
         # spool-providers-gone (#6262 Task 12).
         *spool_activities(),
         # Bambuddy's spools pulled into ScadBuddy's own (#6261), on the spools' Schedule.
-        filament_pull_activity(state.components.get(FILAMENT), lambda: state.settings_store.load()),
+        filament_pull_activity(
+            state.components.get(FILAMENT),
+            lambda: state.settings_store.load(),
+            lambda: state.settings_store.read({"filament_sync"})["filament_sync"],
+        ),
         # Bambuddy's local presets kept for native runs (#4645), on the spools' Schedule.
         held_presets_activity(
             lambda: HeldPresetStore(state.projection.pool), lambda: state.settings_store.load()
