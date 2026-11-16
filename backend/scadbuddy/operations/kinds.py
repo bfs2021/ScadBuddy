@@ -137,7 +137,14 @@ def operation_key(
 def without_bb_ids(body: dict[str, Any]) -> dict[str, Any]:
     """``body`` without its ``filament_plan``'s ``ids`` when that is the default,
     ``"bb"``: the key of a body from before #6262 Task 7, which had no ``ids``, so a
-    retry that spans the deploy joins its run (review I1). ``"sb"`` stays in the key."""
+    retry that spans the deploy joins its run (review I1). ``"sb"`` stays in the key. A
+    body that holds its print request one level down (the preview slice's ``request``)
+    is stripped there too (re-review M-d)."""
+    inner = body.get("request")
+    if isinstance(inner, dict):
+        stripped = without_bb_ids(inner)
+        if stripped is not inner:
+            body = {**body, "request": stripped}
     plan = body.get("filament_plan")
     if not isinstance(plan, dict) or plan.get("ids") != "bb":
         return body

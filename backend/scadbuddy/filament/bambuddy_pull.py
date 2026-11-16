@@ -63,7 +63,7 @@ from scadbuddy.filament import ledger
 from scadbuddy.filament import models as m
 from scadbuddy.filament.colour import normalise_rgba
 from scadbuddy.filament.component import Filament
-from scadbuddy.filament.presets import drop_migrated
+from scadbuddy.filament.presets import drop_migrated, own_presets
 from scadbuddy.filament.spools import FilamentSpoolStore, TagKeysClashError
 from scadbuddy.library.settings_store import StoredSettings
 from scadbuddy.spools.models import clean_tag_uid, clean_tray_uuid
@@ -234,8 +234,8 @@ def _one(
         # BB may not move ``updated_at`` for a weighing: its events are booked anyway,
         # once each.
         booked = _book(conn, spool_id, bb, actor)
-        _bb_presets(conn, spool_id, bb)
-        return ("updated", spool_id, False) if changed or booked else None
+        presets = _bb_presets(conn, spool_id, bb, actor)
+        return ("updated", spool_id, False) if changed or booked or presets else None
     after = snapshot(bb)
     held = _holder(conn, after, bb.id)
     if held is not None:
@@ -244,11 +244,11 @@ def _one(
             return "archived", held_id, False
         typeless = _link(conn, store, bb, held_id, after, now, actor)
         _book(conn, held_id, bb, actor)
-        _bb_presets(conn, held_id, bb)
+        _bb_presets(conn, held_id, bb, actor)
         return "linked", held_id, typeless
     made, typeless = _create(conn, store, bb, after, now, actor)
     _book(conn, made, bb, actor)
-    _bb_presets(conn, made, bb)
+    _bb_presets(conn, made, bb, actor)
     return "created", made, typeless
 
 
@@ -256,32 +256,89 @@ def _one(
 BB_PRESET_NOZZLES = ("0.2", "0.4", "0.6", "0.8")
 
 
-def _bb_presets(conn: Conn, spool_id: UUID, bb: BbSpool) -> None:
+def _bb_presets(conn: Conn, spool_id: UUID, bb: BbSpool, actor: str) -> bool:
     """A linked BB spool's ``slicer_filament`` (and its name) as the SB spool's own H2C
     preset at every nozzle size, a ``migrated`` row (#6262 Task 7 ruling R1), so a plan
-    on Bambuddy's path finds the preset Bambuddy's spool named. Only where the spool
-    has no row of a person's for that key; a migrated row follows Bambuddy's change. A
-    spool with a type takes none: its type gives its presets (F27, `drop_migrated`)."""
+    on Bambuddy's path finds the preset Bambuddy's spool named. True when a row changed.
+
+    The value Bambuddy sent last is kept on the link (``bb_slicer_filament`` and its
+    name). A key is written only where the spool has no row for it, or where its row
+    still holds that last value; any other row (a person's, or a ``migrated`` one the
+    native API or the native migration wrote) is never touched. A clear in Bambuddy
+    deletes only the rows that still hold its last value. Rows that change record one
+    ``synced_from_bb`` event with the spool's own rows before and after
+    (``changes.presets``). A spool with a type takes none: its type gives its presets
+    (F27, `drop_migrated`)."""
     # Here, not at the top: `filament.presets` reads `bambuddy.resolver`.
     from scadbuddy.bambuddy.resolver import PRINTER_MODEL
 
-    if not bb.slicer_filament:
-        return
-    typed = conn.execute(
-        "SELECT type_id IS NOT NULL AS typed FROM filament_spools WHERE id = %s", (spool_id,)
+    sent = (
+        _text(bb.slicer_filament),
+        _text(bb.slicer_filament_name) if bb.slicer_filament else None,
+    )
+    link = conn.execute(
+        "SELECT l.bb_slicer_filament, l.bb_slicer_filament_name, s.type_id IS NOT NULL AS typed"
+        " FROM filament_bb_links l JOIN filament_spools s ON s.id = l.spool_id"
+        " WHERE l.spool_id = %s",
+        (spool_id,),
     ).fetchone()
-    if typed is None or typed["typed"]:
-        return
-    for size in BB_PRESET_NOZZLES:
-        conn.execute(
-            "INSERT INTO filament_spool_presets (spool_id, printer_model, nozzle_diameter,"
-            " slicer_filament, slicer_filament_name, migrated) VALUES (%s, %s, %s, %s, %s, true)"
-            " ON CONFLICT (spool_id, printer_model, nozzle_diameter) DO UPDATE SET"
-            " slicer_filament = EXCLUDED.slicer_filament,"
-            " slicer_filament_name = EXCLUDED.slicer_filament_name"
-            " WHERE filament_spool_presets.migrated",
-            (spool_id, PRINTER_MODEL, size, bb.slicer_filament, bb.slicer_filament_name),
-        )
+    if link is None:
+        return False
+    last = (link["bb_slicer_filament"], link["bb_slicer_filament_name"])
+    conn.execute(
+        "UPDATE filament_bb_links SET bb_slicer_filament = %s, bb_slicer_filament_name = %s"
+        " WHERE spool_id = %s AND (bb_slicer_filament, bb_slicer_filament_name)"
+        " IS DISTINCT FROM (%s, %s)",
+        (*sent, spool_id, *sent),
+    )
+    if link["typed"]:
+        return False
+    rows = {
+        row["nozzle_diameter"]: (row["slicer_filament"], row["slicer_filament_name"])
+        for row in conn.execute(
+            "SELECT nozzle_diameter, slicer_filament, slicer_filament_name"
+            " FROM filament_spool_presets WHERE spool_id = %s AND printer_model = %s",
+            (spool_id, PRINTER_MODEL),
+        ).fetchall()
+    }
+    # Bambuddy's own rows: none, or the ones still holding what it sent last.
+    ours = [
+        size
+        for size in BB_PRESET_NOZZLES
+        if size not in rows or (last[0] is not None and rows[size] == last)
+    ]
+    wanted = [size for size in ours if rows.get(size) != (sent if sent[0] else None)]
+    if not wanted:
+        return False
+    before = own_presets(conn, spool_id)
+    for size in wanted:
+        if sent[0] is None:
+            conn.execute(
+                "DELETE FROM filament_spool_presets WHERE spool_id = %s AND printer_model = %s"
+                " AND nozzle_diameter = %s",
+                (spool_id, PRINTER_MODEL, size),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO filament_spool_presets (spool_id, printer_model, nozzle_diameter,"
+                " slicer_filament, slicer_filament_name, migrated)"
+                " VALUES (%s, %s, %s, %s, %s, true)"
+                " ON CONFLICT (spool_id, printer_model, nozzle_diameter) DO UPDATE SET"
+                " slicer_filament = EXCLUDED.slicer_filament,"
+                " slicer_filament_name = EXCLUDED.slicer_filament_name",
+                (spool_id, PRINTER_MODEL, size, *sent),
+            )
+    ledger.record(
+        conn,
+        spool_id,
+        "synced_from_bb",
+        actor=actor,
+        data={
+            "bb_spool_id": bb.id,
+            "changes": {"presets": [before, own_presets(conn, spool_id)]},
+        },
+    )
+    return True
 
 
 # -- step 2: an SB spool that already is this BB spool ---------------------------------

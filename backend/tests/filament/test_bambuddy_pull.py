@@ -240,6 +240,116 @@ def test_a_bb_spools_preset_is_the_sb_spools_where_it_has_none(pg_pool: PgPool) 
     ]
 
 
+def _set_row(pool: PgPool, spool: UUID, size: str, value: str, *, migrated: bool) -> None:
+    with pool.connection() as conn:
+        conn.execute(
+            "UPDATE filament_spool_presets SET slicer_filament = %s,"
+            " slicer_filament_name = %s, migrated = %s"
+            " WHERE spool_id = %s AND nozzle_diameter = %s",
+            (value, f"{value} name", migrated, spool, size),
+        )
+
+
+def _preset_events(f: Filament, spool: UUID) -> list[Any]:
+    return [e for e in f.spools.events(spool) if "presets" in (e.data or {}).get("changes", {})]
+
+
+def test_a_migrated_row_bambuddy_did_not_write_survives_a_pull(pg_pool: PgPool) -> None:
+    """#6262 Task 7 re-review I-1: a ``migrated`` row the native API or the native
+    migration wrote holds a person's choice; a pull with another Bambuddy value leaves
+    it, and rewrites only the rows that still hold Bambuddy's last value."""
+    f = _filament(pg_pool)
+    pull(f, [bb(slicer_filament="GFA00", slicer_filament_name="Bambu PLA Basic")], now=NOW)
+    (spool,) = f.spools.list()
+    _set_row(pg_pool, spool.id, "0.4", "NATIVE", migrated=True)
+
+    pull(
+        f,
+        [
+            bb(
+                slicer_filament="GFA05",
+                slicer_filament_name="Bambu PLA Silk",
+                updated_at=_bb_time(1),
+            )
+        ],
+        now=NOW,
+    )
+
+    assert _own_presets(pg_pool, spool.id) == [
+        ("0.2", "GFA05", "Bambu PLA Silk", True),
+        ("0.4", "NATIVE", "NATIVE name", True),
+        ("0.6", "GFA05", "Bambu PLA Silk", True),
+        ("0.8", "GFA05", "Bambu PLA Silk", True),
+    ]
+
+
+def test_a_bambuddy_clear_deletes_only_the_rows_holding_its_last_value(pg_pool: PgPool) -> None:
+    f = _filament(pg_pool)
+    pull(f, [bb(slicer_filament="GFA00", slicer_filament_name="Bambu PLA Basic")], now=NOW)
+    (spool,) = f.spools.list()
+    _set_row(pg_pool, spool.id, "0.4", "NATIVE", migrated=True)
+    _set_row(pg_pool, spool.id, "0.6", "MINE", migrated=False)
+
+    pull(f, [bb(slicer_filament=None, updated_at=_bb_time(1))], now=NOW)
+
+    assert _own_presets(pg_pool, spool.id) == [
+        ("0.4", "NATIVE", "NATIVE name", True),
+        ("0.6", "MINE", "MINE name", False),
+    ]
+
+
+def test_an_unchanged_pull_writes_no_preset_and_no_event(pg_pool: PgPool) -> None:
+    f = _filament(pg_pool)
+    sent = bb(slicer_filament="GFA00", slicer_filament_name="Bambu PLA Basic")
+    pull(f, [sent], now=NOW)
+    (spool,) = f.spools.list()
+
+    def written() -> list[tuple[str, str]]:
+        with pg_pool.connection() as conn:
+            return [
+                (r["nozzle_diameter"], r["xmin"])
+                for r in conn.execute(
+                    "SELECT nozzle_diameter, xmin::text AS xmin FROM filament_spool_presets"
+                    " WHERE spool_id = %s ORDER BY nozzle_diameter",
+                    (spool.id,),
+                )
+            ]
+
+    rows, events = written(), len(f.spools.events(spool.id))
+    report = pull(f, [sent], now=NOW)
+
+    assert written() == rows
+    assert len(f.spools.events(spool.id)) == events
+    assert report.updated == 0
+
+
+def test_a_preset_change_is_an_update_with_one_event(pg_pool: PgPool) -> None:
+    """A pull whose only change is Bambuddy's preset counts as an update and records
+    one event with the spool's own rows before and after (``changes.presets``)."""
+    f = _filament(pg_pool)
+    pull(f, [bb(slicer_filament="GFA00", slicer_filament_name="Bambu PLA Basic")], now=NOW)
+    (spool,) = f.spools.list()
+    first = _preset_events(f, spool.id)
+
+    report = pull(
+        f,
+        [
+            bb(
+                slicer_filament="GFA05",
+                slicer_filament_name="Bambu PLA Silk",
+                updated_at=_bb_time(1),
+            )
+        ],
+        now=NOW,
+    )
+
+    assert report.updated_ids == [spool.id]
+    [event] = _preset_events(f, spool.id)[len(first) :]
+    before, after = event.data["changes"]["presets"]
+    assert {row["slicer_filament"] for row in before} == {"GFA00"}
+    assert {row["slicer_filament"] for row in after} == {"GFA05"}
+
+
 def test_a_typed_spool_takes_no_preset_from_bambuddy(pg_pool: PgPool) -> None:
     """R1 with F27: a spool's type gives its presets; a pull adds no migrated row over
     it (one the type's first assignment would have dropped)."""

@@ -781,7 +781,8 @@ async def post_tray_spool(
         idempotency_key=idempotency_key,
     )
     answer = operation_answer(result, TrayAssigned)
-    # The operation names Bambuddy's spool; the answer names the SB spool asked for.
+    # The answer names the SB spool asked for. The operation's result does too
+    # (``sb_number``), except one started before that field, which names Bambuddy's.
     return assigned if isinstance(answer, TrayAssigned) else answer
 
 

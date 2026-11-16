@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -109,18 +111,59 @@ def test_a_plans_bambuddy_ids_key_as_they_did_before_6262() -> None:
     """#6262 Task 7 review I1: a plan's ``ids`` default (``"bb"``) is left out of both
     keys, so a retry that spans the deploy joins its run; ``"sb"`` is a new key."""
     slots = [{"slot_id": 1, "spool_id": 5}]
-    before = request(printer_id=1, filament_plan={"slots": slots})
     bb = request(printer_id=1, filament_plan={"slots": slots, "ids": "bb"})
     sb = request(printer_id=1, filament_plan={"slots": slots, "ids": "sb"})
-    assert run_key("o" * 32, bb) == run_key("o" * 32, before)
-    assert run_key("o" * 32, sb) != run_key("o" * 32, before)
+    # The key the model before the field gave: its dump, which had no ``ids`` (re-review
+    # M-g: two parsed requests both carry the default, so they cannot tell).
+    old = bb.model_dump(
+        mode="json",
+        exclude={
+            **dict.fromkeys(
+                (
+                    "request_id",
+                    "print_sequence",
+                    "rack_position",
+                    "rack_algorithm",
+                    "filament_profiles",
+                    "supports",
+                    "prime_tower",
+                    "plate_ids",
+                    "folder_id",
+                    "printer",
+                    "accepted_fixes",
+                    "path",
+                    "part_settings",
+                ),
+                True,
+            ),
+            "filament_plan": {"ids"},
+        },
+    )
+    canonical = json.dumps(old, sort_keys=True, separators=(",", ":"))
+    before = hashlib.sha256(f"{'o' * 32}\n{canonical}".encode()).hexdigest()
+    assert run_key("o" * 32, bb) == before
+    assert run_key("o" * 32, sb) != before
 
-    def op(body: dict[str, object]) -> str:
-        return operation_key("print", "o" * 32, body, "r")
+    def op(kind: str, body: dict[str, object]) -> str:
+        return operation_key(kind, "o" * 32, body, "r")
 
-    sent = {"printer_id": 1, "filament_plan": {"slots": slots}}
-    assert op({**sent, "filament_plan": {"slots": slots, "ids": "bb"}}) == op(sent)
-    assert op({**sent, "filament_plan": {"slots": slots, "ids": "sb"}}) != op(sent)
+    sent: dict[str, object] = {"printer_id": 1, "filament_plan": {"slots": slots}}
+    assert op("print", {**sent, "filament_plan": {"slots": slots, "ids": "bb"}}) == op(
+        "print", sent
+    )
+    assert op("print", {**sent, "filament_plan": {"slots": slots, "ids": "sb"}}) != op(
+        "print", sent
+    )
+    # Re-review M-d: the preview slice holds the request one level down.
+    preview: dict[str, object] = {"output_id": "o" * 32, "request": sent}
+    assert op(
+        "preview_slice",
+        {**preview, "request": {**sent, "filament_plan": {"slots": slots, "ids": "bb"}}},
+    ) == op("preview_slice", preview)
+    assert op(
+        "preview_slice",
+        {**preview, "request": {**sent, "filament_plan": {"slots": slots, "ids": "sb"}}},
+    ) != op("preview_slice", preview)
 
 
 def test_a_run_result_with_part_settings_crosses_the_converter_whole() -> None:

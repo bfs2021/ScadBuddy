@@ -73,6 +73,7 @@ from scadbuddy.bambuddy.filaments import (
     family,
     fold_plates,
     gather_plate_options,
+    name_presets,
     normalise_colour,
     plates_named,
     queue_filaments,
@@ -637,6 +638,9 @@ async def filament_options(
         options.nozzles = []
         return options
     options.nozzles = printer_status.nozzles
+    if options.nozzles and options.nozzles[0].nozzle_diameter:
+        # Each spool's preset for the mounted nozzle, not the 0.4 default (#6262 M-c).
+        name_presets(options, settled(inventory), options.nozzles[0].nozzle_diameter)
     # Each loaded spool's side, as a label in the picker (#469); nothing is checked
     # against it (#768).
     # A filled tray Bambuddy has no spool for is asked about, and offered (#2164).

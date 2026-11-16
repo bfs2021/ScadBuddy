@@ -41,7 +41,7 @@ import asyncio
 import logging
 import math
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Literal, Protocol
 from uuid import UUID
 
@@ -524,6 +524,26 @@ def build_options(
     )
 
 
+def name_presets(
+    options: FilamentOptions, rows: Sequence[FilamentInventorySpool], nozzle: str
+) -> FilamentOptions:
+    """``options`` with each SB spool's preset named for the ``nozzle`` size, as
+    `build_options` names it: for the filament step, once the printer's mounted nozzle
+    is read (#6262 Task 7 re-review M-c)."""
+    # Here, not at the top: `filament.presets` reads the resolver's `PRINTER_MODEL`.
+    from scadbuddy.bambuddy.resolver import PRINTER_MODEL
+    from scadbuddy.filament.presets import preset_for
+
+    presets = {row.spool.number: row.presets for row in rows}
+    for option in options.spools:
+        if option.sb_number is None or option.sb_number not in presets:
+            continue
+        preset = preset_for(presets[option.sb_number], PRINTER_MODEL, nozzle)
+        option.slicer_filament = preset.slicer_filament if preset else None
+        option.slicer_filament_name = preset.slicer_filament_name if preset else None
+    return options
+
+
 def _options(
     *,
     library_file_id: int | None,
@@ -958,12 +978,17 @@ async def read_inventory(client: BambuddyClient, reads: SbRows | None) -> Invent
     assignments = await client.spool_assignments()
     if reads is None:
         return []
+    return await _sb_read(reads.rows(assignments))
+
+
+async def _sb_read[T](read: Awaitable[T]) -> T:
+    """``read`` of ScadBuddy's spools; a store that cannot be read is a 503."""
     unread = ApiError(
         status.HTTP_503_SERVICE_UNAVAILABLE,
         "ScadBuddy's spools could not be read; try again shortly.",
     )
     try:
-        return await reads.rows(assignments)
+        return await read
     except DATABASE_ERRORS as error:
         raise unread from error
     except CrudUnavailableError as error:
@@ -974,11 +999,12 @@ async def sb_plan(plan: FilamentPlan, reads: SbRows | None) -> FilamentPlan:
     """``plan`` naming SB spool numbers (#6262 F14): as it is when its ``ids`` are
     ``"sb"``; else each positive id, a Bambuddy spool's, mapped to its linked SB spool's
     number (`FilamentInventory.bb_to_sb`), and a slot whose spool has no link dropped,
-    never read as SB spool #N. A tray chosen for itself (a negative id) is kept."""
+    never read as SB spool #N. A tray chosen for itself (a negative id) is kept. A
+    mapping that cannot be read is a 503, as in `read_inventory` (re-review M-e)."""
     if plan.ids == "sb":
         return plan
     named = [slot.spool_id for slot in plan.slots if slot.spool_id > 0]
-    mapped = await reads.bb_to_sb(named) if reads is not None and named else {}
+    mapped = await _sb_read(reads.bb_to_sb(named)) if reads is not None and named else {}
     return plan.model_copy(
         update={
             "ids": "sb",

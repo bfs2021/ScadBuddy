@@ -21,7 +21,7 @@ from scadbuddy.bambuddy.models import Spool as BbSpool
 from scadbuddy.bambuddy.models import SpoolAssignment
 from scadbuddy.filament.bambuddy_pull import pull
 from scadbuddy.filament.component import FILAMENT, Filament
-from scadbuddy.filament.models import FilamentInventorySpool, Spool, TrayPlace
+from scadbuddy.filament.models import FilamentInventorySpool, Spool, SpoolPresetCreate, TrayPlace
 from tests.bambuddy.conftest import recording
 
 NOW = datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
@@ -137,12 +137,17 @@ def seed_app_sb_spools(
 def drop_app_sb_presets(client: TestClient, numbers: Sequence[int]) -> None:
     """SB spools ``numbers`` with no presets of their own, so a plan falls back to their
     Bambuddy spools' (`resolve_plates`' ``bb_spools`` read)."""
+    for number in numbers:
+        set_app_sb_presets(client, number, [])
+
+
+def set_app_sb_presets(client: TestClient, number: int, rows: Sequence[SpoolPresetCreate]) -> None:
+    """SB spool #``number``'s own presets, ``rows``, in the app's own store."""
     state: AppState = getattr(client.app.state, STATE_ATTR)  # type: ignore[attr-defined]
     filament: Filament = state.components.get(FILAMENT)
-    for number in numbers:
-        found = filament.inventory.by_number(number)
-        assert found is not None, number
-        assert filament.spools.set_presets(found[0], [], actor="test") is not None
+    found = filament.inventory.by_number(number)
+    assert found is not None, number
+    assert filament.spools.set_presets(found[0], list(rows), actor="test") is not None
 
 
 class FakeSbRows:

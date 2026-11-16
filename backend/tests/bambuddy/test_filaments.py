@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import ClassVar, Self, cast
 
 import httpx
+import psycopg
 import pytest
 import respx
 
@@ -1213,6 +1214,22 @@ async def test_a_bb_plan_is_mapped_at_read() -> None:
     assert mapped.force_colour_match is False
     # A plan of SB numbers is read as it is.
     assert await sb_plan(mapped, reads) is mapped
+
+
+async def test_a_plans_mapping_that_cannot_be_read_is_a_503() -> None:
+    """#6262 Task 7 re-review M-e: a failed read of the links answers 503, as a failed
+    read of the spools does (`read_inventory`), never a 500."""
+
+    class Down(FakeSbRows):
+        async def bb_to_sb(self, ids: Sequence[int]) -> dict[int, int]:
+            raise psycopg.OperationalError("the database is gone")
+
+    plan = FilamentPlan.model_validate({"slots": [{"slot_id": 1, "spool_id": 41}]})
+
+    with pytest.raises(ApiError) as raised:
+        await sb_plan(plan, Down([]))
+
+    assert raised.value.status == 503
 
 
 def test_queue_filaments_still_sends_type_and_colour() -> None:

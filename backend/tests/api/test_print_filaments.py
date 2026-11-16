@@ -22,9 +22,11 @@ from fastapi.testclient import TestClient
 from scadbuddy.bambuddy import send
 from scadbuddy.bambuddy.print_source import OutputSource
 from scadbuddy.filament.inventory import FilamentInventory
+from scadbuddy.filament.models import SpoolPresetCreate
 from tests.api.test_print import presets_routes
 from tests.api.test_send import BASE, configure, make_output, upload_route
 from tests.bambuddy.conftest import recording
+from tests.support.sb_rows import set_app_sb_presets
 
 API = f"{BASE}/api/v1"
 
@@ -237,6 +239,39 @@ def test_spools_that_cannot_be_read_answer_503_as_bambuddys_do(
     response = client.get(f"/api/v1/print/outputs/{output_id}/filaments")
 
     assert response.status_code == 503, response.text
+
+
+@pytest.mark.requires_postgres
+@respx.mock
+@pytest.mark.usefixtures("recorded_sb_spools")
+def test_each_option_names_its_preset_for_the_mounted_nozzle(
+    client: TestClient, model: str
+) -> None:
+    """#6262 Task 7 re-review M-c: the step names a spool's preset for the printer's
+    mounted nozzle, a 0.6 here, not the 0.4 default."""
+    set_app_sb_presets(
+        client,
+        9,
+        [
+            SpoolPresetCreate(
+                printer_model="H2C",
+                nozzle_diameter=size,
+                slicer_filament=f"GF{size}",
+                slicer_filament_name=f"Preset for {size}",
+            )
+            for size in ("0.4", "0.6")
+        ],
+    )
+    output_id = prepared(client, model)
+    upload_route()
+    presets_routes()
+    inventory_routes()
+    nozzle_routes("0.6")
+
+    body = client.get(f"/api/v1/print/outputs/{output_id}/filaments?printer_id=1").json()
+
+    [nine] = [row for row in body["spools"] if row["spool_id"] == 9]
+    assert (nine["slicer_filament"], nine["slicer_filament_name"]) == ("GF0.6", "Preset for 0.6")
 
 
 def nozzle_routes(*diameters: str) -> respx.Route:
