@@ -233,8 +233,13 @@ A session is held by the replica that opened it: its transport, McpServer, resou
 subscriptions and replay log are live objects in that process. A load balancer without
 session affinity (the deployed `/mcp` route has none) sends the client's next request to
 any replica, so a request for a session another replica holds is relayed there through
-Postgres ([`agent/src/mcp/sessionRelay.ts`](../../agent/src/mcp/sessionRelay.ts)), the
-way browser calls are ([browser-bridge.md](browser-bridge.md#replicas)):
+Postgres ([`agent/src/mcp/sessionRelay.ts`](../../agent/src/mcp/sessionRelay.ts)). The
+directory and the messages are written through the backend's CRUD routes once the API
+lists area `mcp-relay` (`…/crud/agent/mcp-relay/*`,
+[`crud_agent_mcp.py`](../../backend/scadbuddy/api/crud_agent_mcp.py), #5299 step 11;
+[`relayRows.ts`](../../agent/src/mcp/relayRows.ts)), and over the agent's own SQL until
+then. Either way a message's row and its `scadbuddy_mcp` NOTIFY commit in one
+transaction; the diagram's Postgres steps are those routes' statements:
 
 ```mermaid
 sequenceDiagram

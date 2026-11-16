@@ -9,7 +9,8 @@ import type { AgentApp } from '../src/app.js'
 import type { Database } from '../src/db.js'
 import { MemoryEventSource } from '../src/events/bus.js'
 import { PgEventListener } from '../src/events/pgListener.js'
-import { PgMcpSessionRelay, type SessionOwner, sessionHash } from '../src/mcp/sessionRelay.js'
+import { CrudRelayRows, PgRelayRows, type RelayRows } from '../src/mcp/relayRows.js'
+import { SharedMcpSessionRelay, type SessionOwner, sessionHash } from '../src/mcp/sessionRelay.js'
 import { ResourceHub } from '../src/resources/hub.js'
 import { BACKEND, LOOPBACK, MCP_URL, testApp } from './helpers/mcp.js'
 import { InMemoryTokenStore } from './support/memoryTokens.js'
@@ -28,7 +29,7 @@ afterEach(() => backend.resetHandlers())
 afterAll(() => backend.close())
 
 /** A relay whose owner, armed, stalls its process once the first chunk of its next relayed answer has gone. */
-class StallingRelay extends PgMcpSessionRelay {
+class StallingRelay extends SharedMcpSessionRelay {
   stallAfterFirstChunk: (() => void) | undefined
 
   override serve(owner: SessionOwner): void {
@@ -61,12 +62,44 @@ class StallingRelay extends PgMcpSessionRelay {
   }
 }
 
-type Replica = { app: AgentApp; relay: PgMcpSessionRelay; listener: PgEventListener; bus: MemoryEventSource }
+type Replica = { app: AgentApp; relay: SharedMcpSessionRelay; listener: PgEventListener; bus: MemoryEventSource }
 
 const BEAT_MS = 100
 const ACK_TIMEOUT_MS = 1_000
 
-describe.skipIf(!TEST_DATABASE_URL)(`/mcp sessions across replicas${TEST_DATABASE_URL ? '' : ` (skipped: ${TEST_DATABASE_URL_ENV} is not set)`}`, () => {
+/**
+ * The backend's `mcp-relay` CRUD routes (api/crud_agent_mcp.py, whose SQL its pytest checks), as a
+ * fetch that answers each route with the agent's own SQL: the relay over `CrudRelayRows` sends
+ * every call through the wire shape, ids and all in the body.
+ */
+function crudRoutes(rows: RelayRows): typeof fetch {
+  return async (input, init) => {
+    const path = new URL(String(input)).pathname.replace(/^.*\/crud\/agent\/mcp-relay/, '')
+    const b = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+    const s = (k: string) => b[k] as string
+    const n = (k: string) => b[k] as number
+    const answers: Record<string, () => Promise<unknown>> = {
+      '/sessions': async () => (await rows.register(s('hash'), s('replica'), s('caller_key')), { done: true }),
+      '/sessions/touch': async () => (await rows.touch(s('hash')), { done: true }),
+      '/sessions/remove': async () => ({ done: await rows.remove(s('hash'), b.replica === undefined ? undefined : s('replica')) }),
+      '/sessions/owner': async () => ({ replica: (await rows.owner(s('hash'))) ?? null }),
+      '/counts': async () => await rows.counts(s('caller_key'), n('idle_seconds')),
+      '/send': async () => {
+        const header = b.header as { row?: string }
+        await rows.send(header, b.body === undefined ? undefined : { row: header.row!, value: b.body })
+        return { done: true }
+      },
+      '/rows/take': async () => ({ body: (await rows.take(s('row'))) ?? null }),
+      '/rows/withdraw': async () => ({ done: await rows.withdraw(s('row')) }),
+      '/sweep': async () => (await rows.sweep(n('idle_seconds')), { done: true }),
+    }
+    const answer = answers[path]
+    if (!answer) return new Response(null, { status: 404 })
+    return Response.json(await answer(), { headers: { 'x-scadbuddy-crud': '1' } })
+  }
+}
+
+describe.skipIf(!TEST_DATABASE_URL).each(['sql', 'crud'] as const)(`/mcp sessions across replicas, over %s${TEST_DATABASE_URL ? '' : ` (skipped: ${TEST_DATABASE_URL_ENV} is not set)`}`, (over) => {
   let db: Database
   let url: string
   let drop: () => Promise<void>
@@ -80,10 +113,12 @@ describe.skipIf(!TEST_DATABASE_URL)(`/mcp sessions across replicas${TEST_DATABAS
     mcp: { maxSessionsPerCaller?: number } = {},
     hears: (payload: string) => boolean = () => true,
     log: (message: string) => void = () => {},
-    Relay: typeof PgMcpSessionRelay = PgMcpSessionRelay,
+    Relay: typeof SharedMcpSessionRelay = SharedMcpSessionRelay,
   ): Replica {
     const listener = new PgEventListener(url, { searchPath: 'public', log: () => {} })
-    const relay = new Relay(db.sql, {
+    const sql = new PgRelayRows(db.sql)
+    const rows = over === 'sql' ? sql : new CrudRelayRows({ baseUrl: BACKEND, fetch: crudRoutes(sql) })
+    const relay = new Relay(rows, {
       listen: (c, f) => listener.listenAlso(c, (payload) => (hears(payload) ? f(payload) : undefined)),
       ackTimeoutMs: ACK_TIMEOUT_MS,
       beatMs: BEAT_MS,

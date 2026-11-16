@@ -423,6 +423,11 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   `parent` for the session named), the hop's timeout sweep, and a delivery's claim, hand back and
   skip, with the record of a run's own calls sent. Who may answer stays the agent's check. Tests
   `tests/crud/test_crud_agent_escalations.py`.
+  `api/crud_agent_mcp.py` (area `mcp-relay`, #5299 step 11) is the agent's `mcp/relayRows.ts`
+  `PgRelayRows` statement for statement: the /mcp session directory (`ai_mcp_sessions`), a relay
+  message's body row and its `scadbuddy_mcp` NOTIFY in one transaction (the header checked against
+  the relay's shapes and the NOTIFY payload cap), a row taken or withdrawn once, and the sweep.
+  Tests `tests/crud/test_crud_agent_mcp.py`.
 - `backend/scadbuddy/flow_triggers/` — runs started on a schedule or an event (#2484,
   spec 2026-10-11 §12): `store.py` (`flow_triggers`, their standing grants and fires),
   `fire.py` (the `flow_trigger_fire` activity on the `library` queue), `events.py` (the
