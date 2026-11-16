@@ -5,7 +5,8 @@ import { HttpResponse, http } from 'msw'
 import { describe, expect, it, vi } from 'vitest'
 import type { FilamentInventorySpool, Param, TrayPlace } from '../../api/types'
 import { spoolColour } from '../../lib/filamentColour'
-import { SB_INVENTORY, sbSpool } from '../../mocks/features/filament/inventory'
+import { inventoryRows } from '../../mocks/features/filament'
+import { sbSpool } from '../../mocks/features/filament/seed'
 import { server } from '../../mocks/server'
 import { ColorWidget } from './ColorWidget'
 
@@ -47,10 +48,19 @@ describe('a colour from a filament (#1026)', () => {
     await user.click(screen.getByRole('button', { name: 'Choose Plate' }))
     const list = await screen.findByRole('listbox', { name: 'Filaments for Plate' })
     const options = within(list).getAllByRole('option')
+    // The Filament section's seed (`mocks/features/filament/seed.ts`, #6262 Task 14).
     expect(options.map((option) => option.textContent)).toEqual([
       'Insignia PETG — Clear#8 · clear, no tint recorded',
+      'Bambu Lab PLA Basic — Black#4 · 3DP-31B-598 · AMS-A · slot 1 · 120 g',
+      'Elegoo PLA Silk — Gold#9 · 1000 g',
       'Bambu Lab PLA Basic — Mistletoe Green#11 · 1000 g',
       'Bambu Lab PLA Basic — Hot Pink#3 · 930 g',
+      'Bambu Lab PETG HF — Translucent Orange#2 · translucent · 820 g',
+      'Polymaker PETG — Clear#5 · translucent · 700 g',
+      'Bambu Lab PLA Basic — Jade White#1 · 640 g',
+      'PLA — Teal#6 · 500 g',
+      'Unknown#7 · 300 g',
+      'Sunlu TPU 95A — Red#10 · 250 g',
     ])
     // A clear spool with no tint has no colour to give.
     expect(options[0]).toHaveAttribute('aria-disabled', 'true')
@@ -146,7 +156,7 @@ describe('a colour from a filament (#1026)', () => {
   it('draws a clear spool as clear, never black (#2779 review)', async () => {
     const { user } = setup()
     await user.click(screen.getByRole('button', { name: 'Choose Plate' }))
-    const clear = await screen.findByRole('option', { name: /Clear/ })
+    const clear = await screen.findByRole('option', { name: /Insignia PETG — Clear/ })
     expect(within(clear).getByTestId('clear-swatch')).toBeInTheDocument()
     expect(clear.querySelector('[data-colour="#000000"]')).toBeNull()
   })
@@ -158,7 +168,7 @@ describe('a colour from a filament (#1026)', () => {
         await new Promise<void>((resolve) => (answer = resolve))
         // An explicit list, not a fall-through to the default handler, so what this
         // test checks cannot change with that handler.
-        return HttpResponse.json({ spools: SB_INVENTORY.filter((r) => !r.spool.archived_at), trays: [] })
+        return HttpResponse.json({ spools: inventoryRows(), trays: [] })
       }),
     )
     const { user } = setup()

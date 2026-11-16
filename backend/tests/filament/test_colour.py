@@ -41,7 +41,7 @@ def test_translucent() -> None:
     assert not is_translucent("#FFFFFFFF")
 
 
-#: The vectors `frontend/src/lib/filaments.test.ts` "sameOpacity" checks too (#6262 F11):
+#: The vectors `frontend/src/lib/rgba.test.ts` "sameOpacity" checks too (#6262 F11):
 #: the dialog's `seedPlan` and this helper must agree. Change both lists together.
 SAME_OPACITY = [
     ("#FFFFFF", "#FFFFFF80", False),

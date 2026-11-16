@@ -5,6 +5,7 @@ import { AppShell } from './components/AppShell'
 import { lazyRetry } from './lib/lazyRetry'
 import { ActivityPage } from './pages/ActivityPage'
 import { CataloguePage } from './pages/CataloguePage'
+import { FILAMENT_HOME, FILAMENT_TABS } from './pages/filament/tabs'
 
 // #2356 — every page but the catalogue is its own chunk, so the shell's entry chunk
 // carries no page's dependencies: three.js only loads with a page that draws in 3D.
@@ -17,6 +18,7 @@ const CustomerPage = lazyRetry(async () => ({ default: (await import('./pages/Cu
 const CustomersPage = lazyRetry(async () => ({ default: (await import('./pages/CustomersPage')).CustomersPage }))
 const CustomizePage = lazyRetry(async () => ({ default: (await import('./pages/CustomizePage')).CustomizePage }))
 const EditPage = lazyRetry(async () => ({ default: (await import('./pages/EditPage')).EditPage }))
+const FilamentPage = lazyRetry(async () => ({ default: (await import('./pages/filament/FilamentPage')).FilamentPage }))
 const FlowPage = lazyRetry(async () => ({ default: (await import('./pages/FlowPage')).FlowPage }))
 const HistoryPage = lazyRetry(async () => ({ default: (await import('./pages/HistoryPage')).HistoryPage }))
 const LibraryPage = lazyRetry(async () => ({ default: (await import('./pages/LibraryPage')).LibraryPage }))
@@ -109,6 +111,10 @@ export function App() {
         <Route path="prints/:archiveId" element={<PrintDetailPage />} />
         <Route path="prints/queue/:itemId" element={<QueueItemPage />} />
         <Route path="library/*" element={<LibraryPage />} />
+        <Route path="filament" element={<Navigate to={FILAMENT_HOME} replace />} />
+        {FILAMENT_TABS.filter((tab) => tab.available).map((tab) => (
+          <Route key={tab.id} path={tab.path} element={<FilamentPage tab={tab.id} />} />
+        ))}
         <Route path="orders" element={<OrdersPage />} />
         <Route path="orders/profit" element={<ProfitPage />} />
         <Route path="orders/parts" element={<PartsPage />} />

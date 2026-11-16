@@ -6,6 +6,7 @@ import type {
   SlotNeed,
   SpoolOption,
 } from '../api/types'
+import { sameOpacity } from './rgba'
 
 /**
  * View-model helpers for the filament picker (#87). No React and no fetching: the
@@ -38,21 +39,6 @@ export function trayChoiceLabel(spool: SpoolOption): string {
   const where = spool.label ?? (spool.loaded ? trayPlace(spool.loaded) : null)
   const what = [spool.material, spool.colour_word].filter(Boolean).join(' ')
   return where ? `${what} in ${where}` : what
-}
-
-function translucent(colour: string | null | undefined): boolean {
-  const hex = (colour ?? '').replace(/^#/, '')
-  return hex.length === 8 && parseInt(hex.slice(6, 8), 16) < 0xff
-}
-
-/**
- * #6262 — whether two colours are both opaque or both translucent (spec §5.1, plan
- * Decision 12): a translucent spool never matches an opaque slot by colour alone.
- * `#RRGGBB` and `null` read as opaque. Mirrors `same_opacity` in
- * `backend/scadbuddy/filament/colour.py`.
- */
-export function sameOpacity(left: string | null | undefined, right: string | null | undefined): boolean {
-  return translucent(left) === translucent(right)
 }
 
 /**

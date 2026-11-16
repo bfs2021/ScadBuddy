@@ -1,5 +1,4 @@
 import type {
-  FilamentInventoryView,
   PrintChoices,
   FilamentProfile,
   ProfilePreview,
@@ -410,7 +409,8 @@ function modelFilterParams({ q, tags, origin }: Omit<ModelFilters, 'sort'>): URL
   return query
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+/** A JSON call to `API_BASE` + `path`; a non-2xx answer throws `ApiError`. Feature clients (`api/filament.ts`) build on it. */
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await requestWithStatus<T>(path, init)).body
 }
 
@@ -2160,10 +2160,6 @@ export const api = {
     const suffix = search.size > 0 ? `?${search}` : ''
     return request<FilamentOptions>(`/print/outputs/${seg(outputId)}/filaments${suffix}`)
   },
-
-  /** #6262 Task 9 — ScadBuddy's spools, each with the registry tray it is in. */
-  getSpoolInventory: (includeArchived = false) =>
-    request<FilamentInventoryView>(`/filament/inventory${includeArchived ? '?include_archived=true' : ''}`),
 
   /**
    * spec 2026-09-27 §3 — one read for the whole spool-first print dialog: printers,

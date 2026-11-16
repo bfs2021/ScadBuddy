@@ -22,7 +22,7 @@ describe('Settings → Storefront pricing (#6153)', () => {
     const profile = await screen.findByRole('region', { name: 'Shop slice profile' })
     await choose(user, within(profile).getByRole('combobox', { name: 'Printer for storefront prices' }), '3DP-31B-598')
     await choose(user, await within(profile).findByRole('combobox', { name: 'Spool for PLA' }), /Hot Pink/)
-    await choose(user, within(profile).getByRole('combobox', { name: 'Spool for PETG' }), /Clear/)
+    await choose(user, within(profile).getByRole('combobox', { name: 'Spool for PETG' }), /Insignia PETG Clear/)
     await user.click(within(profile).getByRole('button', { name: 'Save slice profile' }))
     await waitFor(() => expect(put).toHaveBeenCalled())
     expect(put.mock.calls[0]?.[0]).toEqual({ storefront_slice_profile: { printer: H2C, spools: { pla: 3, petg: 8 } } })

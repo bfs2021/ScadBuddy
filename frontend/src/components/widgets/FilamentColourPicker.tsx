@@ -1,5 +1,6 @@
 import { useEffect, useId, useState } from 'react'
-import { api, ApiError } from '../../api/client'
+import { ApiError } from '../../api/client'
+import { getInventory } from '../../api/filament'
 import type { FilamentInventorySpool } from '../../api/types'
 import { trayPlace } from '../../lib/filaments'
 import { spoolColour, spoolName, spoolValue } from '../../lib/filamentColour'
@@ -45,7 +46,7 @@ export function FilamentColourPicker({
   // never lands anywhere.
   useEffect(() => {
     let live = true
-    api.getSpoolInventory().then(
+    getInventory().then(
       (view) => {
         if (live) setState({ kind: 'open', spools: [...(view.spools ?? [])].filter((row) => !row.spool.archived_at).sort(order) })
       },

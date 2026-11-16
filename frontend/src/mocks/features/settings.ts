@@ -3,7 +3,7 @@ import type { BambuddyStatus, ProfileSpool, Settings, StorefrontSliceProfile } f
 import * as fixtures from '../fixtures'
 import { state as orders } from './orders/state'
 import { printersState } from './printers'
-import { SB_INVENTORY } from './filament/inventory'
+import { inventoryRows } from './filament'
 import { forgetMockProjectTarget, forgetMockRemembered, mockRemembered, mockSettings, problem, setMockSettings } from '../handlers'
 
 /**
@@ -341,7 +341,7 @@ export const handlers = [
     // As the route: 422 for a printer the registry does not hold.
     if (printer && !printersState().some((row) => row.id === printer)) return problem(422, 'Unprocessable Content', `no printer ${printer}`)
     const spools: ProfileSpool[] = printer
-      ? SB_INVENTORY.filter((row) => !row.spool.archived_at).map(({ spool }) => ({
+      ? inventoryRows().map(({ spool }) => ({
           spool_id: spool.number,
           material: spool.names?.material ?? '',
           colour: spool.effective?.rgba ? spool.effective.rgba.slice(0, 7) : null,

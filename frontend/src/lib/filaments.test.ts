@@ -9,7 +9,6 @@ import {
   fromTrays,
   trayChoiceLabel,
   loadedLabel,
-  sameOpacity,
   seedPlan,
   slicedPlateSlots,
   slotNeed,
@@ -364,25 +363,6 @@ describe('seedPlan', () => {
       spools: [spool({ spool_id: 1 }), spool({ spool_id: 2 }), spool({ spool_id: 3, rgba: '#FF149380' })],
     }
     expect(seedPlan(clear, [{ slot_id: 2, spool_id: 3 }])).toEqual(options.suggested)
-  })
-})
-
-/** The backend's vectors (`tests/filament/test_colour.py` `SAME_OPACITY`), kept alike. */
-const SAME_OPACITY: [string | null, string | null, boolean][] = [
-  ['#FFFFFF', '#FFFFFF80', false],
-  ['#FFFFFF', null, true],
-  [null, null, true],
-  ['#FFFFFFFF', '#FFFFFF', true],
-  ['#FFFFFF80', '#00000010', true],
-  [null, '#FFFFFF80', false],
-  ['#FFFFFF80', null, false],
-  ['#ffffff80', '#FFFFFFFE', true],
-]
-
-describe('sameOpacity', () => {
-  it.each(SAME_OPACITY)('%s and %s: %s', (left, right, same) => {
-    expect(sameOpacity(left, right)).toBe(same)
-    expect(sameOpacity(right, left)).toBe(same)
   })
 })
 

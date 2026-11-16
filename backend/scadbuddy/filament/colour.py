@@ -29,7 +29,7 @@ def same_opacity(left: str | None, right: str | None) -> bool:
     """Whether two colours are both opaque or both translucent (spec §5.1, plan #6262
     Decision 12): a translucent spool never matches an opaque one by colour alone.
     ``#RRGGBB`` and ``None`` read as opaque. Mirrored by ``sameOpacity`` in
-    ``frontend/src/lib/filaments.ts``."""
+    ``frontend/src/lib/rgba.ts``."""
     return _translucent(left) == _translucent(right)
 
 

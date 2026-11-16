@@ -1,7 +1,7 @@
 import { http, HttpResponse } from 'msw'
 import type { ArchiveQuoteRequest, DensityFillRow, Filament, FilamentInput, FilamentSpool, FilamentPatch, OrderEstimate, PolicyUpdate, PriceBook, PricingPolicy, Quote, QuoteLine, SliceQuoteRequest, SpoolImportRow } from '../../../api/types'
 import { mockSettings, setMockSettings } from '../../handlers'
-import { SB_INVENTORY } from '../filament/inventory'
+import { inventoryRows } from '../filament'
 import { acceptOperation } from '../operations'
 import { FilamentsRefused, event, itemOf, lock, notEnded, quotesOf, rederive, requoteOpen, refused, SETTLED, TAKES_ITEMS, withFilaments } from './orders'
 import { machineRateFor } from './machineRates'
@@ -71,7 +71,7 @@ function names(spool: FilamentSpool) {
 
 export function mockDensity(f: { material: string; subtype?: string | null; brand?: string | null; colour: string | null; alpha?: number | null }): { density_g_cm3: string; profile: string } | null {
   const key = (x: { material: string; subtype?: string | null; brand?: string | null }, rgba: string | null) => [x.material, x.subtype ?? '', x.brand ?? '', rgba ?? ''].map((part) => part.trim().toUpperCase()).join('|')
-  const spool = SB_INVENTORY.map((row) => row.spool)
+  const spool = inventoryRows().map((row) => row.spool)
     .filter((s) => !s.archived_at && key(names(s), spoolRgba(s)) === key(f, recordRgba(f)))
     .sort((a, b) => b.number - a.number)[0]
   if (!spool) return null
@@ -101,7 +101,7 @@ function book(includeArchived = false): PriceBook {
 /** `orders/spool_import.py` over ScadBuddy's spools' mock (#4253 §8.3, #6262 Task 9). */
 function importSpools(): SpoolImportRow[] {
   const groups = new Map<string, FilamentSpool[]>()
-  for (const { spool } of SB_INVENTORY) {
+  for (const { spool } of inventoryRows()) {
     if (spool.archived_at || !spool.names?.material) continue
     const n = names(spool)
     // #6316: an opaque and a translucent spool of one hue are two filaments.
