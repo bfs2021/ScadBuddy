@@ -29,8 +29,14 @@ this order:
    ``created`` event with a ``bb`` reading of what is left, and its link.
 
 Catalog names from BB (material, subtype, brand, category, effect) resolve by their upper
-case name, and are added when missing. BB's ``core_weight_catalog_id`` names a BB spool
-catalog entry that has no SB insert type yet, so the insert type is not pulled.
+case name, and are added when missing. BB's spool catalog (``GET /inventory/catalog``,
+`BambuddyClient.spool_catalog`) is mapped once per pull (`_insert_types`): an entry is the
+insert type that has its id as ``bb_catalog_id``, else the unlinked one of the same upper
+case name (now linked), else a new one (its weight, no insert material). A type that
+exists is never rewritten. A BB spool's ``core_weight_catalog_id`` then sets the SB spool's
+insert type when the spool is made: its own when it has no spool type, else an override
+only when it differs from the spool type's. A catalog read that fails leaves the insert
+types alone and the spools are pulled (`PullReport.catalog_failed`).
 
 A pulled weight is an absolute reading at the BB row's ``updated_at``, not at the pull:
 BB's state is as of its last write (the ``created`` and every ``synced_from_bb`` event
@@ -59,7 +65,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from scadbuddy.bambuddy.client import client_for
 from scadbuddy.bambuddy.models import Spool as BbSpool
-from scadbuddy.bambuddy.models import SpoolAssignment
+from scadbuddy.bambuddy.models import SpoolAssignment, SpoolCatalogEntry
 from scadbuddy.core.problems import ApiError
 from scadbuddy.filament import ledger
 from scadbuddy.filament import models as m
@@ -116,7 +122,7 @@ class PullReport(BaseModel):
     those it made or linked still need a type, and how many it left alone because they
     are archived, with their ids; the BB spools it could not pull (each logged and rolled
     back); and the BB rows it could not read (each logged), with their ids when the row
-    had one."""
+    had one; and whether BB's spool catalog failed."""
 
     created: int = 0
     linked: int = 0
@@ -124,6 +130,8 @@ class PullReport(BaseModel):
     needs_type: int = 0
     archived: int = 0
     invalid: int = 0
+    #: BB's spool catalog could not be read or mapped; the insert types were left alone.
+    catalog_failed: bool = False
     created_ids: list[UUID] = Field(default_factory=list)
     linked_ids: list[UUID] = Field(default_factory=list)
     updated_ids: list[UUID] = Field(default_factory=list)
@@ -187,13 +195,24 @@ def _column_value(field: str, value: Any) -> Any:
 
 
 def pull(
-    store: Filament, spools: Sequence[BbSpool], *, now: datetime, actor: str = ACTOR
+    store: Filament,
+    spools: Sequence[BbSpool],
+    *,
+    now: datetime,
+    actor: str = ACTOR,
+    catalog: Sequence[SpoolCatalogEntry] = (),
 ) -> PullReport:
     """Pull ``spools`` (BB's ``GET /inventory/spools``) into ``store``, as the module
-    says. ``now`` is the link's time, and its ``bb_updated_at`` when BB sends none;
-    ``actor`` is who the events name (a person's import, else ``bambuddy``). One BB spool
-    that fails is rolled back, logged and listed; the rest go on."""
+    says, after ``catalog`` (BB's spool catalog) is mapped to insert types. ``now`` is the
+    link's time, and its ``bb_updated_at`` when BB sends none; ``actor`` is who the events
+    name (a person's import, else ``bambuddy``). One BB spool that fails is rolled back,
+    logged and listed; the rest go on, as when the catalog fails."""
     report = PullReport()
+    try:
+        _insert_types(store, catalog)
+    except Exception:
+        logger.warning("could not map Bambuddy's spool catalog", exc_info=True)
+        report.catalog_failed = True
     for bb in spools:
         try:
             with store.spools.transaction() as conn:
@@ -216,6 +235,63 @@ def pull(
     for what in ("created", "linked", "updated", "needs_type", "archived"):
         setattr(report, what, len(getattr(report, f"{what}_ids")))
     return report
+
+
+def _insert_types(store: Filament, catalog: Sequence[SpoolCatalogEntry]) -> None:
+    """Make each entry an insert type, in one transaction under its own advisory lock
+    (``0`` is no BB spool id): the type with its ``bb_catalog_id``, else the unlinked one
+    of the same upper case name, which takes the id, else a new one. A type that exists
+    keeps its name and weight. An entry with no name or no weight is skipped."""
+    with store.spools.transaction() as conn:
+        conn.execute("SELECT pg_advisory_xact_lock(%s, 0)", (_LOCK,))
+        for entry in catalog:
+            name = _text(entry.name)
+            if name is None or entry.weight <= 0:
+                logger.warning(
+                    "a Bambuddy spool catalog entry has no name or weight; skipped",
+                    extra={"bb_catalog_id": entry.id},
+                )
+                continue
+            if conn.execute(
+                "SELECT 1 FROM filament_insert_types WHERE bb_catalog_id = %s", (entry.id,)
+            ).fetchone():
+                continue
+            linked = conn.execute(
+                "UPDATE filament_insert_types SET bb_catalog_id = %s, updated_at = now()"
+                " WHERE upper(name) = upper(%s) AND archived_at IS NULL"
+                " AND bb_catalog_id IS NULL",
+                (entry.id, name),
+            )
+            if linked.rowcount:
+                continue
+            if conn.execute(
+                "SELECT 1 FROM filament_insert_types WHERE upper(name) = upper(%s)"
+                " AND archived_at IS NULL",
+                (name,),
+            ).fetchone():
+                # Another BB entry already has this name's type.
+                logger.warning(
+                    "a Bambuddy spool catalog entry shares a name with another's type; skipped",
+                    extra={"bb_catalog_id": entry.id},
+                )
+                continue
+            conn.execute(
+                "INSERT INTO filament_insert_types"
+                " (name, sort_order, empty_weight_g, bb_catalog_id)"
+                " VALUES (%s, %s, %s, %s)",
+                (name, _ADDED_SORT, entry.weight, entry.id),
+            )
+
+
+def _core_insert_type(conn: Conn, bb: BbSpool) -> UUID | None:
+    """The insert type BB's ``core_weight_catalog_id`` is, once the catalog is mapped."""
+    if bb.core_weight_catalog_id is None:
+        return None
+    row = conn.execute(
+        "SELECT id FROM filament_insert_types WHERE bb_catalog_id = %s",
+        (bb.core_weight_catalog_id,),
+    ).fetchone()
+    return None if row is None else row["id"]
 
 
 def _one(
@@ -454,6 +530,9 @@ def _create(
         typed = kind.model_dump()
         values = {c: v for c, v in values.items() if c not in typed or typed[c] != v}
         values["type_id"] = kind.id
+    insert_id = _core_insert_type(conn, bb)
+    if insert_id is not None and (kind is None or kind.insert_type_id != insert_id):
+        values["insert_type_id"] = insert_id
     if not values.get("weight_locked"):
         values.pop("weight_locked", None)
     names = list(values)
@@ -841,7 +920,11 @@ async def read_and_pull(
     async with client_for(settings) as client:
         rows = await client.spool_rows()
     spools, bad = parse_rows(rows)
-    report = await asyncio.to_thread(pull, store, spools, now=datetime.now(UTC), actor=actor)
+    catalog = await read_catalog(settings)
+    report = await asyncio.to_thread(
+        lambda: pull(store, spools, now=datetime.now(UTC), actor=actor, catalog=catalog or ())
+    )
+    report.catalog_failed = report.catalog_failed or catalog is None
     report.invalid = len(bad)
     report.invalid_bb_ids = [i for i in bad if i is not None]
     return report
@@ -852,6 +935,30 @@ async def read_and_pull(
 #: `CHECK_BUDGET_SECONDS`), so it may take at most part of it; the client's own 30 s
 #: would take all of it.
 ASSIGNMENTS_TIMEOUT = 2.5
+
+
+#: How long :func:`read_catalog` waits for Bambuddy: the catalog is the pull's second
+#: read, and a slow one must not hold the spools back (the client's own 30 s would).
+CATALOG_TIMEOUT = 5.0
+
+
+async def read_catalog(settings: StoredSettings) -> list[SpoolCatalogEntry] | None:
+    """Bambuddy's spool catalog (``GET /inventory/catalog``), or ``None``, logged, when
+    Bambuddy refuses, answers in another shape or no JSON (it has no such route before
+    1.2.6b1), or does not answer within :data:`CATALOG_TIMEOUT`: the pull then leaves the
+    insert types alone. Bounded and a wait on Bambuddy as `read_assignments` is."""
+    async with waiting_on_bambuddy():
+        try:
+            async with asyncio.timeout(CATALOG_TIMEOUT), client_for(settings) as client:
+                return await client.spool_catalog()
+        except TimeoutError:
+            logger.warning("no spool catalog from Bambuddy: no answer within %s s", CATALOG_TIMEOUT)
+        except ApiError as error:
+            logger.warning("no spool catalog from Bambuddy: %s", error.detail)
+        except ValueError as error:
+            # A pydantic ValidationError (another shape) or a JSONDecodeError (no JSON).
+            logger.warning("no spool catalog from Bambuddy: an answer of another shape: %s", error)
+    return None
 
 
 async def read_assignments(settings: StoredSettings) -> list[SpoolAssignment]:

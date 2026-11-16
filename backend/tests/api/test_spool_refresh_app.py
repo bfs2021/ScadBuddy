@@ -79,6 +79,7 @@ def test_a_schedule_refreshes_bambuddys_records(settings: Settings) -> None:
             json=recording("inventory-spools.json")
         )
         bambuddy.get(f"{BAMBUDDY}/api/v1/inventory/assignments").respond(json=[])
+        bambuddy.get(f"{BAMBUDDY}/api/v1/inventory/catalog").respond(json=[])
         bambuddy.route(host="testserver").pass_through()
         with TestClient(create_app(configured)) as client:
             state = _state(client)

@@ -17,6 +17,7 @@ import respx
 from psycopg.types.json import Jsonb
 
 from scadbuddy.bambuddy.models import Spool as BbSpool
+from scadbuddy.bambuddy.models import SpoolCatalogEntry
 from scadbuddy.filament.bambuddy_pull import (
     ASSIGNMENTS_TIMEOUT,
     pull,
@@ -29,11 +30,13 @@ from scadbuddy.filament.component import Filament
 from scadbuddy.filament.inventory import FilamentInventory
 from scadbuddy.filament.locations import LocationStore
 from scadbuddy.filament.models import (
+    InsertType,
     InsertTypeCreate,
     Material,
     SpoolCreate,
     SpoolPatch,
     SpoolTypeCreate,
+    SpoolTypePatch,
 )
 from scadbuddy.filament.presets import PoolSpoolPresets
 from scadbuddy.filament.print_uses import SlotUse, record_uses, settle_uses
@@ -607,6 +610,7 @@ async def test_a_pull_reads_bambuddy_and_imports(pg_pool: PgPool) -> None:
     settings = StoredSettings(bambuddy_url=BB, bambuddy_api_key="k")
     with respx.mock() as router:
         router.get(f"{BB}/api/v1/inventory/spools").respond(json=[bb().model_dump(mode="json")])
+        router.get(f"{BB}/api/v1/inventory/catalog").respond(json=[])
         report = await read_and_pull(f, settings)
         assert report.created == 1
         assert await scheduled_pull(f, lambda: settings) == "pulled"
@@ -840,6 +844,7 @@ async def test_a_malformed_bb_row_is_skipped_and_counted(
     rows = [bb().model_dump(mode="json"), {"id": 99, "material": None}, "nonsense"]
     with respx.mock() as router:
         router.get(f"{BB}/api/v1/inventory/spools").respond(json=rows)
+        router.get(f"{BB}/api/v1/inventory/catalog").respond(json=[])
         report = await read_and_pull(f, settings)
     assert (report.created, report.invalid, report.invalid_bb_ids) == (1, 2, [99])
     assert "is not a spool; skipped" in caplog.text
@@ -961,3 +966,99 @@ async def test_the_assignment_read_names_bambuddy_only_while_it_waits() -> None:
         assert waiting == [True]
     finally:
         CHECK_ON_BAMBUDDY.reset(token)
+
+
+def _entry(entry_id: int = 5, name: str = "Bambu reusable", weight: int = 250) -> SpoolCatalogEntry:
+    return SpoolCatalogEntry(id=entry_id, name=name, weight=weight)
+
+
+def _insert_types(f: Filament) -> list[InsertType]:
+    return [r for r in f.catalog.list("insert-types") if isinstance(r, InsertType)]
+
+
+def test_a_bb_catalog_entry_becomes_an_insert_type(pg_pool: PgPool) -> None:
+    f = _filament(pg_pool)
+    pull(f, [], now=NOW, catalog=[_entry()])
+    (kind,) = _insert_types(f)
+    assert (kind.name, kind.empty_weight_g, kind.bb_catalog_id) == ("Bambu reusable", 250, 5)
+    assert kind.insert_material_id is None
+
+
+def test_a_second_pull_reuses_it(pg_pool: PgPool) -> None:
+    f = _filament(pg_pool)
+    pull(f, [], now=NOW, catalog=[_entry()])
+    pull(f, [], now=NOW, catalog=[_entry(name="Bambu reusable v2", weight=260)])
+    (kind,) = _insert_types(f)
+    assert kind.bb_catalog_id == 5
+    # The pull creates and links; it never rewrites a type a person may have edited.
+    assert (kind.name, kind.empty_weight_g) == ("Bambu reusable", 250)
+
+
+def test_an_unlinked_insert_type_of_the_same_name_is_linked(pg_pool: PgPool) -> None:
+    f = _filament(pg_pool)
+    own = f.catalog.create(
+        "insert-types", InsertTypeCreate(name="bambu REUSABLE", empty_weight_g=240)
+    ).model_dump()
+    pull(f, [], now=NOW, catalog=[_entry()])
+    (kind,) = _insert_types(f)
+    assert (kind.id, kind.bb_catalog_id, kind.empty_weight_g) == (own["id"], 5, 240)
+
+
+def test_a_spool_takes_its_core_weight_insert_type(pg_pool: PgPool) -> None:
+    f = _filament(pg_pool)
+    typed = f.types.create(
+        SpoolTypeCreate(
+            code="GFA00-RED", material_id=_pla(pg_pool), rgba="#FF0000FF", label_weight_g=1000
+        )
+    )
+    catalog = [_entry(5, "Bambu reusable", 250), _entry(6, "Bambu cardboard", 212)]
+    none: dict[str, Any] = {"tag_uid": None, "tray_uuid": None}
+    report = pull(
+        f,
+        [
+            bb(id=1, core_weight_catalog_id=5, **none),
+            bb(id=2, material_number="GFA00-RED", core_weight_catalog_id=6, **none),
+        ],
+        now=NOW,
+        catalog=catalog,
+    )
+    inserts = {k.bb_catalog_id: k.id for k in _insert_types(f)}
+    by_id = {s.id: s for s in f.spools.list()}
+    typeless, with_type = (by_id[i] for i in report.created_ids)
+    assert typeless.type_id is None and typeless.insert_type_id == inserts[5]
+    assert with_type.type_id == typed.id and with_type.insert_type_id == inserts[6]
+    # The type's own insert type is no override.
+    f.types.update(typed.id, SpoolTypePatch(insert_type_id=inserts[5]))
+    same = pull(
+        f,
+        [bb(id=3, material_number="GFA00-RED", core_weight_catalog_id=5, **none)],
+        now=NOW,
+        catalog=catalog,
+    )
+    spool = f.spools.get(same.created_ids[0])
+    assert spool is not None
+    assert (spool.type_id, spool.insert_type_id) == (typed.id, None)
+
+
+@respx.mock
+async def test_a_failed_catalog_read_pulls_the_spools_anyway(
+    pg_pool: PgPool, caplog: pytest.LogCaptureFixture
+) -> None:
+    f = _filament(pg_pool)
+    pull(f, [], now=NOW, catalog=[_entry()])
+    settings = StoredSettings(bambuddy_url=BB, bambuddy_api_key="k")
+    respx.get(f"{BB}/api/v1/inventory/spools").respond(
+        json=[bb(core_weight_catalog_id=5).model_dump(mode="json")]
+    )
+    route = respx.get(f"{BB}/api/v1/inventory/catalog")
+    route.respond(503)
+    report = await read_and_pull(f, settings)
+    assert (report.catalog_failed, report.created) == (True, 1)
+    assert "no spool catalog from Bambuddy" in caplog.text
+    # An answer of another shape is a failed read too, and a good read says so.
+    route.respond(200, json={"not": "a list"})
+    assert (await read_and_pull(f, settings)).catalog_failed is True
+    route.respond(200, json=[{"id": 5, "name": "Bambu reusable", "weight": 250}])
+    assert (await read_and_pull(f, settings)).catalog_failed is False
+    (kind,) = _insert_types(f)
+    assert kind.bb_catalog_id == 5

@@ -273,6 +273,8 @@ class InsertType(_Catalog):
     empty_weight_g: int
     insert_material_id: UUID | None
     note: str | None
+    #: Bambuddy's spool catalog entry this type is (the pull sets it; read only).
+    bb_catalog_id: int | None = None
 
 
 class ColourCreate(_In):

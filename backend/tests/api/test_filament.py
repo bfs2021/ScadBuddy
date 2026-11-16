@@ -398,6 +398,7 @@ def test_the_bambuddy_import_pulls_once_then_changes_nothing(client: TestClient)
         "updated_at": "2026-11-14T10:00:00",
     }
     route = respx.get(f"{API}/inventory/spools").mock(return_value=httpx.Response(200, json=[bb]))
+    respx.get(f"{API}/inventory/catalog").mock(return_value=httpx.Response(200, json=[]))
     first = client.post(IMPORT_BB)
     assert first.status_code == 200, first.text
     report = first.json()

@@ -1138,6 +1138,17 @@ class SpoolFilamentPreset(BambuddyModel):
     slicer_filament_name: str | None = None
 
 
+class SpoolCatalogEntry(BambuddyModel):
+    """``GET /api/v1/inventory/catalog`` — one empty-spool entry (``CatalogEntry`` in
+    Bambuddy 1.2.6b1's OpenAPI, spec 2026-11-14 §3): ``weight`` is the empty spool's grams.
+    A spool's ``core_weight_catalog_id`` names one. Recording:
+    ``tests/bambuddy/recordings/inventory-catalog.json``."""
+
+    id: int
+    name: str
+    weight: int
+
+
 class SpoolAssignment(BambuddyModel):
     """``GET /api/v1/inventory/assignments`` — which spool sits in which tray.
 

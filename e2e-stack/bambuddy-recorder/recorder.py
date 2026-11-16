@@ -2,7 +2,7 @@
 Task 12).
 
 The stack's ``bambuddy_url`` points here, so a hot-path call to Bambuddy both fails
-(``599``, no status Bambuddy sends) and is listed. Two reads are answered, because the
+(``599``, no status Bambuddy sends) and is listed. Three reads are answered, because the
 spool overlay's refresh makes them on its own Schedule, off the hot path (plan D1,
 Task 6b), and the stack's seed runs it once before resetting the list:
 
@@ -10,9 +10,11 @@ Task 6b), and the stack's seed runs it once before resetting the list:
   ``RECORDER_TAGGED_SPOOL_ID`` (2) given the fake printer's tagged tray's ``tray_uuid``
   and ``tag_uid`` (``e2e-stack/fake-printer/report.json``, AMS 0 tray 0), so the overlay
   links it by RFID;
-- ``GET /api/v1/inventory/assignments`` from ``answers/inventory-assignments.json``.
+- ``GET /api/v1/inventory/assignments`` from ``answers/inventory-assignments.json``;
+- ``GET /api/v1/inventory/catalog`` from ``answers/inventory-catalog.json`` (#6262: the pull
+  maps it to insert types; built by hand, see the recordings README).
 
-Both files are verbatim copies of ``backend/tests/bambuddy/recordings/`` (Bambuddy
+The files are verbatim copies of ``backend/tests/bambuddy/recordings/`` (Bambuddy
 1.2.5.5, recorded 2026-09-23; that folder's README says how), copied because this
 image's build context is its own folder. A trailing slash and a query string do not
 change which path answers.
@@ -53,6 +55,7 @@ def _answers(tagged_spool_id: int) -> dict[str, Any]:
     return {
         "/api/v1/inventory/spools": spools,
         "/api/v1/inventory/assignments": assignments,
+        "/api/v1/inventory/catalog": json.loads((ANSWERS / "inventory-catalog.json").read_text()),
     }
 
 
