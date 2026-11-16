@@ -440,7 +440,7 @@ frontend/e2e/filament.spec.ts                                        Task 20
 
 **Interfaces:**
 - `ShelfSpool`: `id: int` is the SB `number`; gains `rgba: str | None` (`#RRGGBBAA`); `loaded_printer_id: int | None` becomes `loaded_printer: str | None` (registry id). Built from `FilamentInventory.rows(include_archived=True)`.
-- Task 7 left `item_plan` merging supplied SB numbers (the agent and dialog send `ids: "sb"`) with BB-id fills and returning a `"bb"` plan; this task makes it all SB. Its tests supply an SB number that differs from every BB id.
+- Task 7 left `item_plan` merging supplied SB numbers (the agent and dialog send `ids: "sb"`) with BB-id fills and returning a `"bb"` plan; this task makes it all SB. Its tests supply an SB number that differs from every BB id. One test takes the plan from the quote (Task 8 rewrote stored quotes to `"sb"`), not only a supplied one.
 - `item_plan(store, inventory: FilamentInventory, item_id, plan, printer: str | None)`; it no longer needs Bambuddy (`integrations.linked` check removed); its plan has `ids="sb"`.
 - `record_rgba(record: Filament) -> str` = `record.colour + f"{record.alpha:02X}"` (`orders/spools.py`); `_of` compares `spool.rgba` with the link's `spool_colour` + record alpha, else `record_rgba(record)`, and is false unless `same_opacity` holds — never RGB alone (#6316 reader 3).
 - `spool_import.py`: groups are SB spools by effective (material, subtype, brand, RGBA); `_by_colour` and the `colour_taken` check compare `#RRGGBBAA` (#6316 readers 1 and 2); `spool_ids` are SB numbers; the cost is the newest priced spool's `cost_per_kg` (highest `number`).
@@ -728,3 +728,6 @@ fewer clicks; the builder cites the Bambu Studio source they compare against.
 - Task 7 (re-review): the filament step names each option's preset for the printer's mounted nozzle when the route knows it (`options.nozzles`), else 0.4.
 - Task 7 (re-review 2): the pull's preset sync locks the spool row first (advisory → tags → spool), so a person's concurrent PUT /presets is never overwritten or deleted.
 - Task 7 (re-review 3): only a `migrated` row that still holds Bambuddy's last value counts as Bambuddy's; a person's row is never rewritten by the pull, even when it holds the same value.
+- Task 8 (review): a `print_batch_items` row whose outcome is `pending` or `started` keeps its `request` and `refused_request` unchanged, so the next Queue all resends the same body, keeps its `request_id` and run key, and attaches to the run instead of starting a second print; its unmarked plan maps at read (Task 7).
+- Task 8: remembered choices are a bare list with no `ids`; every reader (frontend and agent `seedPlan`) treats their numbers as SB numbers and submits with `ids: "sb"`, so they are rewritten without a marker. A second run of the file would map them again: only the migration ledger prevents that.
+- Task 8 (PR body): the storefront profile's rewrite changes `profile_digest`, so cached storefront slices miss once and slice again; a material whose spool has no BB→SB link is dropped and its listings show no price until a spool is picked.
