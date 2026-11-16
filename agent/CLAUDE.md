@@ -197,9 +197,18 @@ entries; who may answer is still checked here first, and every write of an answe
 names the parent session again (the hop's timeout sweep and the record of a run's own calls sent
 name none). A delivery's claim is committed on the API before its turn starts, and handed back
 (`unclaim`) when the turn does not start; a process that dies between the two leaves the calls
-marked sent, and each still reaches the person when its hop ends. The parent's owner and the
-child's reasoning (`ai_sessions`, `ai_session_events`) stay SQL until the sessions move (step 9).
-Test `test/crudEscalations.test.ts`. Area `mcp-relay` (#5299 step 11, `RELAY_AREAS`, backend
+marked sent, and each still reaches the person when its hop ends. The parent's owner is read
+from the `sessions` area's row, and the child's reasoning through area `session-reads` (#6501).
+Test `test/crudEscalations.test.ts`. The NOTIFYs sent outside a store's write (#6501, backend
+`api/crud_agent_publish.py`, `src/sessions/publish.ts` `Publisher`: `PgPublisher`,
+`CrudPublisher`) go through area `publish`: a `session.*` bus event (`SessionEventPublisher`)
+and a warm eviction (a handoff's), which the API NOTIFYs on the same channels. A session's open
+calls (a restarted turn's finished calls; a forget's terminations stay SQL until it moves) and a child's reasoning
+before a call go through area `session-reads` (`src/sessions/sessionReads.ts`
+`PgSessionReads`, `CrudSessionReads`), and a session's owner as a tool call
+(`toolActivities.ts` `RowSessionOwners`), a flow run's call (`flowRuns.ts`, `flowSessions.ts`)
+and an escalation read it, from the `sessions` area's row (`SessionRows.get`). Test
+`test/crudPublish.test.ts`. Area `mcp-relay` (#5299 step 11, `RELAY_AREAS`, backend
 `api/crud_agent_mcp.py`, `src/mcp/relayRows.ts` `CrudRelayRows` behind `RelayRows`, which
 `SharedMcpSessionRelay` takes) takes the /mcp session relay's directory (`ai_mcp_sessions`) and
 messages (`ai_mcp_relay_messages`): a session hash, a replica, a request and a row id travel in the
