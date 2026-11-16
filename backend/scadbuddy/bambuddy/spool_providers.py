@@ -69,7 +69,7 @@ def snapshot(spool: Spool, where: SpoolLocation | None = None) -> SpoolSnapshot:
 class BambuddyProvider:
     name = "bambuddy"
     label = "Bambuddy"
-    #: Behind ScadBuddy's own inventory (`spools/spool_providers.py`, 10), ahead of others.
+    #: The only provider since #6262 Task 11; ahead of any later one.
     priority = 100
 
     def __init__(self, load: Callable[[], StoredSettings]) -> None:

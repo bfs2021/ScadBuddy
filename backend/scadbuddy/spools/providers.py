@@ -20,7 +20,6 @@ from scadbuddy.core.components import Components, feature_exports
 from scadbuddy.library.settings_store import StoredSettings
 from scadbuddy.printers.models import PrinterRow
 from scadbuddy.spools.models import SeenTray, SpoolSnapshot
-from scadbuddy.spools.native import NativeSpoolStore
 
 PROVIDER_MODULE = "spool_providers"
 PROVIDER_ATTR = "SPOOL_PROVIDERS"
@@ -77,13 +76,11 @@ class ProviderCore(Protocol):
 @dataclass(frozen=True)
 class SettingsOnly:
     """The :class:`ProviderCore` of a process with no `Core`: the settings read through
-    the API's CRUD route, and ScadBuddy's own spools through its CRUD routes
-    (`crud/print.py` `RemoteNativeSpools`, #5298 Task 31), so a provider's build there
-    opens no pool. No process builds one since #6262 Task 6 (the print worker was the
-    one); #6262 Task 12 drops it with the overlay."""
+    the API's CRUD route, so a provider's build there opens no pool. No process builds
+    one since #6262 Task 6 (the print worker was the one); #6262 Task 12 drops it with
+    the overlay."""
 
     settings_store: ProviderSettings
-    native_spools: NativeSpoolStore
 
 
 #: Builds a feature's provider over the core services and the components, which are

@@ -699,10 +699,6 @@ export const TOUCHES_NOTHING: ReadonlySet<string> = new Set([
   // SB spool to the tray's place, a `moved` ledger event; nothing else changes).
   'link_tray_spool',
   'unlink_tray_spool',
-  // ScadBuddy's own spools (#4643, filament_spools rows since #6261) are no recorded resource kind: the
-  // shelf lists them, and the overlay's cached copy follows each write.
-  'native_spool_upsert',
-  'native_spool_delete',
   // The filament inventory (#6261: catalogs, types, spools, tags, the ledger, locations)
   // is no recorded resource kind either; each spool's ledger is its own history.
   'filament_catalog_upsert',
@@ -710,6 +706,8 @@ export const TOUCHES_NOTHING: ReadonlySet<string> = new Set([
   'filament_type_set_presets',
   'filament_type_set_k_values',
   'filament_spool_upsert',
+  'filament_spool_set_presets',
+  'filament_spool_set_k_values',
   'filament_spool_archive',
   'filament_spool_delete',
   'filament_spool_bind_tag',

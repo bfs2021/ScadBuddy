@@ -1,7 +1,7 @@
-"""The print worker's spools, ScadBuddy's own spools, the kept presets and a native
-slice's start through its CRUD routes (#5298 Task 31, inventory Q28-Q30): the reads answer
+"""The print worker's spools, the kept presets and a native
+slice's start through its CRUD routes (#5298 Task 31, inventory Q28, Q30): the reads answer
 as the SQL stores do, a natural write sent twice leaves what one left, a provider's
-records and a run's settle answer once per ``Idempotency-Key`` (428 without one), a
+records answer once per ``Idempotency-Key`` (428 without one), a
 native slice's start sent twice starts once, another caller's credential is refused, and
 every method the worker does not call is refused on it. Invented tags only (spec
 2026-10-01 §7)."""
@@ -20,7 +20,6 @@ from typing import Any
 import httpx
 import pytest
 from fastapi import FastAPI
-from psycopg.types.json import Jsonb
 
 from scadbuddy.api import crud_print
 from scadbuddy.api.components import getter_for
@@ -43,24 +42,19 @@ from scadbuddy.crud.print import (
     DEADLINE_MARGIN,
     HELD_PRESETS_API_ONLY,
     NATIVE_SLICES_API_ONLY,
-    NATIVE_SPOOLS_API_ONLY,
     PAST_DEADLINE,
     SLICE_SUBJECT,
     SPOOLS_API_ONLY,
     ApiOnlyError,
     RemoteHeldPresets,
     RemoteNativeSlices,
-    RemoteNativeSpools,
     RemoteSpoolStore,
 )
-from scadbuddy.filament.print_uses import SlotUse, record_uses
-from scadbuddy.filament.spools import FilamentSpoolStore
 from scadbuddy.library.settings_store import SettingsStore
 from scadbuddy.slicing.held_presets import HeldPresetStore
 from scadbuddy.slicing.store import NativeSliceStore, SliceSubjectError
 from scadbuddy.spools.component import SPOOLS
 from scadbuddy.spools.models import SeenTray, SpoolSnapshot
-from scadbuddy.spools.native import NativeSpoolCreate, NativeSpoolStore
 from scadbuddy.spools.store import SpoolStore
 from scadbuddy.worker import PRINT_CRUD_AREAS
 from tests.conftest import UNUSED_TEMPORAL_ADDRESS
@@ -76,7 +70,6 @@ RUN = "run-5298-spools"
 #: others of the store's own, each of which the worker sends over a route. None here.
 STORES: list[tuple[type, type, tuple[str, ...], set[str]]] = [
     (SpoolStore, RemoteSpoolStore, SPOOLS_API_ONLY, set()),
-    (NativeSpoolStore, RemoteNativeSpools, NATIVE_SPOOLS_API_ONLY, set()),
     (HeldPresetStore, RemoteHeldPresets, HELD_PRESETS_API_ONLY, set()),
     (NativeSliceStore, RemoteNativeSlices, NATIVE_SLICES_API_ONLY, set()),
 ]
@@ -130,9 +123,7 @@ def test_a_method_only_the_api_calls_is_refused(remote: type, name: str) -> None
 def test_the_worker_stores_hold_no_pool() -> None:
     with pytest.raises(ApiOnlyError):
         _ = RemoteSpoolStore(None).pool  # type: ignore[arg-type]
-    with pytest.raises(ApiOnlyError):
-        _ = RemoteNativeSpools(None).pool  # type: ignore[arg-type]
-    # Neither SQL store has a public pool; the remote ones keep none of their own.
+    # Neither of these SQL stores has a public pool; the remote ones keep none of their own.
     assert not hasattr(RemoteHeldPresets(None), "_pool")  # type: ignore[arg-type]
     assert not hasattr(RemoteNativeSlices(None), "_pool")  # type: ignore[arg-type]
 
@@ -374,11 +365,7 @@ async def test_the_reads_answer_as_the_sql_stores(
     store: SettingsStore, crud: CrudClient, blocking: CrudSyncClient
 ) -> None:
     sql = SpoolStore(store.pool)
-    native = NativeSpoolStore(store.pool)
     held = HeldPresetStore(store.pool)
-    made = native.create(NativeSpoolCreate(material="PLA", colour="#FF0000", tag_uid=TAG))
-    native.create(NativeSpoolCreate(material="PETG"))
-    await sql.replace_records("native", [spool.snapshot() for spool in native.list()], NOW)
     await sql.replace_records(
         "bambuddy", [SpoolSnapshot(record_id="16", material="PLA", tag_uid=TAG)], NOW
     )
@@ -386,18 +373,11 @@ async def test_the_reads_answer_as_the_sql_stores(
     await held.keep(_preset(9))
 
     trays = [_tray(), _tray(None)]
-    ask: dict[str, Any] = {"now": NOW, "providers": ["native", "bambuddy"]}
+    ask: dict[str, Any] = {"now": NOW, "providers": ["bambuddy"]}
     remote = RemoteSpoolStore(crud)
     assert await remote.overlay(PRINTER, trays, **ask) == await sql.overlay(PRINTER, trays, **ask)
     overlay = await remote.overlay(PRINTER, trays, **ask)
-    assert overlay.trays[0].records["native"].record_id == str(made.id)
-
-    remote_native = RemoteNativeSpools(blocking)
-    assert await asyncio.to_thread(remote_native.list) == native.list()
-    assert await asyncio.to_thread(
-        lambda: remote_native.list(include_archived=True)
-    ) == native.list(include_archived=True)
-    assert await asyncio.to_thread(remote_native.any) is True
+    assert overlay.trays[0].records["bambuddy"].record_id == "16"
 
     remote_held = RemoteHeldPresets(crud)
     assert await remote_held.rows() == await held.rows()
@@ -409,26 +389,12 @@ async def test_the_reads_answer_as_the_sql_stores(
 async def test_natural_writes_sent_twice_leave_what_one_left(
     store: SettingsStore, crud: CrudClient, blocking: CrudSyncClient
 ) -> None:
-    native = NativeSpoolStore(store.pool)
-    spool = native.create(NativeSpoolCreate(material="PLA", remaining_g=100))
     remote = RemoteSpoolStore(crud)
     await remote.failed("bambuddy", NOW, "ConnectError")
     once = _rows(store, "spool_provider_refreshes")
     await remote.failed("bambuddy", NOW, "ConnectError")
     assert _rows(store, "spool_provider_refreshes") == once
     assert [(row["provider"], row["failure"]) for row in once] == [("bambuddy", "ConnectError")]
-
-    # A print worker's from before #6262 Task 6, across the deploy: its uses booked once.
-    body = {
-        "run_id": RUN,
-        "subtask_name": "p1",
-        "uses": [{"slot_id": 1, "spool_id": str(spool.id), "grams": 12.5}],
-    }
-    blocking.request("POST", f"{BASE}/native-spools/uses", json=body)
-    once = _rows(store, "filament_spool_events")
-    blocking.request("POST", f"{BASE}/native-spools/uses", json=body)
-    assert _rows(store, "filament_spool_events") == once
-    assert [row["kind"] for row in once].count("print_started") == 1
 
 
 @pytest.mark.requires_postgres
@@ -463,37 +429,6 @@ async def test_a_providers_records_are_written_once_per_key(
 
 
 @pytest.mark.requires_postgres
-async def test_a_runs_settle_answers_once_per_key(
-    store: SettingsStore, crud: CrudClient, blocking: CrudSyncClient
-) -> None:
-    """A print worker's settle from before #6262 Task 6, across the deploy: settled as
-    ``…/filament/print-uses/settle`` settles it, naming no spool."""
-    native = NativeSpoolStore(store.pool)
-    spool = native.create(NativeSpoolCreate(material="PLA", remaining_g=100))
-    started = datetime.now(UTC)
-    use = SlotUse(slot_id=1, spool_id=spool.id, grams=12.5, plate_started_at=started)
-    record_uses(store.pool, RUN, "p1", [use])
-    with store.pool.connection() as conn:
-        conn.execute(
-            "INSERT INTO print_runs (id, output_id, idempotency_key, status, result)"
-            " VALUES (%s, 'out', 'k', 'succeeded', %s)",
-            (RUN, Jsonb({"lan": [{"subtask_name": "p1"}]})),
-        )
-    body = {"run_id": RUN, "stages": ["done"]}
-    url = f"{BASE}/native-spools/uses/settle"
-    with pytest.raises(CrudRefusedError) as keyless:
-        await crud.request("POST", url, json=body)
-    assert keyless.value.status == 428
-    first = await crud.request("POST", url, json=body, idempotency_key="settle-1")
-    again = await crud.request("POST", url, json=body, idempotency_key="settle-1")
-    assert first.json() == again.json() == {"changed": []}
-    after = native.get(spool.id)
-    assert after is not None and after.remaining_g == 87.5
-    ended = [e for e in FilamentSpoolStore(store.pool).events(spool.id) if e.kind == "print_ended"]
-    assert len(ended) == 1
-
-
-@pytest.mark.requires_postgres
 async def test_a_native_slice_sent_twice_starts_once(
     store: SettingsStore, crud: CrudClient
 ) -> None:
@@ -521,10 +456,6 @@ def test_another_callers_credential_is_refused(store: SettingsStore) -> None:
             ("POST", f"{BASE}/spools/records"),
             ("POST", f"{BASE}/spools/refreshes/native/failed"),
             ("POST", f"{BASE}/spools/overlay"),
-            ("GET", f"{BASE}/native-spools"),
-            ("GET", f"{BASE}/native-spools/any"),
-            ("POST", f"{BASE}/native-spools/uses"),
-            ("POST", f"{BASE}/native-spools/uses/settle"),
             ("GET", f"{BASE}/held-presets"),
             ("GET", f"{BASE}/held-presets/documents?id=1"),
             ("POST", f"{BASE}/native-slices/start"),

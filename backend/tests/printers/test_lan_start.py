@@ -23,7 +23,10 @@ from temporalio.testing import ActivityEnvironment
 from scadbuddy.bambuddy.filaments import FilamentPlan, SpoolOption
 from scadbuddy.bambuddy.models import SlotChoice
 from scadbuddy.bambuddy.trays import tray_spool_id
+from scadbuddy.filament.catalog import CatalogStore
+from scadbuddy.filament.models import Material, SpoolCreate
 from scadbuddy.filament.print_uses import PoolPrintUses
+from scadbuddy.filament.spools import FilamentSpoolStore
 from scadbuddy.library.settings_store import SettingsStore
 from scadbuddy.printers.lan import LanPrinter
 from scadbuddy.printers.lan_models import LanReport, LanStarted
@@ -31,7 +34,6 @@ from scadbuddy.printers.models import LanLink, PrinterCreate
 from scadbuddy.printers.print_activities import LanActivities, LanDeps
 from scadbuddy.printers.progress import from_lan_report
 from scadbuddy.printers.store import PrinterStore
-from scadbuddy.spools.native import NativeSpoolCreate, NativeSpoolStore
 from scadbuddy.workflows.print_models import LAN_UNSURE, LanPrintInput, LanUploaded
 from tests.conftest import PgPool
 from tests.printers.conftest import KEK
@@ -205,12 +207,18 @@ async def test_a_retry_that_finds_its_print_running_is_that_start(
     assert lan.commands == [] and started.started_at == T0
 
 
-async def test_a_start_saves_what_it_uses_of_the_native_spools_once(pg_pool: PgPool) -> None:
+async def test_a_start_saves_what_it_uses_of_the_sb_spools_once(pg_pool: PgPool) -> None:
     """#4643, #6262: the slot's tray holds an SB spool; the start saves its grams against
     it, at the plate's start, and an attempt that finds its print running saves nothing
     new."""
-    native = NativeSpoolStore(pg_pool)
-    spool = native.create(NativeSpoolCreate(material="PLA", remaining_g=500))
+    pla = next(
+        r.id
+        for r in CatalogStore(pg_pool).list("materials")
+        if isinstance(r, Material) and r.name == "PLA"
+    )
+    spool = FilamentSpoolStore(pg_pool).create(
+        SpoolCreate(material_id=pla, grams_left=500), actor="test"
+    )
     option = SpoolOption(
         spool_id=tray_spool_id(0, 1), material="PLA", tray_only=True, sb_spool_id=spool.id
     )

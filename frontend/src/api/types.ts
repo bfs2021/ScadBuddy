@@ -543,10 +543,6 @@ export type ListingBound = Schemas['NumberBound'] | Schemas['ChoiceBound'] | Sch
 /** #6157 — one row of the back office's list, and a page of them. */
 export type StorefrontListingRow = Schemas['ListingRow']
 export type StorefrontListingPage = Schemas['ListingPage']
-/** ScadBuddy's own spools (#4643), the native spool provider's records; not Bambuddy's inventory. */
-export type NativeSpool = Schemas['NativeSpool']
-export type NativeSpoolCreate = Schemas['NativeSpoolCreate']
-export type NativeSpoolPatch = Schemas['NativeSpoolPatch']
 export type PricingPolicy = Schemas['PricingPolicy']
 /** `PUT /orders/price-book`: the whole policy, and the estimate's factor when sent. */
 export type PolicyUpdate = Defaulted<Schemas['PolicyUpdate'], 'rough_estimate_factor'>

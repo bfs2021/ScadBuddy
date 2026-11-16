@@ -49,20 +49,18 @@ watch's `settle_lan_ended`, whose one long activity repeats `WriteKeys`' keys ac
 attempts. The watch's call is bounded by `WATCH_CALL_BUDGET`. ``spool_history`` is the
 API's (the rack usage route).
 
-`RemoteSpoolStore`, `RemoteNativeSpools`, `RemoteHeldPresets` and `RemoteNativeSlices`
-are `spools/store.py` `SpoolStore`, `spools/native.py` `NativeSpoolStore`,
-`slicing/held_presets.py` `HeldPresetStore` and `slicing/store.py` `NativeSliceStore`
-(Q28-Q30, #5298 Task 31) for the methods the print worker calls: the kept presets a
-native run reads (``rows``, ``documents``) and a native slice's ``start``. Since #6262
-Task 6 the worker calls none of `RemoteSpoolStore` (the native provider's recache after
-a print, ``replace_records`` and ``failed``) or `RemoteNativeSpools` (the shelf,
-``list`` and ``any``): nothing reads the overlay they cached, and #6262 Task 12 drops
-them with it. None holds a pool, and none is called in the printer watch. Each SQL write
-is one transaction, under the spools' advisory lock or the slice key's lock, so each is
-one route run whole on the API (plan D6). ``failed`` and ``start`` are natural (an upsert
-and the key's newest row). ``replace_records`` takes an ``Idempotency-Key`` of its own,
-a new UUID per call, sent again on the client's retries: a refresh's body carries its
-time. The refresh, the tray links and the shelf's edits are the API's.
+`RemoteSpoolStore`, `RemoteHeldPresets` and `RemoteNativeSlices` are `spools/store.py`
+`SpoolStore`, `slicing/held_presets.py` `HeldPresetStore` and `slicing/store.py`
+`NativeSliceStore` (Q28, Q30, #5298 Task 31) for the methods the print worker calls: the
+kept presets a native run reads (``rows``, ``documents``) and a native slice's ``start``.
+Since #6262 Task 6 the worker calls none of `RemoteSpoolStore` (``replace_records`` and
+``failed``): nothing reads the overlay they cached, and #6262 Task 12 drops them with it.
+None holds a pool, and none is called in the printer watch. Each SQL write is one
+transaction, under the spools' advisory lock or the slice key's lock, so each is one route
+run whole on the API (plan D6). ``failed`` and ``start`` are natural (an upsert and the
+key's newest row). ``replace_records`` takes an ``Idempotency-Key`` of its own, a new UUID
+per call, sent again on the client's retries: a refresh's body carries its time. The
+refresh and the tray links are the API's.
 
 `RemoteFilamentTrays` and `RemotePrintUses` (area ``filament``, #6262 Task 6) are a native
 run's reads of the SB spools in its printer's trays and their presets
@@ -190,7 +188,6 @@ from scadbuddy.rack.usage import PickedHotend, RackUsageStore
 from scadbuddy.slicing.held_presets import HeldPresetStore, HeldRow
 from scadbuddy.slicing.store import NativeSlice, NativeSliceStore, SliceSubjectError
 from scadbuddy.spools.models import Overlay, SeenTray, SpoolSnapshot
-from scadbuddy.spools.native import NativeSpool, NativeSpoolStore
 from scadbuddy.spools.store import SpoolStore
 
 logger = logging.getLogger(__name__)
@@ -1389,10 +1386,10 @@ SPOOLS_API_ONLY = ("seen", "refreshes", "link", "unlink", "replace_records_in", 
 class RemoteSpoolStore(SpoolStore):
     """`spools/store.py` `SpoolStore` (Q28) over ``…/print/spools`` (area ``spools``).
     Async, as the SQL store is. No pool. The print worker called it for the native
-    provider's recache after a print took its grams (`spools/spool_providers.py`
-    `recache`) and for a native run's overlay; since #6262 Task 6 it calls neither, and
-    Task 12 drops it with the overlay. Every SQL write is one transaction
-    under the store's advisory lock, so each is one route, run whole on the API (plan
+    provider's recache after a print took its grams and for a native run's overlay;
+    since #6262 Task 6 it calls neither, and Task 12 drops it with the overlay. Every SQL
+    write is one transaction under the store's advisory lock, so each is one route, run
+    whole on the API (plan
     D6)."""
 
     def __init__(self, client: CrudClient) -> None:
@@ -1500,37 +1497,6 @@ class RemoteSpoolStore(SpoolStore):
 
 
 _refuse(RemoteSpoolStore, "SpoolStore", SPOOLS_API_ONLY)
-
-
-#: The `NativeSpoolStore` methods only the API calls: the shelf's routes
-#: (`api/native_spools.py`).
-NATIVE_SPOOLS_API_ONLY = ("get", "create", "update", "delete")
-
-
-class RemoteNativeSpools(NativeSpoolStore):
-    """`spools/native.py` `NativeSpoolStore` (Q29) over ``…/print/native-spools`` (area
-    ``spools``). Blocking, as the SQL store is: callers on the loop use a thread. No
-    pool. No caller since #6262 Task 6 (the worker read the shelf for the native
-    provider, which it no longer builds); Task 12 drops it. A LAN start's uses and their
-    settle are `RemotePrintUses`'."""
-
-    def __init__(self, client: CrudSyncClient) -> None:
-        self._client = client
-
-    @property
-    def pool(self) -> ConnectionPool[Connection[DictRow]]:
-        raise ApiOnlyError("NativeSpoolStore.pool is the API's; the worker has none")
-
-    def list(self, *, include_archived: bool = False) -> list[NativeSpool]:
-        query = urlencode({"include_archived": "true" if include_archived else "false"})
-        body = self._client.request("GET", f"{BASE}/native-spools?{query}").json()
-        return [NativeSpool.model_validate(row) for row in body]
-
-    def any(self) -> bool:
-        return bool(self._client.request("GET", f"{BASE}/native-spools/any").json()["any"])
-
-
-_refuse(RemoteNativeSpools, "NativeSpoolStore", NATIVE_SPOOLS_API_ONLY)
 
 
 class RemoteFilamentTrays:

@@ -95,8 +95,6 @@ from scadbuddy.slicing.component import SLICING
 from scadbuddy.slicing.held_presets import HeldPresetStore
 from scadbuddy.slicing.store import NativeSliceStore
 from scadbuddy.spools.component import SPOOLS
-from scadbuddy.spools.native import NativeSpoolStore
-from scadbuddy.spools.spool_providers import NativeProvider
 from scadbuddy.spools.store import SpoolStore
 from scadbuddy.store import BlobRefs
 from scadbuddy.store.content import ContentStore
@@ -625,11 +623,11 @@ def print_crud_app(
             reports=PrinterReportStore(store.pool),
         ),
         RACK_USAGE: rack,
-        # The spools, ScadBuddy's own and the kept presets and native slices: the API's
+        # The spools, the kept presets and native slices: the API's
         # own stores on ``store``'s pool (#5298 Task 31).
         SPOOLS: SimpleNamespace(
             store=SpoolStore(store.pool),
-            providers=[NativeProvider(NativeSpoolStore(store.pool))],
+            providers=[],
         ),
         SLICING: SimpleNamespace(
             store=NativeSliceStore(store.pool), held=HeldPresetStore(store.pool)

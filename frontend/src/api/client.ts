@@ -215,9 +215,6 @@ import type {
   Filament,
   FilamentInput,
   FilamentPatch,
-  NativeSpool,
-  NativeSpoolCreate,
-  NativeSpoolPatch,
   Fulfilment,
   AttemptArchives,
   ArchiveCopy,
@@ -2167,14 +2164,6 @@ export const api = {
   /** #6262 Task 9 — ScadBuddy's spools, each with the registry tray it is in. */
   getSpoolInventory: (includeArchived = false) =>
     request<FilamentInventoryView>(`/filament/inventory${includeArchived ? '?include_archived=true' : ''}`),
-  /** #4643 — ScadBuddy's own spools, the native spool provider's records. */
-  nativeSpools: (includeArchived = false) =>
-    request<NativeSpool[]>(`/native-spools${includeArchived ? '?include_archived=true' : ''}`),
-  createNativeSpool: (body: NativeSpoolCreate) =>
-    request<NativeSpool>('/native-spools', { method: 'POST', body: JSON.stringify(body) }),
-  updateNativeSpool: (id: string, body: NativeSpoolPatch) =>
-    request<NativeSpool>(`/native-spools/${seg(id)}`, { method: 'PATCH', body: JSON.stringify(body) }),
-  deleteNativeSpool: (id: string) => request<void>(`/native-spools/${seg(id)}`, { method: 'DELETE' }),
 
   /**
    * spec 2026-09-27 §3 — one read for the whole spool-first print dialog: printers,

@@ -87,19 +87,16 @@ would not repeat, so each takes an ``Idempotency-Key`` and runs with its ledger 
 one transaction. A LAN start's picks delete the earlier pick's rows and insert the new
 ones: that is one route, one transaction here (plan D6), never several calls.
 
-The spools, ScadBuddy's own spools, the kept presets and a native slice's start (Q28-Q30,
-area ``spools``, #5298 Task 31) are `SpoolStore`'s, `NativeSpoolStore`'s,
-`HeldPresetStore`'s and `NativeSliceStore`'s, for `RemoteSpoolStore`,
-`RemoteNativeSpools`, `RemoteHeldPresets` and `RemoteNativeSlices`: the overlay (a
-``POST`` read, so the trays' RFID keys stay out of the URL), the shelf, the kept presets,
-and the writes ``…/spools/records`` (a provider's whole inventory under the spools'
-advisory lock), ``…/spools/refreshes/{provider}/failed``, ``…/native-spools/uses``,
-``…/native-spools/uses/settle`` (a run's uses under their row locks) and
-``…/native-slices/start`` (under the lock on its workflow id). Each runs whole in one
-transaction here (plan D6). A failure, a start's uses and a slice's start are natural; a
-provider's records and a settle take an ``Idempotency-Key`` and run with their ledger row.
-The two ``…/native-spools/uses`` routes are kept for a print worker from before #6262
-Task 6 across the deploy: they book and settle as the ``…/filament/print-uses`` routes do.
+The spools, the kept presets and a native slice's start (Q28, Q30, area ``spools``,
+#5298 Task 31) are `SpoolStore`'s, `HeldPresetStore`'s and `NativeSliceStore`'s, for
+`RemoteSpoolStore`, `RemoteHeldPresets` and `RemoteNativeSlices`: the overlay (a
+``POST`` read, so the trays' RFID keys stay out of the URL), the kept presets, and the
+writes ``…/spools/records`` (a provider's whole inventory under the spools' advisory
+lock), ``…/spools/refreshes/{provider}/failed`` and ``…/native-slices/start`` (under the
+lock on its workflow id). Each runs whole in one transaction here (plan D6). A failure and
+a slice's start are natural; a provider's records take an ``Idempotency-Key`` and run
+with their ledger row. The shelf's routes, and the uses routes a print worker from
+before #6262 Task 6 called, went in #6262 Task 11: such a worker's call there answers 404.
 
 A native run's SB spools and what its LAN starts use of them (area ``filament``, #6262 Task
 6) are `filament/inventory.py`'s and `filament/print_uses.py`'s, for `RemoteFilamentTrays`
@@ -161,8 +158,7 @@ import json
 import logging
 from collections import OrderedDict
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
-from functools import partial
+from datetime import datetime, timedelta
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -269,8 +265,6 @@ from scadbuddy.slicing.transfer import (
 )
 from scadbuddy.spools.component import SpoolsDep
 from scadbuddy.spools.models import Overlay, SeenTray, SpoolSnapshot
-from scadbuddy.spools.native import NativeSpool, NativeSpoolStore
-from scadbuddy.spools.spool_providers import native_provider
 
 logger = logging.getLogger(__name__)
 
@@ -1689,32 +1683,9 @@ class OverlayAsk(BaseModel):
     located: dict[str, str] = Field(default_factory=dict)
 
 
-class AnySpool(BaseModel):
-    any: bool
-
-
-class LegacySpoolUse(BaseModel):
-    """A slot's use as a print worker from before #6262 Task 6 sends it: no plate start."""
-
-    slot_id: int
-    spool_id: UUID
-    grams: float
-
-
-class SpoolUses(BaseModel):
-    run_id: str
-    subtask_name: str
-    uses: list[LegacySpoolUse]
-
-
 class SettleUses(BaseModel):
     run_id: str
     stages: list[str]
-
-
-class SpoolsChanged(BaseModel):
-    #: The spools this settle changed; a resend under its key answers the first's.
-    changed: list[UUID]
 
 
 #: The most trays one read names: an H2C's four AMS units of four trays, its HT units
@@ -1777,16 +1748,8 @@ class SliceStartAsk(BaseModel):
 
 
 SPOOL_RECORDS_ROUTE = "POST /spools/records"
-SETTLE_USES_ROUTE = "POST /native-spools/uses/settle"
 PRINT_USES_ROUTE = "POST /filament/print-uses"
 SETTLE_PRINT_USES_ROUTE = "POST /filament/print-uses/settle"
-
-
-def _native_spools(spools: SpoolsDep) -> NativeSpoolStore:
-    return native_provider(spools).store
-
-
-NativeSpoolsDep = Annotated[NativeSpoolStore, Depends(_native_spools)]
 
 
 @router.post(
@@ -1838,53 +1801,6 @@ async def spool_overlay(body: OverlayAsk, spools: SpoolsDep) -> Overlay:
         providers=body.providers,
         located=body.located,
     )
-
-
-@router.get("/native-spools", name="crud_print_native_spools")
-async def native_spools(
-    store: NativeSpoolsDep, include_archived: bool = False
-) -> list[NativeSpool]:
-    return await asyncio.to_thread(partial(store.list, include_archived=include_archived))
-
-
-@router.get("/native-spools/any", name="crud_print_native_spools_any")
-async def native_spools_any(store: NativeSpoolsDep) -> AnySpool:
-    return AnySpool(any=await asyncio.to_thread(store.any))
-
-
-@router.post(
-    "/native-spools/uses",
-    name="crud_print_record_spool_uses",
-    status_code=status.HTTP_204_NO_CONTENT,
-)
-async def record_spool_uses(body: SpoolUses, store: NativeSpoolsDep) -> None:
-    """A print worker's from before #6262 Task 6, across the deploy: its uses booked as
-    ``…/filament/print-uses`` books them, at the time they arrive (it sends no plate
-    start). Natural: a slot booked already keeps its event."""
-    now = datetime.now(UTC)
-    uses = [SlotUse(**use.model_dump(), plate_started_at=now) for use in body.uses]
-    await asyncio.to_thread(
-        print_uses.record_uses, store.pool, body.run_id, body.subtask_name, uses
-    )
-
-
-@router.post("/native-spools/uses/settle", name="crud_print_settle_spool_uses")
-async def settle_spool_uses(
-    body: SettleUses, store: NativeSpoolsDep, idempotency_key: MaybeIdempotencyKey = None
-) -> SpoolsChanged:
-    """A print worker's from before #6262 Task 6, across the deploy: the run settled as
-    ``…/filament/print-uses/settle`` settles it, once per ``Idempotency-Key``. It names
-    no spool: the worker re-caches the overlay on a change, which nothing reads now."""
-    key = required_key(idempotency_key)
-
-    def write(conn: Connection[DictRow]) -> dict[str, Any]:
-        print_uses.settle_uses_in(conn, body.run_id, body.stages)
-        return {"changed": []}
-
-    answer = await asyncio.to_thread(
-        _once_on, store.pool, key, SETTLE_USES_ROUTE, body.model_dump(mode="json"), write
-    )
-    return SpoolsChanged.model_validate(answer)
 
 
 @router.post(
