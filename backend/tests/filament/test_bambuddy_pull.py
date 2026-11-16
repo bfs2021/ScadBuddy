@@ -1088,7 +1088,8 @@ def test_a_linked_spool_takes_bbs_insert_type_on_the_next_pull(pg_pool: PgPool) 
     f = _filament(pg_pool)
     made = _linked_untyped(f, core_weight_catalog_id=5)
     assert _own_insert(f, made) is None
-    # BB's row did not move (same updated_at): the first pull after deploy still backfills.
+    # The spool was read with entry 5 while no catalog was mapped; BB's row did not move (same
+    # updated_at). Mapped now, the entry reaches the spool.
     report = pull(
         f,
         [bb(id=1, updated_at="2026-11-14T10:00:00", core_weight_catalog_id=5, **_NO_TAGS)],
@@ -1153,7 +1154,7 @@ def test_a_persons_insert_type_edit_is_kept(pg_pool: PgPool) -> None:
     assert _own_insert(f, made) == own["id"]
 
 
-def test_a_persons_earlier_insert_type_survives_the_first_backfill(pg_pool: PgPool) -> None:
+def test_a_persons_insert_type_survives_a_later_catalog_mapping(pg_pool: PgPool) -> None:
     f = _filament(pg_pool)
     made = _linked_untyped(f, core_weight_catalog_id=5)
     own = f.catalog.create(
@@ -1201,19 +1202,6 @@ def test_a_name_clash_and_a_weightless_entry_are_skipped_and_counted(pg_pool: Pg
     assert _own_insert(f, made) is None
 
 
-def test_a_skipped_entry_warns_once_per_process(
-    pg_pool: PgPool, caplog: pytest.LogCaptureFixture
-) -> None:
-    f = _filament(pg_pool)
-    catalog = [_entry(5, "Bambu reusable", 250), _entry(6, "Bambu REUSABLE", 212)]
-    with caplog.at_level("DEBUG"):
-        pull(f, [], now=NOW, catalog=catalog)
-        pull(f, [], now=NOW, catalog=catalog)
-    warned = [r for r in caplog.records if r.levelname == "WARNING" and "skipped" in r.message]
-    assert len(warned) <= 1
-    assert "get no insert type" in caplog.text
-
-
 def test_an_archived_insert_type_is_no_spools_insert_type(pg_pool: PgPool) -> None:
     f = _filament(pg_pool)
     pull(f, [], now=NOW, catalog=[_entry()])
@@ -1227,7 +1215,7 @@ def test_an_archived_insert_type_is_no_spools_insert_type(pg_pool: PgPool) -> No
     assert f.catalog.list("insert-types") == []
 
 
-def test_an_empty_catalog_takes_no_lock_and_no_transaction(pg_pool: PgPool) -> None:
+def test_an_empty_catalog_maps_nothing_and_skips_nothing(pg_pool: PgPool) -> None:
     f = _filament(pg_pool)
     assert pull(f, [], now=NOW, catalog=[]).catalog_skipped == 0
     assert _insert_types(f) == []
@@ -1263,3 +1251,140 @@ async def test_a_slow_catalog_read_is_none_within_its_timeout(
     settings = StoredSettings(bambuddy_url=BB, bambuddy_api_key="k")
     assert await read_catalog(settings) is None
     assert "no answer within" in caplog.text
+
+
+# -- fix round 2 -----------------------------------------------------------------------
+
+_SAME = "2026-11-14T10:00:00"
+
+
+def _strip_key(f: Filament, spool: UUID) -> None:
+    """Make the spool's readings those of a pull before the catalog id was kept."""
+    with f.spools.transaction() as conn:
+        conn.execute(
+            "UPDATE filament_spool_events SET data = data #- '{bb,core_weight_catalog_id}'"
+            " WHERE spool_id = %s AND kind = 'synced_from_bb'",
+            (spool,),
+        )
+
+
+def _synced_events(f: Filament, spool: UUID) -> list[Any]:
+    return [e for e in f.spools.events(spool) if e.kind == "synced_from_bb"]
+
+
+def _row(core: int | None, stamp: str = _SAME) -> BbSpool:
+    return bb(id=1, updated_at=stamp, core_weight_catalog_id=core, **_NO_TAGS)
+
+
+def test_a_reading_with_no_catalog_id_is_read_once_and_the_event_is_booked(
+    pg_pool: PgPool,
+) -> None:
+    f = _filament(pg_pool)
+    made = _linked_untyped(f, core_weight_catalog_id=5)
+    _strip_key(f, made)
+    events = len(_synced_events(f, made))
+    report = pull(f, [_row(5)], now=NOW, catalog=[_entry()])
+    (kind,) = _insert_types(f)
+    assert report.updated_ids == [made]
+    assert _own_insert(f, made) == kind.id
+    booked = _synced_events(f, made)
+    assert len(booked) == events + 1
+    assert "core_weight_catalog_id" in booked[-1].data["bb"]
+    assert booked[-1].data["changes"] == {"insert_type_id": [None, str(kind.id)]}
+    # The next pull sees the key: nothing is looked at again.
+    assert pull(f, [_row(5)], now=NOW, catalog=[_entry()]).updated_ids == []
+    assert len(_synced_events(f, made)) == events + 1
+
+
+def test_a_reading_with_no_catalog_id_is_read_once_with_no_catalog_at_all(
+    pg_pool: PgPool,
+) -> None:
+    f = _filament(pg_pool)
+    made = _linked_untyped(f)
+    _strip_key(f, made)
+    assert pull(f, [_row(None)], now=NOW).updated_ids == [made]
+    assert pull(f, [_row(None)], now=NOW).updated_ids == []
+
+
+def test_a_reading_with_no_catalog_id_keeps_a_persons_insert_type(pg_pool: PgPool) -> None:
+    f = _filament(pg_pool)
+    made = _linked_untyped(f, core_weight_catalog_id=5)
+    own = f.catalog.create(
+        "insert-types", InsertTypeCreate(name="Mine", empty_weight_g=100)
+    ).model_dump()
+    f.spools.update(made, SpoolPatch(insert_type_id=own["id"]), actor="ann")
+    _strip_key(f, made)
+    events = len(_synced_events(f, made))
+    pull(f, [_row(5)], now=NOW, catalog=[_entry()])
+    assert _own_insert(f, made) == own["id"]
+    assert len(_synced_events(f, made)) == events + 1
+    assert pull(f, [_row(5)], now=NOW, catalog=[_entry()]).updated_ids == []
+
+
+def test_a_persons_cleared_insert_type_stays_cleared(pg_pool: PgPool) -> None:
+    f = _filament(pg_pool)
+    made = _linked_untyped(f, core_weight_catalog_id=5)
+    pull(f, [_row(5)], now=NOW, catalog=[_entry()])
+    assert _own_insert(f, made) is not None
+    f.spools.update(made, SpoolPatch(insert_type_id=None), actor="ann")
+    assert _own_insert(f, made) is None
+    assert pull(f, [_row(5)], now=NOW, catalog=[_entry()]).updated_ids == []
+    assert _own_insert(f, made) is None
+
+
+def test_bb_moving_to_the_types_own_insert_type_clears_the_override(pg_pool: PgPool) -> None:
+    f = _filament(pg_pool)
+    typed = f.types.create(
+        SpoolTypeCreate(
+            code="GFA00-RED", material_id=_pla(pg_pool), rgba="#FF0000FF", label_weight_g=1000
+        )
+    )
+    catalog = [_entry(5, "Bambu reusable", 250), _entry(6, "Bambu cardboard", 212)]
+    row = {"material_number": "GFA00-RED", "id": 1, **_NO_TAGS}
+    (made,) = pull(
+        f,
+        [bb(updated_at=_SAME, core_weight_catalog_id=6, **row)],
+        now=NOW,
+        catalog=catalog,
+    ).created_ids
+    inserts = {k.bb_catalog_id: k.id for k in _insert_types(f)}
+    assert _own_insert(f, made) == inserts[6]
+    f.types.update(typed.id, SpoolTypePatch(insert_type_id=inserts[5]))
+    pull(
+        f,
+        [bb(updated_at="2026-11-14T11:00:00", core_weight_catalog_id=5, **row)],
+        now=NOW,
+        catalog=catalog,
+    )
+    assert _own_insert(f, made) is None
+
+
+def test_an_unmapped_catalog_entry_is_applied_once_it_is_mapped(pg_pool: PgPool) -> None:
+    f = _filament(pg_pool)
+    catalog = [_entry(5, "Bambu reusable", 250), _entry(6, "Bambu cardboard", 212)]
+    made = _linked_untyped(f, core_weight_catalog_id=5)
+    pull(f, [_row(5)], now=NOW, catalog=[catalog[0]])
+    inserts = {k.bb_catalog_id: k.id for k in _insert_types(f)}
+    assert _own_insert(f, made) == inserts[5]
+    # BB moves to 6 while its entry is not mapped (a failed catalog read).
+    pull(f, [_row(6, "2026-11-14T11:00:00")], now=NOW)
+    assert _own_insert(f, made) == inserts[5]
+    # The entry is mapped on the next pull, BB's row unmoved: BB's value is applied.
+    pull(f, [_row(6, "2026-11-14T11:00:00")], now=NOW, catalog=catalog)
+    inserts = {k.bb_catalog_id: k.id for k in _insert_types(f)}
+    assert _own_insert(f, made) == inserts[6]
+    assert pull(f, [_row(6, "2026-11-14T11:00:00")], now=NOW, catalog=catalog).updated_ids == []
+
+
+def test_a_skipped_entry_warns_exactly_once(
+    pg_pool: PgPool, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("scadbuddy.filament.bambuddy_pull._WARNED_SKIPS", set())
+    f = _filament(pg_pool)
+    catalog = [_entry(5, "Bambu reusable", 250), _entry(6, "Bambu REUSABLE", 212)]
+    with caplog.at_level("DEBUG"):
+        pull(f, [], now=NOW, catalog=catalog)
+        pull(f, [], now=NOW, catalog=catalog)
+    warned = [r for r in caplog.records if r.levelname == "WARNING" and "skipped" in r.message]
+    assert len(warned) == 1
+    assert "get no insert type" in caplog.text

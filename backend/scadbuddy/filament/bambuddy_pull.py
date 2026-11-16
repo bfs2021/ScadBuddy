@@ -7,7 +7,10 @@ this order:
 1. A `filament_bb_links` row names it: the SB spool takes what BB changed since the last
    pull. "Changed" compares BB's values with the ones the last pull saw, kept in the
    ``data.bb`` of the spool's newest ``synced_from_bb`` event; a BB row whose
-   ``updated_at`` is not past the link's ``bb_updated_at`` is not looked at. Per field
+   ``updated_at`` is not past the link's ``bb_updated_at`` is not looked at, except for
+   the insert type (below): its last reading with no ``core_weight_catalog_id`` is read
+   in full once (the event is booked with no ref, so the next pull sees the key), and a
+   row whose catalog entry was mapped after it was read is checked for the insert type. Per field
    the newer change wins (§8.2): a field SB edited (an ``edited`` event) after BB's
    ``updated_at`` keeps SB's value. A value BB no longer has never clears SB's, and the
    fields BB does not have (note, location, bed temperatures ...) are never touched. A
@@ -33,10 +36,16 @@ case name, and are added when missing. BB's spool catalog (``GET /inventory/cata
 `BambuddyClient.spool_catalog`) is mapped once per pull (`_insert_types`): an entry is the
 insert type that has its id as ``bb_catalog_id``, else the unlinked one of the same upper
 case name (now linked), else a new one (its weight, no insert material). A type that
-exists is never rewritten. A BB spool's ``core_weight_catalog_id`` then sets the SB spool's
-insert type when the spool is made: its own when it has no spool type, else an override
-only when it differs from the spool type's. A catalog read that fails leaves the insert
-types alone and the spools are pulled (`PullReport.catalog_failed`).
+exists is never rewritten. A BB spool's ``core_weight_catalog_id`` (an unarchived mapped
+entry) sets the SB spool's insert type: when the spool is made, its own insert type when
+it has no spool type, else an override only when it differs from the spool type's; when
+it is linked, or read for the first time, where the spool has none of its own, unless a
+person cleared it (an ``edited`` event naming ``insert_type_id`` since the link); and when
+BB's value changed since the last reading, as any moved field (a person's later ``edited``
+event wins), clearing the override when BB moves to the spool type's own insert type. The
+reading keeps the last id while the entry is not mapped, so a later pull applies it. A
+catalog read that fails leaves the insert types alone and the spools are pulled
+(`PullReport.catalog_failed`).
 
 A pulled weight is an absolute reading at the BB row's ``updated_at``, not at the pull:
 BB's state is as of its last write (the ``created`` and every ``synced_from_bb`` event
@@ -545,20 +554,40 @@ def _link(
     return type_id is None
 
 
-def _backfill_insert_type(conn: Conn, spool_id: UUID, bb: BbSpool) -> list[Any] | None:
-    """Set the insert type BB's ``core_weight_catalog_id`` names where the SB spool has
-    none of its own, and it differs from the spool type's: the change, or None. Never
-    replaces a choice already made."""
-    insert_id = _core_insert_type(conn, bb)
-    if insert_id is None:
-        return None
+def _insert_state(conn: Conn, spool_id: UUID) -> tuple[UUID | None, UUID | None]:
+    """The spool's own insert type and its spool type's."""
     row = conn.execute(
         "SELECT s.insert_type_id AS own, t.insert_type_id AS typed FROM filament_spools s"
         " LEFT JOIN filament_spool_types t ON t.id = s.type_id WHERE s.id = %s",
         (spool_id,),
     ).fetchone()
     assert row is not None
-    if row["own"] is not None or row["typed"] == insert_id:
+    return row["own"], row["typed"]
+
+
+def _insert_edited_since_link(conn: Conn, spool_id: UUID) -> bool:
+    """A person edited the spool's insert type (set or cleared it) after the link."""
+    return (
+        conn.execute(
+            "SELECT 1 FROM filament_spool_events e JOIN filament_bb_links l"
+            " ON l.spool_id = e.spool_id WHERE e.spool_id = %s AND e.kind = 'edited'"
+            " AND e.at > l.linked_at AND jsonb_typeof(e.data -> 'changes') = 'object'"
+            " AND e.data -> 'changes' ? 'insert_type_id' LIMIT 1",
+            (spool_id,),
+        ).fetchone()
+        is not None
+    )
+
+
+def _backfill_insert_type(conn: Conn, spool_id: UUID, bb: BbSpool) -> list[Any] | None:
+    """Set the insert type BB's ``core_weight_catalog_id`` names where the SB spool has
+    none of its own, it differs from the spool type's and no person cleared it since the
+    link: the change, or None. Never replaces a choice already made."""
+    insert_id = _core_insert_type(conn, bb)
+    if insert_id is None:
+        return None
+    own, typed = _insert_state(conn, spool_id)
+    if own is not None or typed == insert_id or _insert_edited_since_link(conn, spool_id):
         return None
     conn.execute(
         "UPDATE filament_spools SET insert_type_id = %s, updated_at = now() WHERE id = %s",
@@ -661,10 +690,15 @@ def _update(
         (spool_id,),
     ).fetchone()
     before: dict[str, Any] = (last["bb"] if last is not None else None) or {}
-    # A last reading from before the catalog id was kept is read once more, whatever BB's
-    # clock says, so a spool linked earlier takes its insert type. A row BB did not move
-    # still takes one whose catalog entry was mapped after the spool was read.
-    if unmoved and "core_weight_catalog_id" in before:
+    insert_id = _core_insert_type(conn, bb)
+    # A row BB did not move is read in full only when its last reading has no catalog id
+    # (a pull before it was kept) or BB's id is mapped now and differs from the last one.
+    # Else it may still take the insert type of an entry mapped after it was read.
+    if (
+        unmoved
+        and "core_weight_catalog_id" in before
+        and (insert_id is None or bb.core_weight_catalog_id == before["core_weight_catalog_id"])
+    ):
         insert = _backfill_insert_type(conn, spool_id, bb)
         if insert is None:
             return False
@@ -678,6 +712,10 @@ def _update(
         )
         return True
     after = snapshot(bb)
+    if insert_id is None and bb.core_weight_catalog_id is not None:
+        # Its entry is not mapped (the read failed, or it was skipped or archived): the
+        # reading keeps the last id, so the pull that maps it sees the change.
+        after["core_weight_catalog_id"] = before.get("core_weight_catalog_id")
     keys = (after["tag_uid"], after["tray_uuid"])
     retag = keys != (before.get("tag_uid"), before.get("tray_uuid")) and keys != (None, None)
     if retag:
@@ -723,20 +761,21 @@ def _update(
         kind = _match(conn, store, after)
         if kind is not None:
             changes["type_id"] = [None, kind.id]
-    insert_id = _core_insert_type(conn, bb)
     if insert_id is not None and after["core_weight_catalog_id"] != before.get(
         "core_weight_catalog_id"
     ):
-        own = conn.execute(
-            "SELECT insert_type_id FROM filament_spools WHERE id = %s", (spool_id,)
-        ).fetchone()
-        assert own is not None
+        own, typed = _insert_state(conn, spool_id)
         # Moved since BB's last reading: BB's value wins unless a person set the field after.
-        # Read for the first time: only where the spool has none of its own.
-        first = "core_weight_catalog_id" not in before
-        free = own["insert_type_id"] is None if first else "insert_type_id" not in edited
-        if free and spool.effective.insert_type_id != insert_id:
-            changes["insert_type_id"] = [own["insert_type_id"], insert_id]
+        # Read for the first time: only where the spool has none of its own, and a person
+        # has not cleared it since the link.
+        if before.get("core_weight_catalog_id") is None:
+            free = own is None and not _insert_edited_since_link(conn, spool_id)
+        else:
+            free = "insert_type_id" not in edited
+        # BB's own spool type's insert type is no override.
+        target = None if typed == insert_id else insert_id
+        if free and target != own:
+            changes["insert_type_id"] = [own, target]
     if changes:
         columns = list(changes)
         conn.execute(
@@ -753,7 +792,9 @@ def _update(
         reading = None
     elif locked:
         reading, weight = None, "locked"
-    _synced(conn, spool_id, bb, after, changes, reading, actor, weight=weight)
+    # A row BB did not move is read again: its event takes no ref, which the same stamp
+    # would otherwise share with the one it replaces (`ledger.record` drops a repeat).
+    _synced(conn, spool_id, bb, after, changes, reading, actor, weight=weight, ref=not unmoved)
     FilamentSpoolStore.read(conn, spool_id, check=True)
     return True
 
@@ -943,6 +984,7 @@ def _synced(
     *,
     linked: bool = False,
     weight: str | None = None,
+    ref: bool = True,
 ) -> None:
     """The ``synced_from_bb`` event, at BB's ``updated_at``: what BB said (the next
     pull's ``before``), what changed, and a ``bb`` reading when ``reading`` is set."""
@@ -951,7 +993,7 @@ def _synced(
         data["linked"] = True
     if weight is not None:
         data["weight"] = {"skipped": weight, "bb_remaining_g": after["remaining_g"]}
-    stamp = bb.updated_at.isoformat() if bb.updated_at is not None else None
+    stamp = bb.updated_at.isoformat() if bb.updated_at is not None and ref else None
     ledger.record(
         conn,
         spool_id,
