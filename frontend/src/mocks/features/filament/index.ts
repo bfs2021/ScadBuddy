@@ -2,6 +2,7 @@ import { HttpResponse, http } from 'msw'
 import type { components } from '../../../api/schema'
 import type { FilamentInventorySpool, FilamentInventoryView, FilamentSpool } from '../../../api/types'
 import { parseRgba } from '../../../lib/rgba'
+// A module cycle (`orders/priceBook.ts` imports `inventoryRows` from here): use it only inside functions.
 import { linkTypeFilament } from '../orders/priceBook'
 import { H2C, seed, type Catalogs, type Seed, type SpoolRow } from './seed'
 
@@ -343,14 +344,25 @@ function catalogRefusal(kind: keyof Catalogs, values: Record<string, unknown>, b
   if (badRef(values, CATALOG_REFS[kind] ?? {})) return problem(422, REFUSED.catalogRef)
   const temps = kind === 'materials' || kind === 'subtypes' ? badTemps(values) : null
   if (temps) return problem(422, temps)
-  const rows = state.catalogs[kind] as { id: string; name: string; archived_at: string | null; material_id?: string | null }[]
+  // The name indexes are `WHERE archived_at IS NULL`: an archived row holds no name, and
+  // restoring one whose name a live row took since is refused.
+  if (values.archived_at) return null
+  const rows = state.catalogs[kind] as {
+    id: string
+    name: string
+    archived_at: string | null
+    material_id?: string | null
+    manufacturer?: string | null
+  }[]
   const taken = rows.some(
     (row) =>
       row.id !== self &&
       !row.archived_at &&
       sameName(row.name, values.name) &&
-      // A subtype's name is unique within its material.
-      (kind !== 'subtypes' || (row.material_id ?? null) === (values.material_id ?? null)),
+      // `filament_subtypes_name`: a subtype's name is unique within its material.
+      (kind !== 'subtypes' || (row.material_id ?? null) === (values.material_id ?? null)) &&
+      // `filament_colours_name`: a colour's name is unique per manufacturer (none is one).
+      (kind !== 'colours' || sameName(row.manufacturer ?? '', values.manufacturer ?? '')),
   )
   return taken ? problem(409, REFUSED.catalogExists) : null
 }
@@ -362,7 +374,8 @@ function typeRefusal(values: Record<string, unknown>, self?: string): Response |
   const temps = badTemps(values)
   if (temps) return problem(422, temps)
   if (badRef(values, TYPE_REFS)) return problem(422, REFUSED.catalogRef)
-  const taken = state.types.some((type) => type.id !== self && !type.archived_at && type.code === values.code)
+  // `filament_spool_types_code`: upper(code), live types only.
+  const taken = !values.archived_at && state.types.some((type) => type.id !== self && !type.archived_at && sameName(type.code, values.code))
   return taken ? problem(409, REFUSED.catalogExists) : null
 }
 
@@ -420,12 +433,20 @@ function closeBinding(binding: S['TagBinding'], reason: string) {
 /** The rows of a list that name one key twice: `TypeRowsDuplicateError`. */
 const duplicated = <T>(rows: T[], key: (row: T) => string) => new Set(rows.map(key)).size !== rows.length
 
+/**
+ * `filament_locations_name` (a name once under a parent, among places that are no
+ * printer's tray) and `filament_locations_tray` (one place per printer tray), both over
+ * live places only.
+ */
 const placeTaken = (values: Record<string, unknown>, self?: string) =>
   state.locations.some(
     (place) =>
       place.id !== self &&
       !place.archived_at &&
-      ((sameName(place.name, values.name) && (place.parent_id ?? null) === (values.parent_id ?? null)) ||
+      ((place.printer_id == null &&
+        values.printer_id == null &&
+        sameName(place.name, values.name) &&
+        (place.parent_id ?? null) === (values.parent_id ?? null)) ||
         (values.printer_id != null &&
           place.printer_id === values.printer_id &&
           place.ams_id === values.ams_id &&

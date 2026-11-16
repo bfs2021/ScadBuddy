@@ -25,7 +25,7 @@ import {
   type SpoolTypeCreate,
 } from '../../../api/filament'
 import { resetMockState } from '../../handlers'
-import { B, IT, L, LK, M, spoolId, T, TAG } from './seed'
+import { B, H2C, IT, L, LK, M, spoolId, T, TAG } from './seed'
 
 // #6262 Task 14 — the Filament section's mock API over its seed, through the client.
 
@@ -218,6 +218,29 @@ describe('the filament mocks', () => {
     })
   })
 
+  it("compares a type's code in any case, as `filament_spool_types_code` does", async () => {
+    const body = { code: 'PLA-BLK', material_id: M.PLA, rgba: '#000000', label_weight_g: 1000 } as SpoolTypeCreate
+    await upsertType(body)
+    expect(await refusal(upsertType({ ...body, code: 'pla-blk' }))).toMatchObject({ status: 409 })
+  })
+
+  it('keeps a colour name unique per manufacturer, as `filament_colours_name` does', async () => {
+    const black = { name: 'Black', rgba: '#000000FF', sort_order: 0 }
+    expect(await upsertCatalog('colours', { ...black, manufacturer: 'Bambu Lab' })).toMatchObject({ name: 'Black' })
+    expect(await upsertCatalog('colours', { ...black, manufacturer: 'Polymaker' })).toMatchObject({ name: 'Black' })
+    expect(await upsertCatalog('colours', black)).toMatchObject({ manufacturer: null })
+    expect(await refusal(upsertCatalog('colours', { ...black, manufacturer: 'bambu lab' }))).toMatchObject({ status: 409 })
+  })
+
+  it('refuses to restore a catalog row whose name a live row has taken since', async () => {
+    const old = await upsertCatalog('brands', { name: 'Hatchbox' })
+    await upsertCatalog('brands', { archived: true }, old.id)
+    // An archived row holds no name: the index is `WHERE archived_at IS NULL`.
+    await upsertCatalog('brands', { name: 'HATCHBOX' })
+    expect(await upsertCatalog('brands', { sort_order: 5 }, old.id)).toMatchObject({ sort_order: 5 })
+    expect(await refusal(upsertCatalog('brands', { archived: false }, old.id))).toMatchObject({ status: 409 })
+  })
+
   it('refuses a catalog row whose name is taken, whose reference is missing, or that clears its name', async () => {
     expect(await refusal(upsertCatalog('brands', { name: 'bambu lab' }))).toEqual({
       status: 409,
@@ -252,5 +275,14 @@ describe('the filament mocks', () => {
       status: 409,
       detail: 'a place cannot be its own parent or sit under one of its own',
     })
+  })
+
+  it("names a printer's trays freely, and keeps each tray to one place, as `filament_locations_*` do", async () => {
+    const tray = (ams_id: number, tray_id: number) => ({ name: 'Tray 1', kind_id: LK.AMS, printer_id: H2C.printer_id, ams_id, tray_id, sort_order: 0 })
+    expect(await upsertLocation(tray(1, 0))).toMatchObject({ name: 'Tray 1', ams_id: 1 })
+    expect(await upsertLocation(tray(2, 0))).toMatchObject({ name: 'Tray 1', ams_id: 2 })
+    expect(await refusal(upsertLocation({ ...tray(1, 0), name: 'Other' }))).toMatchObject({ status: 409 })
+    // A plain place of that name at the top is still free: the name index skips trays.
+    expect(await upsertLocation({ name: 'Tray 1', kind_id: LK.SHELF, sort_order: 0 })).toMatchObject({ printer_id: null })
   })
 })

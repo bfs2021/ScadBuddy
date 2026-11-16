@@ -1,6 +1,7 @@
 import { http, HttpResponse } from 'msw'
 import type { ArchiveQuoteRequest, DensityFillRow, Filament, FilamentInput, FilamentSpool, FilamentPatch, OrderEstimate, PolicyUpdate, PriceBook, PricingPolicy, Quote, QuoteLine, SliceQuoteRequest, SpoolImportRow } from '../../../api/types'
 import { mockSettings, setMockSettings } from '../../handlers'
+// A module cycle (`filament/index.ts` imports `linkTypeFilament` from here): use it only inside functions.
 import { inventoryRows } from '../filament'
 import { acceptOperation } from '../operations'
 import { FilamentsRefused, event, itemOf, lock, notEnded, quotesOf, rederive, requoteOpen, refused, SETTLED, TAKES_ITEMS, withFilaments } from './orders'
