@@ -428,6 +428,18 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   message's body row and its `scadbuddy_mcp` NOTIFY in one transaction (the header checked against
   the relay's shapes and the NOTIFY payload cap), a row taken or withdrawn once, and the sweep.
   Tests `tests/crud/test_crud_agent_mcp.py`.
+- The agent's change stream (#5299 D4, step 11): `agent_changes/hub.py` (`ChangeHub`, component
+  `agent_changes/component.py` `CHANGES`) registers the agent's five NOTIFY channels on the
+  process's one `PgListener` (before it runs) and taps `PgNotifyEventBus` (`taps`) for
+  `scadbuddy_events`, so it opens no connection; `api/crud_agent_changes.py` (area `changes`,
+  `GET …/agent/changes`) serves each agent process one server-sent event stream of them, in the
+  listener's order. A reconnect's `Last-Event-ID` (a logged event's id, or `0`) is replayed from
+  the `events` log (`position`, `replay`, at most `REPLAY_MAX`; else `resync`) before `ready`. A
+  stream's queue is bounded (`QUEUE_MAX`): a reader that falls behind loses it and gets a replay
+  and `reconnected`, as every stream does when the listener reconnects, and the listener never
+  waits on a reader. `STREAMS_PER_CREDENTIAL` and `STREAMS_MAX` cap them (429). uvicorn waits for
+  open responses before the lifespan's shutdown, so the component chains a SIGTERM/SIGINT handler
+  in front of uvicorn's that ends every stream first. Tests `tests/crud/test_crud_agent_changes.py`.
 - `backend/scadbuddy/flow_triggers/` — runs started on a schedule or an event (#2484,
   spec 2026-10-11 §12): `store.py` (`flow_triggers`, their standing grants and fires),
   `fire.py` (the `flow_trigger_fire` activity on the `library` queue), `events.py` (the

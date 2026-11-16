@@ -120,7 +120,9 @@ from scadbuddy.crud.guard import CrudCaller, crud_router
 #: delivered, and a run's child entries for its queue (`api/crud_agent_escalations.py`). Its
 #: ``mcp-relay`` area is ``…/agent/mcp-relay/*``: the /mcp session directory, the relay's messages
 #: (a body row and its ``scadbuddy_mcp`` NOTIFY in one transaction) and their sweep (#5299 step
-#: 11, `api/crud_agent_mcp.py`).
+#: 11, `api/crud_agent_mcp.py`). Its ``changes`` area is ``…/agent/changes``: the server-sent
+#: event stream of the agent's six NOTIFY channels, with ``Last-Event-ID`` replay of the event log
+#: (#5299 D4, step 11, `api/crud_agent_changes.py`).
 CRUD_AREAS: dict[CrudCaller, list[str]] = {
     "projects": ["flows", "operations", "payload-keys"],
     "render": ["settings", "jobs", "refs", "blob-index", "store-folders", "assets", "libraries"],
@@ -189,6 +191,7 @@ CRUD_AREAS: dict[CrudCaller, list[str]] = {
         "questions",
         "escalations",
         "mcp-relay",
+        "changes",
     ],
     "intake": ["sources"],
 }

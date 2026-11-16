@@ -36,8 +36,7 @@ import { BackgroundTaskStore, CrudBackgroundTasks } from './background/store.js'
 import { runCronPasses, temporalTaskRunner } from './background/temporal.js'
 import { connectDatabase } from './db.js'
 import { MigrationChecksumError } from './db/schema.js'
-import { CrudEventLogReads } from './events/eventLogReads.js'
-import { PgEventListener } from './events/pgListener.js'
+import { ChangeStream } from './events/changeStream.js'
 import { DEFAULT_STATE_DIR, pluginCacheDir } from './harness/options.js'
 import { OWN_PLUGIN_DIR } from './harness/ownPlugin.js'
 import { ensureStateDirs, removeLegacyBrowserDir, sessionsRoot, StateDirError } from './harness/stateDirs.js'
@@ -381,11 +380,10 @@ const backend = createBackendClient(
 // with the step 4 areas.
 const flowReads = new CrudFlowRunReads(config.backendUrl, { fetch: crudFetch })
 
-// The event bus (spec §7, #264): LISTEN on `scadbuddy_events` on a connection
-// of its own, retried in the background, feeding MCP resource subscriptions.
-const events = config.databaseUrl
-  ? new PgEventListener(config.databaseUrl, { eventLog: new CrudEventLogReads(config.backendUrl, { fetch: crudFetch }) })
-  : undefined
+// The event bus (spec §7, #264) and the agent's other NOTIFY channels: one server-sent event
+// stream from the backend's CRUD routes (#5299 D4, events/changeStream.ts), opened with the service
+// credential, retried in the background, feeding MCP resource subscriptions. No LISTEN connection.
+const events = serviceCredential ? new ChangeStream(config.backendUrl, { fetch: crudFetch }) : undefined
 // The pending-input tables' change ticks (#815, gate/changes.ts), for the badge's stream.
 const pendingChanges = events ? new PendingChanges(events) : undefined
 // This replica's own queue: a pinned turn tool's calls (#2320), a classic session's
@@ -406,8 +404,8 @@ const tabRelay = database
   : undefined
 // The rows a process before this one left under the same identity (a container restart).
 void tabRelay?.releaseAll()
-// /mcp requests for a session another replica holds (#2086, mcp/sessionRelay.ts), on
-// the listener's connection: made before start(), so its first LISTEN covers it. Its directory and
+// /mcp requests for a session another replica holds (#2086, mcp/sessionRelay.ts), heard on the
+// change stream's `scadbuddy_mcp`. Its directory and
 // messages go through the backend's CRUD routes once the API lists area `mcp-relay` (#5299 step 11,
 // mcp/relayRows.ts), over SQL until then.
 const mcpRelay =
@@ -615,7 +613,7 @@ const tokens =
     : new FailClosedTokenStore()
 
 // `session.*` on the event bus (#300, sessions/busEvents.ts): every event-log
-// append is announced on `scadbuddy_events`, and this replica's LISTEN
+// append is announced on `scadbuddy_events`, and this replica's change-stream
 // consumer (below) wakes its followers for sessions other replicas write.
 const sessionEvents = database ? new SessionEventPublisher(database.sql) : undefined
 
@@ -750,7 +748,7 @@ const sessions =
     : undefined
 // A credential, plugin or package change on any replica, and a session handed
 // off, marked done, archived or forgotten, evict warm processes everywhere
-// (sessions/warmEvict.ts): on the event bus's connection, like the relays above.
+// (sessions/warmEvict.ts): on the change stream, like the relays above.
 const stopWarmSync =
   sessions && settings && events
     ? wireRuntimeSync({
@@ -782,7 +780,7 @@ if (attachments) toolServices.attachments = attachments
 const stopAttachmentSweep = !role.http ? undefined : attachments?.startSweeper(ATTACHMENT_SWEEP_MS, {
   log: (message) => console.error(message),
 })
-// The LISTEN consumer that calls EventLog.wake() for other replicas' `session.*`.
+// The change-stream consumer that calls EventLog.wake() for other replicas' `session.*`.
 const stopSessionWake =
   sessions && events && sessionEvents ? followSessionEvents(events, sessions.events, sessionEvents.replica) : undefined
 const stopSweeper = !role.http ? undefined : sessions?.approvals.startSweeper(APPROVAL_SWEEP_MS, {
@@ -935,7 +933,7 @@ if (sessionDirectory && database) {
   sweep()
   setInterval(sweep, 3600_000).unref()
 }
-// A parked call holds on its entry's row, woken by `scadbuddy_input` on the event bus's connection (§5.4).
+// A parked call holds on its entry's row, woken by `scadbuddy_input` on the change stream (§5.4).
 const turnHost =
   role.sessionHost && temporal && sessions
     ? new TurnHost({
