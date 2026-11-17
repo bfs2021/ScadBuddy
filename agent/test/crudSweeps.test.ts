@@ -146,7 +146,7 @@ describe("a forget's last rows over the CRUD route", () => {
         },
         `session-${SESSION}`,
       ),
-    ).rejects.toBeInstanceOf(ForksNeedKeys)
+    ).rejects.toSatisfy((err: unknown) => err instanceof ForksNeedKeys && /were ended, but its key, transcript and rows remain/.test(err.message))
     expect(api.seen).toEqual([])
   })
 })

@@ -167,6 +167,15 @@ describe("health's probe of the agent's data", () => {
     expect(health.apiUnanswered()).toBe(false)
     expect(await status(false)).toBe('unavailable (database unreachable)')
     expect(logged).toEqual(["health: the API does not answer the agent's CRUD areas", "health: the API answers the agent's CRUD areas again"])
+    // The API stops answering, then Postgres goes down: the status names the database.
+    pg = true
+    api = false
+    expect(await health.ping()).toBe(false)
+    expect(health.apiUnanswered()).toBe(true)
+    pg = false
+    expect(await health.ping()).toBe(false)
+    expect(health.apiUnanswered()).toBe(false)
+    expect(await status(false)).toBe('unavailable (database unreachable)')
   })
 
   it('reads the ledger through the API once it lists migrations, over SQL until then', async () => {

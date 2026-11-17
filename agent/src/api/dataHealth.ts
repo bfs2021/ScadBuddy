@@ -8,7 +8,7 @@ import type { CrudAreas } from './crudAreas.js'
 /**
  * `database` with a ping that is the Postgres ping and, once the API lists every area, the
  * API's answer to them too: the agent still runs SQL (the LISTEN bus, a turn's edits, the MCP
- * relay) until #5299 step 12. `apiUnanswered` says whether the last ping failed on the API,
+ * relay) until #5299 step 12. `apiUnanswered` says whether the last ping failed on the API, not on Postgres,
  * which aiStatus names; each change in the API's answer is logged.
  */
 export function dataHealthOf<D extends { ping(timeoutMs?: number): Promise<boolean> }>(
@@ -20,7 +20,11 @@ export function dataHealthOf<D extends { ping(timeoutMs?: number): Promise<boole
   return {
     ...database,
     ping: async (timeoutMs?: number) => {
-      if (!(await database.ping(timeoutMs))) return false
+      if (!(await database.ping(timeoutMs))) {
+        // The database failed first: the API is not what the status names (it is not asked).
+        answered = true
+        return false
+      }
       if (!areas.complete) {
         answered = true
         return true

@@ -122,7 +122,7 @@ export async function forgetSubject(deps: ForgetDeps, subject: string): Promise<
   // workflow task or an activity before the termination below) can make it a new key.
   const answered = deps.crud ? await deps.crud.forget(subject) : 'forks'
   // An API with no KEK whose forks take transcript entries, while step 3 is the API's: no SQL here.
-  if (answered === 'forks' && deps.crud && deps.rows && sessionId !== undefined) throw new ForksNeedKeys(sessionId)
+  if (answered === 'forks' && deps.crud && deps.rows && sessionId !== undefined) throw new ForksNeedKeys(sessionId, true)
   const key =
     answered !== 'forks'
       ? answered

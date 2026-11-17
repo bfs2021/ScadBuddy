@@ -81,12 +81,14 @@ _DROP_UNNAMED = (
 
 def _forget_rows(state: Any, session_id: str) -> int:
     with state.settings_store.pool.connection() as conn:
-        forgotten = conn.execute(
-            "SELECT 1 FROM ai_forgotten_subjects WHERE subject = %s", (f"session-{session_id}",)
-        ).fetchone()
-        if forgotten is None:
-            raise NotForgottenError
         with conn.transaction():
+            # The tombstone, held in the delete's transaction: no session is deleted unforgotten.
+            forgotten = conn.execute(
+                "SELECT 1 FROM ai_forgotten_subjects WHERE subject = %s FOR SHARE",
+                (f"session-{session_id}",),
+            ).fetchone()
+            if forgotten is None:
+                raise NotForgottenError
             shared = [
                 r["bytes_sha256"]
                 for r in conn.execute(
