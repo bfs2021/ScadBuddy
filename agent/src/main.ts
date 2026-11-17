@@ -78,6 +78,7 @@ import { CrudPending } from './gate/crudPending.js'
 import { CrudQuestions } from './gate/crudQuestions.js'
 import { CrudEscalations } from './flows/crudEscalations.js'
 import { CrudGate } from './gate/crudStore.js'
+import { dataHealthOf, ledgerOf } from './api/dataHealth.js'
 import { gated, STORE_AREAS, type StoreArea } from './api/crudStores.js'
 import { CrudFlowRunReads } from './flows/backendReads.js'
 import { BrowserSessions, CrudSessionLookup, PgSessionLookup, type SessionLookup } from './auth/browserSession.js'
@@ -239,7 +240,8 @@ const database: Database | undefined = config.databaseUrl
         if (err instanceof MigrationChecksumError) process.exit(1)
       },
       // The ledger through the API once it lists area `migrations` (#6501), over SQL until then.
-      ledger: (sql: Sql): LedgerReader => (expected) => (crudAreas.has('migrations') ? crudLedger(crudTarget) : sqlLedger(sql))(expected),
+      // Read when ready() asks, after crudAreas and crudTarget below exist.
+      ledger: (sql: Sql): LedgerReader => ledgerOf(crudAreas, crudLedger(crudTarget), sqlLedger)(sql),
     })
   : undefined
 // #4975 phase 4: the agent's service credential, on the client and the workspace blob routes.
@@ -275,26 +277,9 @@ const crudTarget = { baseUrl: config.backendUrl, fetch: crudFetch }
 // Wait for the schema in the background: an API that has not migrated yet, or a database that is
 // down at start-up, is retried by the next /healthz or API call instead of stopping the pod.
 void database?.ready()
-// Health's probe of the agent's data (#6501): the Postgres ping, since the agent still runs SQL
-// (the LISTEN bus, a turn's claim and end, the MCP relay) until #5299 step 12, and, once the API
-// lists every area, its answer to them too. A change in the API's answer is logged, as /healthz
-// reports both under `database`.
-let apiAnswered = true
-const dataHealth = database
-  ? {
-      ...database,
-      ping: async (timeoutMs?: number) => {
-        if (!(await database.ping(timeoutMs))) return false
-        if (!crudAreas.complete) return true
-        const answered = await crudAreas.answers(timeoutMs)
-        if (answered !== apiAnswered) {
-          apiAnswered = answered
-          console.warn(answered ? "health: the API answers the agent's CRUD areas again" : "health: the API does not answer the agent's CRUD areas; /healthz reports database unreachable")
-        }
-        return answered
-      },
-    }
-  : undefined
+// Health's probe of the agent's data (#6501, api/dataHealth.ts): the Postgres ping and, once the
+// API lists every area, its answer to them too.
+const dataHealth = database ? dataHealthOf(database, crudAreas) : undefined
 const storeArea = (area: StoreArea) => () => crudAreas.has(area)
 // The tool-call gate's routes (#5299 step 10, backend api/crud_agent_gate.py).
 const gateRoutes = { crud: new CrudGate(crudTarget), use: () => crudAreas.has('gate') }
