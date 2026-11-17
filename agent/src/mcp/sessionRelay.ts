@@ -70,6 +70,26 @@ const SILENT_AFTER_BEATS = 3
  * text: JSON escapes the text again, and an SSE chunk of JSON is mostly quotes.
  */
 const INLINE_MAX_BYTES = 7_500
+/**
+ * The most UTF-16 units of an answer one row carries. JSON writes a unit as at most six bytes
+ * (a control character's `\u0000`), so a row stays under 6 MiB, inside the API's 8 MiB JSON
+ * gate (`relayRows.ts` `RELAY_SEND_MAX_BYTES`); a larger chunk goes as several rows, in order.
+ */
+export const ROW_TEXT_MAX = 1 << 20
+
+/** `text` in pieces of at most `max` units, never cutting a surrogate pair. */
+export function rowPieces(text: string, max = ROW_TEXT_MAX): string[] {
+  const pieces: string[] = []
+  let at = 0
+  while (at < text.length) {
+    let end = Math.min(at + max, text.length)
+    const last = text.charCodeAt(end - 1)
+    if (end < text.length && last >= 0xd800 && last <= 0xdbff) end -= 1
+    pieces.push(text.slice(at, end))
+    at = end
+  }
+  return pieces
+}
 const SWEEP_EVERY_MS = 60_000
 /** Headers of an answer that describe its own hop's framing, not the answer. */
 const FRAMING_HEADERS: ReadonlySet<string> = new Set(['content-length', 'transfer-encoding', 'connection', 'keep-alive'])
@@ -526,8 +546,11 @@ export class SharedMcpSessionRelay implements McpSessionRelay {
               const inline: Header = { t: 'chunk', req, to, text }
               if (Buffer.byteLength(JSON.stringify(inline), 'utf8') <= INLINE_MAX_BYTES) await send(inline)
               else {
-                const row = randomUUID()
-                await send({ t: 'chunk', req, to, row }, { row, value: { text } })
+                for (const piece of rowPieces(text)) {
+                  if (controller.signal.aborted) break
+                  const row = randomUUID()
+                  await send({ t: 'chunk', req, to, row }, { row, value: { text: piece } })
+                }
               }
             }
             if (done || controller.signal.aborted) break

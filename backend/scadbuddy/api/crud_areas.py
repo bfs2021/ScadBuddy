@@ -125,7 +125,12 @@ from scadbuddy.crud.guard import CrudCaller, crud_router
 #: ``session.*`` bus event NOTIFYed on ``scadbuddy_events`` and a warm process's eviction on
 #: ``scadbuddy_warm_evict``; its ``session-reads`` area is ``…/agent/sessions/{id}/open-calls``
 #: and ``…/reasoning``, a session's calls with no result and a child's text before a call
-#: (#6501, `api/crud_agent_publish.py`). Its
+#: (#6501, `api/crud_agent_publish.py`).
+#: Its ``session-turns`` area is ``…/agent/sessions/{id}/turn`` with every route under it and
+#: ``…/agent/turns/stale``: a durable turn's writes of its session's row, each with its events
+#: in one transaction and its fence checked there (a send's claim and give-back, a Stop's flag, a
+#: placement's claim, its spend, the turn's end with the queue's head, the queue's event, and the
+#: running sweep's end of a lost turn; #6449, `api/crud_agent_turns.py`). Its
 #: ``mcp-relay`` area is ``…/agent/mcp-relay/*``: the /mcp session directory, the relay's messages
 #: (a body row and its ``scadbuddy_mcp`` NOTIFY in one transaction) and their sweep (#5299 step
 #: 11, `api/crud_agent_mcp.py`). Its ``changes`` area is ``…/agent/changes``: the server-sent
@@ -199,9 +204,10 @@ CRUD_AREAS: dict[CrudCaller, list[str]] = {
         "approvals",
         "questions",
         "escalations",
+        "mcp-relay",
         "publish",
         "session-reads",
-        "mcp-relay",
+        "session-turns",
         "changes",
     ],
     "intake": ["sources"],

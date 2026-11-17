@@ -236,7 +236,13 @@ lists area `mcp-relay` (`…/crud/agent/mcp-relay/*`,
 [`crud_agent_mcp.py`](../../backend/scadbuddy/api/crud_agent_mcp.py), #5299 step 11;
 [`relayRows.ts`](../../agent/src/mcp/relayRows.ts)), and over the agent's own SQL until
 then. Either way a message's row and its `scadbuddy_mcp` NOTIFY commit in one
-transaction; the diagram's Postgres steps are those routes' statements:
+transaction; the diagram's Postgres steps are those routes' statements. Over the routes each
+message (an ack, a beat, the head, each chunk, the end) is one HTTP call to the API, sent in
+order per request, so a relayed answer's latency grows by one round trip per message; watch
+the relayed SSE latency once the area is listed. A route body is bounded by the API's 8 MiB
+JSON gate: a request whose message would pass it is answered 413 by the relaying replica, and
+an answer's chunk too large for the NOTIFY goes as rows of at most 2^20 UTF-16 units each
+(`sessionRelay.ts` `ROW_TEXT_MAX`), so a large answer is relayed whole.
 
 ```mermaid
 sequenceDiagram

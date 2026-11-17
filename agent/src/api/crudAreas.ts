@@ -74,6 +74,13 @@ export const RELAY_AREAS = ['mcp-relay'] as const
  */
 export const REST_AREAS = ['publish', 'session-reads'] as const
 
+/**
+ * The area of a durable turn's writes of its session's row, each with its events in one
+ * transaction and its fence checked there (#6449; backend api/crud_agent_turns.py;
+ * sessions/turnRows.ts).
+ */
+export const TURN_AREAS = ['session-turns'] as const
+
 export type CrudAreasOptions = {
   fetch?: typeof fetch
   /** The areas the agent waits for. */
