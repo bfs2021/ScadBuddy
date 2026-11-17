@@ -30,7 +30,6 @@ events a print; #6263's AMS readings, one per tick, will need an incremental pat
 
 from __future__ import annotations
 
-import base64
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, Final
@@ -198,12 +197,12 @@ class BadCursorError(ValueError):
 
 
 def _encode(at: datetime, seq: int) -> str:
-    return base64.urlsafe_b64encode(f"{at.isoformat()}|{seq}".encode()).decode().rstrip("=")
+    return f"{at.isoformat()}|{seq}".encode().hex()
 
 
 def _decode(cursor: str) -> tuple[datetime, int]:
     try:
-        text = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)).decode()
+        text = bytes.fromhex(cursor).decode()
         at, seq = text.rsplit("|", 1)
         return datetime.fromisoformat(at), int(seq)
     except ValueError:
