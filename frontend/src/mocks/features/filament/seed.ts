@@ -429,6 +429,7 @@ function events(): S['SpoolEvent'][] {
   let n = 0
   const event = (spool: number, at: string, kind: S['SpoolEvent']['kind'], values: Partial<S['SpoolEvent']> = {}): S['SpoolEvent'] => ({
     id: id('62620005', ++n),
+    seq: n,
     spool_id: spoolId(spool),
     at,
     kind,

@@ -69,10 +69,12 @@ ContactKind = Literal[
 #: sends either kind has it ignored (``Lifecycle._typed``).
 ChargeKind = Literal["shipping", "discount", "fee", "tax", "purchase", "handling"]
 #: A ``slice`` quote is priced from the item's slice; ``manual`` is typed; ``archive``
-#: (#4777) is priced from what a past print used, with no re-slice.
-QuoteSource = Literal["slice", "manual", "archive"]
+#: (#4777) is priced from what a past print used, with no re-slice; ``storefront``
+#: (#6153) is a storefront line's firm price at checkout, from the storefront's slice
+#: price, with no sliced file kept.
+QuoteSource = Literal["slice", "manual", "archive", "storefront"]
 #: The sources whose plates hold measured grams and seconds, which job cost prices by.
-MEASURED_SOURCES: frozenset[str] = frozenset({"slice", "archive"})
+MEASURED_SOURCES: frozenset[str] = frozenset({"slice", "archive", "storefront"})
 #: What an item is (#4954): a ``model`` names a template render (its ``reference``); a
 #: ``custom`` item is a title, a quantity and a typed price with nothing behind it; a
 #: ``library_file`` item (#5544) names a file of the library (its ``library_file``).
@@ -440,6 +442,12 @@ class OrderFilter(BaseModel):
     purchase_pending: bool = False
     #: Only orders with a source whose import is stuck (`IMPORT_STUCK`).
     import_stuck: bool = False
+    #: A closed or cancelled order is left out when it ended (``closed_at``, else
+    #: ``cancelled_at``, else ``updated_at``) before this; an open order is always kept (#6334).
+    ended_since: datetime | None = None
+    #: Only orders the customer owes money on: an `open`, `pending` or `failed` payment
+    #: request (#6334, the list's "Awaiting payment").
+    owing: bool = False
 
 
 # -- line items (§3.3) ------------------------------------------------------------------
@@ -640,8 +648,9 @@ class Quote(BaseModel):
     printer: str | None = None
     machine_rate_breakdown: MachineRateBreakdown | None = None
     #: A slice quote's print setup (#4673, order operations spec §5.1), as it sliced:
-    #: `printer_id`, `printer`, `path`, `choices`, `prime_tower`, `supports` and
-    #: `print_sequence`, each in `PrintRunRequest`'s shape (`orders/quote.py`
+    #: `printer_id`, `printer`, `path`, `choices`, `prime_tower`, `supports`,
+    #: `print_sequence` and `process_overrides` (#2998; absent from one recorded before
+    #: it), each in `PrintRunRequest`'s shape (`orders/quote.py`
     #: `print_setup`). Null for a manual or archive quote, and one recorded before.
     choices: dict[str, Any] | None = None
     #: The spool per slot a slice quote sliced with (`PrintRunRequest.filament_plan`).

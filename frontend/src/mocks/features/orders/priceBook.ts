@@ -9,7 +9,7 @@ import { machineRateFor } from './machineRates'
 import { pushRevision } from './revisions'
 import { pastPrint } from './pastPrints'
 import { retax } from './money'
-import { BROWSER, fieldProblem, minorExponent, newId, now, problem, PROBLEMS, Refused, state } from './state'
+import { BROWSER, fieldProblem, minorExponent, newId, now, OUTPUT_REAGAN, problem, PROBLEMS, Refused, state } from './state'
 
 /**
  * Orders phase 2 (#4250, spec 2026-10-18 §5; backend `api/orders.py`): the price book (the
@@ -499,6 +499,7 @@ export const handlers = [
           prime_tower: body.prime_tower ?? null,
           supports: body.supports ?? null,
           print_sequence: body.print_sequence ?? null,
+          process_overrides: body.process_overrides ?? null,
         },
         filament_plan: body.filament_plan as Quote['filament_plan'],
         total_minor: 0,
@@ -511,6 +512,35 @@ export const handlers = [
       retax(order.id)
       rederive(order)
       return acceptOperation('order_item_quote', `order_item:${found.id}`, made as unknown as Record<string, unknown>)
+    } catch (error) {
+      return refused(request, error)
+    }
+  }),
+
+  // #6324 — an item's render (`orders/operations.py` `render_check`, then the run): the
+  // mock's render of any design is its seeded keychain output, set on the item with no
+  // revision and no quote dropped. A design whose `name` is `fail` fails as a render does.
+  http.post(`${base}/:id/items/:item/render`, ({ request, params }) => {
+    if (!request.headers.get('Idempotency-Key')) {
+      return problem(request, 428, 'This request needs an Idempotency-Key header', 'https://scadbuddy.dev/problems/idempotency-key-required')
+    }
+    try {
+      const order = lock(String(params.id))
+      const found = itemOf(order, String(params.item))
+      if (found.library_file) throw new Refused('item_library_file', `item ${found.id} is a library file item: it slices its file, and has no design to render`, [found.id])
+      // `quote.py` `reference_of`: a request has no design until its first revision.
+      if (found.reference === null && found.kind === 'request') throw new Refused('item_has_no_design', `item ${found.id} is a request with no design yet: add a revision first`, [found.id])
+      if (found.reference === null) throw new Refused('item_custom', `item ${found.id} is a custom item: it has no model to render or slice`, [found.id])
+      if (!requoteOpen(order, found)) throw new Refused('order_not_open', `order ${order.number} is ${order.status}: an item is rendered for a quote while it is draft or quoted`)
+      if (SETTLED.has(found.status)) throw new Refused('item_not_open', `item ${found.id} is ${found.status}`)
+      const design = (found.reference.inputs as { params?: Record<string, unknown> }).params ?? {}
+      if (design.name === 'fail') {
+        return acceptOperation('order_item_render', `order_item:${found.id}`, {}, 'the render of name-keychain, job j-fail, is failed: openscad exited 1')
+      }
+      found.output_id = OUTPUT_REAGAN
+      found.updated_at = now()
+      event(order, 'item.updated', { item_id: found.id })
+      return acceptOperation('order_item_render', `order_item:${found.id}`, found as unknown as Record<string, unknown>)
     } catch (error) {
       return refused(request, error)
     }
@@ -556,12 +586,29 @@ export const handlers = [
       }
       const used = run.flatMap((p) => p!.slots.filter((s) => s.used_g > 0).map((s) => String(s.slot_id - 1)))
       const filaments: Record<string, string> = { ...(body.filament_id ? Object.fromEntries(used.map((slot) => [slot, body.filament_id!])) : {}), ...(body.filaments ?? {}) }
+      // `past_prints.py` `_per_unit` (#6336): the run made `units` units, so each plate's
+      // grams (to the hundredth) and seconds (to the whole second) are one unit's share.
+      // 1000 is `quote.py` `ARCHIVE_UNITS_MAX`.
+      const units = body.units ?? 1
+      if (!Number.isInteger(units) || units < 1 || units > 1000) return fieldProblem(request, 'units', 'Input should be from 1 to 1000')
+      // Half up on exact integers, as the backend's `Decimal` `ROUND_HALF_UP` is: a float
+      // `Math.round(0.29 / 2 * 100)` gives 14, not 15 (#6508). Values have six places or fewer.
+      const share = (value: number, places: number) => {
+        const scaled = BigInt(Math.round(value * 1e6)) * 10n ** BigInt(places)
+        const whole = BigInt(1e6 * units)
+        return Number((2n * scaled + whole) / (2n * whole)) / 10 ** places
+      }
       const plates = run.map((p) => ({
         index: p!.plate_id ?? 1,
-        print_seconds: p!.actual_time_seconds ?? p!.print_time_seconds ?? 0,
-        filaments: p!.slots.filter((s) => s.used_g > 0).map((s) => ({ slot: s.slot_id - 1, used_g: s.used_g })),
+        print_seconds: Math.max(share(p!.actual_time_seconds ?? p!.print_time_seconds ?? 0, 0), 1),
+        filaments: p!.slots.filter((s) => s.used_g > 0).map((s) => ({ slot: s.slot_id - 1, used_g: share(s.used_g, 2) })),
         archive_id: p!.id,
       }))
+      const light = units > 1 && plates.find((plate) => plate.filaments.every((f) => f.used_g === 0))
+      if (light) {
+        const msg = `archive ${light.archive_id} records too little filament for ${units} units: each unit's share rounds to 0.00 g, so it cannot price the item`
+        return problem(request, 422, msg, PROBLEMS + 'archive_plate', { archive_id: light.archive_id, errors: [{ loc: ['body', 'units'], msg }] })
+      }
       notEnded(order)
       if (found.colours.length === 0) {
         // A library file item takes the slots the print used.

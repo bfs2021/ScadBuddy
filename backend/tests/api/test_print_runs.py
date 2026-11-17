@@ -945,6 +945,9 @@ def test_the_request_id_is_part_of_the_key_and_its_absence_keeps_the_old_key() -
                 "path": True,
                 # #5571: nor this one.
                 "part_settings": True,
+                # #2998: nor these.
+                "process_overrides": True,
+                "dropped_settings": True,
                 # #6262 Task 7 review I1: nor the plan's ``ids``, here its default "bb".
                 "filament_plan": {"ids"},
             },

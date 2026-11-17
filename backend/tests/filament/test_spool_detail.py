@@ -86,6 +86,7 @@ def _event(minute: int, kind: str, source: str | None, **over: Any) -> SpoolEven
         "ref_id": None,
         "actor": None,
         "data": {},
+        "seq": minute + 1,
     }
     return SpoolEvent.model_validate(values | over)
 

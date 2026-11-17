@@ -137,9 +137,9 @@ def basis(
     events: Sequence[m.SpoolEvent], *, weight_locked: bool, label_weight_g: int | None
 ) -> m.GramsBasis:
     """The reading the grams left anchor on, and the deltas taken off it, by the rule
-    above; no anchor when there is no reading. Events of one time keep the order they are
-    given in."""
-    ordered = sorted(events, key=lambda e: e.at)
+    above; no anchor when there is no reading. Events of one time keep the order they were
+    booked in (``seq``)."""
+    ordered = sorted(events, key=lambda e: (e.at, e.seq))
     readings = [_reading(e, label_weight_g) for e in ordered]
     manual = max(
         (i for i, e in enumerate(ordered) if e.source in _MANUAL and readings[i] is not None),

@@ -261,6 +261,7 @@ from scadbuddy.slicing.transfer import (
     TransferUnavailableError,
 )
 from scadbuddy.spools.models import SeenTray
+from scadbuddy.store.content_models import content_index_key
 
 logger = logging.getLogger(__name__)
 
@@ -1902,8 +1903,10 @@ class TransferUrlAsk(BaseModel):
 @router.post("/transfer-urls", name="crud_print_transfer_url")
 async def transfer_url(body: TransferUrlAsk, slicing: SlicingDep) -> TransferUrl:
     """A read URL of ``key``, only if the content index holds it live as a slicer's
-    output (see the module docstring). Without a content store, an internal URL or a KEK on the
-    API it is 503 ``not_configured``, which the worker does not retry."""
+    output (see the module docstring), under the content-addressed key of its own bytes
+    (`content_index_key`, #6179): a mark or kind on any other key mints nothing. Without a
+    content store, an internal URL or a KEK on the API it is 503 ``not_configured``, which
+    the worker does not retry."""
     try:
         transfers = slicing.transfers()
     except RuntimeError as error:  # no content store
@@ -1925,6 +1928,7 @@ async def transfer_url(body: TransferUrlAsk, slicing: SlicingDep) -> TransferUrl
     if (
         stat is None
         or stat.ref.kind != SLICE_KIND
+        or body.key != content_index_key(SLICE_KIND, stat.ref.sha256)
         or any(stat.meta.get(k) != v for k, v in SLICED_OUTPUT_META.items())
     ):
         raise ApiError(status.HTTP_403_FORBIDDEN, "transfer refused", reason=TRANSFER_REFUSED)

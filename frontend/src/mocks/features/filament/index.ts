@@ -172,7 +172,7 @@ function detail(row: SpoolRow): S['SpoolDetail'] {
     .filter((one) => one.spool_id === row.id && one.unbound_at)
     .sort((a, b) => (b.unbound_at ?? '').localeCompare(a.unbound_at ?? ''))[0]
   const lastTag = last ? tagById(last.tag_id) : undefined
-  const ledger = state.events.filter((event) => event.spool_id === row.id).sort((a, b) => a.at.localeCompare(b.at))
+  const ledger = state.events.filter((event) => event.spool_id === row.id).sort((a, b) => a.at.localeCompare(b.at) || a.seq - b.seq)
   const anchor = [...ledger].reverse().find((event) => event.kind === 'weighed' || event.kind === 'created') ?? null
   const deltas = anchor ? ledger.filter((event) => event.at > anchor.at && event.delta_g != null) : []
   return {
@@ -206,6 +206,7 @@ function addEvent(spoolId: string, kind: S['SpoolEvent']['kind'], values: Partia
     ref_id: null,
     actor: 'mock@example.com',
     data: {},
+    seq: state.events.reduce((top, row) => Math.max(top, row.seq), 0) + 1,
     ...values,
   }
   state.events.push(event)
@@ -1043,7 +1044,7 @@ export const handlers = [
   http.get(`${BASE}/spools/:id/events`, ({ params }) => {
     const spoolId = String(params.id)
     if (!findSpool(spoolId)) return problem(404, `no spool ${spoolId}`)
-    return HttpResponse.json(state.events.filter((event) => event.spool_id === spoolId).sort((a, b) => a.at.localeCompare(b.at)))
+    return HttpResponse.json(state.events.filter((event) => event.spool_id === spoolId).sort((a, b) => a.at.localeCompare(b.at) || a.seq - b.seq))
   }),
   http.post(`${BASE}/spools/:id/events`, async ({ params, request }) => {
     const at = state.spools.findIndex((row) => row.id === params.id)

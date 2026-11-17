@@ -1051,6 +1051,7 @@ class SpoolEventCreate(_In):
 
 class SpoolEvent(BaseModel):
     id: UUID
+    seq: int
     spool_id: UUID
     at: datetime
     kind: EventKind
