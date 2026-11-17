@@ -12,7 +12,7 @@ import {
   type LocationPatch,
   type Spool,
 } from '../../api/filament'
-import { SELECT_CLASS } from '../../components/filament/formClasses'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { LocationTree } from '../../components/filament/LocationTree'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -35,6 +35,7 @@ interface Draft {
   note: string
 }
 
+const TOP = '__top'
 const message = (cause: unknown, fallback: string) => (cause instanceof ApiError ? cause.detail : fallback)
 
 /** Every place, depth first, with its path ("Workshop / Shelf A"); a printer's tray is not a place to put a place in. */
@@ -197,26 +198,36 @@ export function LocationsTab() {
           </label>
           <label className="flex flex-col gap-1">
             Kind
-            <select className={SELECT_CLASS} value={draft.kind_id} required onChange={(event) => setDraft({ ...draft, kind_id: event.target.value })}>
-              {data.kinds.map((kind) => (
-                <option key={kind.id} value={kind.id}>
-                  {kind.name}
-                </option>
-              ))}
-            </select>
+            <Select value={draft.kind_id} onValueChange={(next) => setDraft({ ...draft, kind_id: next })}>
+              <SelectTrigger aria-label="Kind" className="w-full text-[13px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {data.kinds.map((kind) => (
+                  <SelectItem key={kind.id} value={kind.id}>
+                    {kind.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </label>
           <label className="flex flex-col gap-1">
             Inside
-            <select className={SELECT_CLASS} value={draft.parent_id} onChange={(event) => setDraft({ ...draft, parent_id: event.target.value })}>
-              <option value="">Nowhere (top level)</option>
-              {places
-                .filter(({ node }) => node.id !== draft.id)
-                .map(({ node, path }) => (
-                  <option key={node.id} value={node.id}>
-                    {path}
-                  </option>
-                ))}
-            </select>
+            <Select value={draft.parent_id || TOP} onValueChange={(next) => setDraft({ ...draft, parent_id: next === TOP ? '' : next })}>
+              <SelectTrigger aria-label="Inside" className="w-full text-[13px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={TOP}>Nowhere (top level)</SelectItem>
+                {places
+                  .filter(({ node }) => node.id !== draft.id)
+                  .map(({ node, path }) => (
+                    <SelectItem key={node.id} value={node.id}>
+                      {path}
+                    </SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
           </label>
           <label className="flex flex-col gap-1">
             Label

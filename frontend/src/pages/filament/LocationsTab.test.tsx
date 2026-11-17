@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { listLocations } from '../../api/filament'
 import { L, spoolId } from '../../mocks/features/filament/seed'
 import { renderPage } from '../../test/utils'
+import { choose } from '../../test/select'
 import { LocationsTab } from './LocationsTab'
 
 const tree = () => screen.findByRole('list', { name: 'Locations' })
@@ -35,7 +36,7 @@ describe('the Locations tab', () => {
     const { user } = renderPage(<LocationsTab />)
     const workshop = await place(L.WORKSHOP)
     await user.click(within(workshop).getByRole('button', { name: 'Edit Workshop' }))
-    await user.selectOptions(await screen.findByLabelText('Inside'), L.SHELF_A)
+    await choose(user, await screen.findByRole('combobox', { name: 'Inside' }), 'Workshop / Shelf A')
     await user.click(screen.getByRole('button', { name: 'Save' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('a place cannot be its own parent or sit under one of its own')
     expect((await listLocations()).find((node) => node.id === L.WORKSHOP)?.parent_id).toBeNull()
@@ -57,8 +58,8 @@ describe('the Locations tab', () => {
     await tree()
     await user.click(screen.getByRole('button', { name: 'Add a place' }))
     await user.type(await screen.findByLabelText('Name'), 'Drawer 2')
-    await user.selectOptions(screen.getByLabelText('Kind'), 'Shelf')
-    await user.selectOptions(screen.getByLabelText('Inside'), L.WORKSHOP)
+    await choose(user, screen.getByRole('combobox', { name: 'Kind' }), 'Shelf')
+    await choose(user, screen.getByRole('combobox', { name: 'Inside' }), 'Workshop')
     await user.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(async () => expect(((await listLocations())[0]!.children ?? []).map((child) => child.name)).toContain('Drawer 2'))
   })

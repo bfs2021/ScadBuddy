@@ -6,7 +6,8 @@ import { listCatalog, upsertCatalog, type CatalogInput, type CatalogKind } from 
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
-import { SELECT_CLASS, TD, TH } from './formClasses'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { TD, TH } from './formClasses'
 import { RgbaColourField } from './RgbaColourField'
 import { parseRgba } from '../../lib/rgba'
 import { RgbaSwatch } from './RgbaSwatch'
@@ -16,6 +17,7 @@ type Row = { id: string; name: string; sort_order: number; archived_at: string |
 type Value = string | boolean | null
 type Draft = { id: string | null; name: string; values: Record<string, Value> }
 
+const NONE = '__none'
 const message = (cause: unknown) => (cause instanceof ApiError ? cause.detail : 'The change could not be saved. Try again.')
 
 /**
@@ -222,14 +224,19 @@ export function CatalogList({ kind }: { kind: CatalogKind }) {
           return (
             <label key={field.name} className="flex flex-col gap-1">
               {field.label}
-              <select className={SELECT_CLASS} value={typeof value === 'string' ? value : ''} onChange={(event) => set(event.target.value || null)}>
-                <option value="">None</option>
-                {(options[field.ref!] ?? []).filter((row) => !row.archived_at || row.id === value).map((row) => (
-                  <option key={row.id} value={row.id}>
-                    {row.archived_at ? `${row.name} (archived)` : row.name}
-                  </option>
-                ))}
-              </select>
+              <Select value={typeof value === 'string' && value ? value : NONE} onValueChange={(next) => set(next === NONE ? null : next)}>
+                <SelectTrigger aria-label={field.label} className="w-full text-[13px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NONE}>None</SelectItem>
+                  {(options[field.ref!] ?? []).filter((row) => !row.archived_at || row.id === value).map((row) => (
+                    <SelectItem key={row.id} value={row.id}>
+                      {row.archived_at ? `${row.name} (archived)` : row.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </label>
           )
         return (

@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { ApiError } from '../../api/client'
 import { listEvents, listSpools, type EventQuery, type LedgerRow } from '../../api/filament'
-import { SELECT_CLASS, TD, TH, when } from '../../components/filament/formClasses'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { TD, TH, when } from '../../components/filament/formClasses'
 import { grams, spoolPath } from '../../components/filament/spoolsQuery'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -10,6 +11,7 @@ import { Input } from '@/components/ui/input'
 type Kind = NonNullable<EventQuery['kind']>
 type Source = NonNullable<EventQuery['source']>
 
+const ANY = '__any'
 const KINDS: { id: Kind; title: string }[] = [
   { id: 'created', title: 'Created' },
   { id: 'loaded', title: 'Loaded' },
@@ -187,25 +189,35 @@ export function LedgerTab() {
         </label>
         <label className="flex flex-col gap-1 text-muted-foreground">
           Kind
-          <select className={SELECT_CLASS} value={kind} onChange={(event) => set('kind', event.target.value)}>
-            <option value="">Every kind</option>
-            {KINDS.map((one) => (
-              <option key={one.id} value={one.id}>
-                {one.title}
-              </option>
-            ))}
-          </select>
+          <Select value={kind || ANY} onValueChange={(next) => set('kind', next === ANY ? '' : next)}>
+            <SelectTrigger aria-label="Kind" className="h-8 w-auto text-[13px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ANY}>Every kind</SelectItem>
+              {KINDS.map((one) => (
+                <SelectItem key={one.id} value={one.id}>
+                  {one.title}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </label>
         <label className="flex flex-col gap-1 text-muted-foreground">
           Source
-          <select className={SELECT_CLASS} value={source} onChange={(event) => set('source', event.target.value)}>
-            <option value="">Every source</option>
-            {SOURCES.map((one) => (
-              <option key={one.id} value={one.id}>
-                {one.title}
-              </option>
-            ))}
-          </select>
+          <Select value={source || ANY} onValueChange={(next) => set('source', next === ANY ? '' : next)}>
+            <SelectTrigger aria-label="Source" className="h-8 w-auto text-[13px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ANY}>Every source</SelectItem>
+              {SOURCES.map((one) => (
+                <SelectItem key={one.id} value={one.id}>
+                  {one.title}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </label>
         <label className="flex flex-col gap-1 text-muted-foreground">
           From

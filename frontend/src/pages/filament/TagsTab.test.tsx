@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { server } from '../../mocks/server'
 import { spoolId, TAG } from '../../mocks/features/filament/seed'
 import { renderPage } from '../../test/utils'
+import { choose } from '../../test/select'
 import { TagsTab } from './TagsTab'
 
 const table = () => screen.findByRole('table', { name: 'Tags' })
@@ -40,9 +41,9 @@ describe('the Tags tab', () => {
     const { user } = renderPage(<TagsTab />)
     await table()
     expect(within(await rowOf(TAG.LOOSE)).getByText('Not on a spool')).toBeInTheDocument()
-    await user.selectOptions(screen.getByLabelText('Show'), 'bound')
+    await choose(user, screen.getByRole('combobox', { name: 'Show' }), 'On a spool')
     expect(within(await table()).queryByText('Not on a spool')).toBeNull()
-    await user.selectOptions(screen.getByLabelText('Kind'), 'bambu_mifare')
+    await choose(user, screen.getByRole('combobox', { name: 'Kind' }), 'Bambu Lab (RFID)')
     const rows = within(await table()).getAllByRole('row').filter((row) => row.dataset.tag)
     expect(rows.map((row) => row.dataset.tag)).toEqual([TAG.BLACK])
   })

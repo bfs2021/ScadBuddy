@@ -2,10 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { ApiError } from '../../api/client'
 import { getTag, listSpools, listTags, type TagDetail, type TagRow } from '../../api/filament'
-import { SELECT_CLASS, TD, TH, when } from '../../components/filament/formClasses'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { TD, TH, when } from '../../components/filament/formClasses'
 import { KINDS } from '../../components/filament/tagKinds'
 import { spoolPath } from '../../components/filament/spoolsQuery'
 import { Button } from '@/components/ui/button'
+
+const ANY = '__any'
 
 const kindName = (kind: string) => KINDS.find((one) => one.id === kind)?.name ?? kind
 
@@ -91,22 +94,32 @@ export function TagsTab() {
       <div className="flex flex-wrap items-center gap-3 text-[13px]">
         <label className="flex items-center gap-2 text-muted-foreground">
           Kind
-          <select className={SELECT_CLASS} value={kind} onChange={(event) => change('kind', event.target.value, '')}>
-            <option value="">Every kind</option>
-            {KINDS.map((one) => (
-              <option key={one.id} value={one.id}>
-                {one.name}
-              </option>
-            ))}
-          </select>
+          <Select value={kind || ANY} onValueChange={(next) => change('kind', next === ANY ? '' : next, '')}>
+            <SelectTrigger aria-label="Kind" className="h-8 w-auto text-[13px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ANY}>Every kind</SelectItem>
+              {KINDS.map((one) => (
+                <SelectItem key={one.id} value={one.id}>
+                  {one.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </label>
         <label className="flex items-center gap-2 text-muted-foreground">
           Show
-          <select className={SELECT_CLASS} value={shown} onChange={(event) => change('show', event.target.value, 'all')}>
-            <option value="all">All tags</option>
-            <option value="bound">On a spool</option>
-            <option value="unbound">Not on a spool</option>
-          </select>
+          <Select value={shown} onValueChange={(next) => change('show', next, 'all')}>
+            <SelectTrigger aria-label="Show" className="h-8 w-auto text-[13px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All tags</SelectItem>
+              <SelectItem value="bound">On a spool</SelectItem>
+              <SelectItem value="unbound">Not on a spool</SelectItem>
+            </SelectContent>
+          </Select>
         </label>
       </div>
       {error && (

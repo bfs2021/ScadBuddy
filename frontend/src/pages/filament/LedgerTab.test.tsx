@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { server } from '../../mocks/server'
 import { spoolId } from '../../mocks/features/filament/seed'
 import { renderPage } from '../../test/utils'
+import { choose } from '../../test/select'
 import { LedgerTab } from './LedgerTab'
 
 const ledger = () => screen.findByRole('table', { name: 'Ledger' })
@@ -101,8 +102,8 @@ describe('the Ledger tab', () => {
   it('changing a filter writes it to the URL', async () => {
     const { user } = renderPage(<LedgerTab />)
     await ledger()
-    await user.selectOptions(screen.getByLabelText('Kind'), 'dried')
+    await choose(user, screen.getByRole('combobox', { name: 'Kind' }), 'Dried')
     await waitFor(() => expect(dataRows(screen.getByRole('table', { name: 'Ledger' }))).toHaveLength(1))
-    expect(screen.getByLabelText('Kind')).toHaveValue('dried')
+    expect(screen.getByRole('combobox', { name: 'Kind' })).toHaveTextContent('Dried')
   })
 })
