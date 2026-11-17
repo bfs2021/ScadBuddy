@@ -25,6 +25,7 @@ from scadbuddy.main import create_app
 from scadbuddy.slicing.transfer import INTERNAL_BLOBS, WORKSPACE_PENDING_PREFIX
 from scadbuddy.store.content import ContentStore
 from scadbuddy.store.content_models import SWEPT_KINDS, BlobScope
+from tests.api.service_auth import authorize
 
 pytestmark = pytest.mark.requires_postgres
 
@@ -57,7 +58,7 @@ def s3_client(settings: Settings, s3: S3Settings, kek_file: Path) -> Iterator[Te
     with TestClient(
         create_app(_on_s3(settings, s3, secret_key_file=kek_file, api_internal_url=INTERNAL))
     ) as client:
-        yield client
+        yield authorize(client, "agent")
 
 
 @pytest.fixture
@@ -67,7 +68,7 @@ def local_client(settings: Settings, kek_file: Path) -> Iterator[TestClient]:
             settings.model_copy(update={"secret_key_file": kek_file, "api_internal_url": INTERNAL})
         )
     ) as client:
-        yield client
+        yield authorize(client, "agent")
 
 
 def _content(client: TestClient) -> ContentStore:
@@ -173,6 +174,6 @@ def test_on_s3_without_what_a_url_needs_the_upload_is_503(
         {"secret_key_file": kek_file, **update} if update else {"api_internal_url": INTERNAL}
     )
     with TestClient(create_app(_on_s3(settings, s3, **base))) as client:
-        response = client.post(f"{INTERNAL_WORKSPACE}/uploads")
+        response = authorize(client, "agent").post(f"{INTERNAL_WORKSPACE}/uploads")
     assert response.status_code == 503
     assert names in response.json()["detail"]

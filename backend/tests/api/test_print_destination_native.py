@@ -41,6 +41,7 @@ from scadbuddy.store.bambuddy import folder_name
 from scadbuddy.workflows import print_activities
 from scadbuddy.workflows.print_activities import PrintActivities, PrintDeps
 from scadbuddy.workflows.print_models import REFUSED, CheckInput
+from tests.api.service_auth import authorize
 from tests.api.test_library_native import _native, _native_settings
 from tests.conftest import PgPool
 from tests.printers.conftest import KEK
@@ -119,7 +120,12 @@ def test_the_print_worker_reads_folders_and_makes_the_template_folder(
     async def remote_calls() -> tuple[Any, ...]:
         remote = RemoteLibrary(
             "http://scadbuddy",
-            httpx.AsyncClient(transport=httpx.ASGITransport(app=native_client.app)),
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=native_client.app),
+                headers={
+                    "Authorization": authorize(native_client, "print").headers["Authorization"]
+                },
+            ),
         )
         try:
             await require_native_folder(remote, nested)

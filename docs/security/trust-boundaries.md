@@ -92,7 +92,7 @@ controls.
 | Zone | Entered by | Guard | Gap |
 |---|---|---|---|
 | The API on 8080 (`/api/v1/*`) | the gateway and Pomerium routes, and pods named in the API's ingress policy (clusters `networkpolicy-agent.yaml`) | `AuthGate` resolves the caller and refuses nothing itself (`backend/scadbuddy/auth/gate.py:4`); `auth/check.py` refuses only in `enforce` | The deployment sets no `SCADBUDDY_AUTH_MODE` (`scadbuddy.yaml`; checked live), so it runs the default `off` (`backend/scadbuddy/core/settings.py:248`). Anyone who reaches the API is the anonymous browser principal. |
-| `/api/v1/internal/*` (outputs, library, blobs, workspace-blobs) | any pod that the API's ingress policy admits | each group takes only a service credential of its scope, in `enforce` only (README "The print worker (#1060)"); the blob routes also need a transfer token (`backend/scadbuddy/api/internal_blobs.py:5-6`) | In `off`, internal by path only. `POST /uploads` writes (`backend/scadbuddy/api/internal_workspace.py:16-18`, `:90-92`). #5297. |
+| `/api/v1/internal/*` (outputs, library, blobs, workspace-blobs) | any pod that the API's ingress policy admits | each group but the blob routes takes only a service credential of its scope, in every mode since #5297 part 1 (`backend/scadbuddy/auth/internal_guard.py`); the blob routes also need a transfer token (`backend/scadbuddy/api/internal_blobs.py:5-6`) | `POST /uploads` writes (`backend/scadbuddy/api/internal_workspace.py:16-18`, `:90-92`). #5297. |
 | The agent on 8081 (settings, approvals, sockets) | the same front doors | an Origin and Host allowlist, which a TCP peer can forge (`agent/src/routes/guard.ts:48-49`) | The browser principal approves any outward call (`agent/src/approvals/service.ts:719`). #5297. |
 | Postgres `scadbuddy-db` on 5432 | any pod in the cluster | passwords; of the pods with an egress policy, only the agent worker's and agent-durable's admit Postgres: the render, print and projects pods' policies name no Postgres peer (measured 2026-11-14) | No NetworkPolicy selects the CNPG pods (checked live). Any pod can try to log in. eh-homelab/clusters#3182. |
 | Temporal frontend on 7233 | pods named in its ingress policy (clusters `networkpolicy-temporal-v2-frontend.yaml`) | that policy; payloads of `session-*` and `flow-*` workflows sealed per subject | No mTLS (clusters `temporal-cluster-v2.yaml:237`). A pod in the list is a full client. |
@@ -135,8 +135,11 @@ settings trust the whole pod CIDR: `SCADBUDDY_TRUSTED_PROXIES` and
    tested). With the S3 keys it can overwrite or delete any object in the bucket. The
    pod holds no database secret, and its egress policy names no Postgres peer. #5296.
 4. An `allow_refused` plugin package can read the owner URL and the KEK.
-5. The API runs in `off`, so `/api/v1/internal/*` and the agent's 8081 routes are open to
-   any pod that reaches them.
+5. `/api/v1/internal/*` (outputs, library, workspace-blobs) refuses a request without a
+   live service credential that holds the route's class, in every mode, since #5297
+   part 1. The blob routes take the slicer's transfer token instead. The agent's 8081
+   routes are not yet guarded: the API's `off` leaves them open to any pod that reaches
+   them.
 6. Postgres has no ingress policy. The API pod has no egress policy.
 7. agent-durable runs no worker but still mounts the owner URL and the KEK.
 8. All render jobs share one key space in the blob index. A piece's key is computable
@@ -219,8 +222,9 @@ policies admit only the CRUD service.
    role and grant list. Every new route needs a service credential from its first PR.
 2. #5299: move the agent's data behind CRUD routes. Then remove the agent's database
    secret.
-3. #5297: require a service credential on the remaining `/api/v1/internal/*` routes, and
-   move the API and the agent to `enforce`.
+3. #5297: part 1 (done): `/api/v1/internal/*` requires a service credential in every mode
+   (`auth/internal_guard.py`). Part 2: the agent's 8081 guard and approvals, then move the
+   API and the agent to `enforce`.
 4. #5296: move template `pipeline/` Python and openscad out of every pod with a database
    secret.
 5. eh-homelab/clusters#3182: a Postgres ingress policy for the CRUD service only, egress

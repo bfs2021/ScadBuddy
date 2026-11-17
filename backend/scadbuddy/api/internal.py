@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, Response, status
 
 from scadbuddy.api.deps import CatalogueDep, OutputIdPath, OutputsDep
 from scadbuddy.api.outputs import THREE_MF_MEDIA_TYPE
+from scadbuddy.auth.internal_guard import require_service_class
 from scadbuddy.bambuddy.output_reader import (
     INTERNAL_OUTPUTS,
     LocalOutputs,
@@ -23,7 +24,11 @@ from scadbuddy.bambuddy.output_reader import (
 from scadbuddy.core.problems import ApiError
 from scadbuddy.library.outputs import OutputMeta
 
-router = APIRouter(prefix=INTERNAL_OUTPUTS.removeprefix("/api/v1"), include_in_schema=False)
+router = APIRouter(
+    prefix=INTERNAL_OUTPUTS.removeprefix("/api/v1"),
+    include_in_schema=False,
+    dependencies=[require_service_class("internal.outputs")],
+)
 
 
 def _reader(outputs: OutputsDep, catalogue: CatalogueDep) -> LocalOutputs:

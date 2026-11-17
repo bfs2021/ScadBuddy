@@ -26,6 +26,7 @@ from scadbuddy.library.settings_store import S3Settings
 from scadbuddy.main import create_app
 from scadbuddy.print_library.ids import is_native_id
 from scadbuddy.print_library.remote import RemoteLibrary
+from tests.api.service_auth import authorize
 from tests.api.test_library_native import _native, _native_settings, _save, _three_mf
 from tests.api.test_library_native import widget as widget  # the fixture, shared
 from tests.support.operations import press
@@ -36,12 +37,16 @@ pytestmark = pytest.mark.requires_postgres
 @pytest.fixture
 def native_client(settings: Settings, s3: S3Settings) -> Iterator[TestClient]:
     with TestClient(create_app(_native_settings(settings, s3))) as client:
-        yield client
+        yield authorize(client, "print")
 
 
 def _remote(client: TestClient) -> RemoteLibrary:
     return RemoteLibrary(
-        "http://scadbuddy", httpx.AsyncClient(transport=httpx.ASGITransport(app=client.app))
+        "http://scadbuddy",
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=client.app),
+            headers={"Authorization": client.headers["Authorization"]},
+        ),
     )
 
 
@@ -97,6 +102,7 @@ def test_the_print_worker_writes_through_the_internal_route(
 
 
 def test_the_internal_write_on_bambuddy_answers_404(client: TestClient) -> None:
+    authorize(client, "print")
     response = client.put(
         "/api/v1/internal/library/files",
         params={"filename": "x.3mf"},

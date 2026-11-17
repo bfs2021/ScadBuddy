@@ -27,6 +27,7 @@ import re
 from fastapi import APIRouter, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from scadbuddy.auth.internal_guard import require_service_class
 from scadbuddy.core.problems import ApiError
 from scadbuddy.slicing.component import SlicingDep
 from scadbuddy.slicing.models import TransferUrl
@@ -42,7 +43,11 @@ INTERNAL_WORKSPACE = "/api/v1/internal/workspace-blobs"
 #: The prefix of every key a workspace file is stored under.
 WORKSPACE_KEY_PREFIX = "workspace-"
 
-router = APIRouter(prefix=INTERNAL_WORKSPACE.removeprefix("/api/v1"), include_in_schema=False)
+router = APIRouter(
+    prefix=INTERNAL_WORKSPACE.removeprefix("/api/v1"),
+    include_in_schema=False,
+    dependencies=[require_service_class("internal.workspace")],
+)
 
 _PENDING_KEY = re.compile(rf"^{WORKSPACE_PENDING_PREFIX}[0-9a-f]{{32}}$")
 #: A workspace file's blob key; `api/crud_agent.py` holds only these.

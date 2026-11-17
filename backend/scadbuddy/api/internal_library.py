@@ -20,6 +20,7 @@ from fastapi import APIRouter, Query, Request, Response, status
 
 from scadbuddy.api.library_print import FileIdPath, _native_download
 from scadbuddy.api.limits import RouteLimit
+from scadbuddy.auth.internal_guard import require_service_class
 from scadbuddy.bambuddy.models import Folder, LibraryFile, LibraryListRow, LibraryPlates
 from scadbuddy.bambuddy.print_source import MAX_DOWNLOAD_BYTES
 from scadbuddy.core.problems import ApiError
@@ -27,7 +28,11 @@ from scadbuddy.print_library.component import PrintLibraryDep
 from scadbuddy.print_library.native import NativeLibrary
 from scadbuddy.print_library.remote import INTERNAL_LIBRARY, INTERNAL_LIBRARY_FILES
 
-router = APIRouter(prefix=INTERNAL_LIBRARY.removeprefix("/api/v1"), include_in_schema=False)
+router = APIRouter(
+    prefix=INTERNAL_LIBRARY.removeprefix("/api/v1"),
+    include_in_schema=False,
+    dependencies=[require_service_class("internal.library")],
+)
 
 #: For ``main.py``'s `BodySizeGate`: a copy is a 3MF laid out from one ScadBuddy held
 #: whole, so the library download cap bounds it as it bounds a person's upload.

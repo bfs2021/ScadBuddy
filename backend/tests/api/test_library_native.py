@@ -47,6 +47,7 @@ from scadbuddy.render.thumbnail import render_plate_thumbnails
 from scadbuddy.store.content import ContentStore
 from scadbuddy.store.content_models import ReuseLostError, StoreFullError
 from tests.api.conftest import wait_for_job
+from tests.api.service_auth import authorize
 from tests.api.test_analyzers import SILK_REQUEST
 from tests.api.test_analyzers import bambuddy_routes as analysis_routes
 from tests.api.test_analyzers import library_routes as analysis_library_routes
@@ -804,7 +805,10 @@ def test_the_internal_routes_read_a_native_file(
     """What the print worker's `RemoteLibrary` reads, through the API's hidden routes."""
 
     async def read() -> tuple[Any, ...]:
-        http = httpx.AsyncClient(transport=httpx.ASGITransport(app=native_client.app))
+        http = httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=native_client.app),
+            headers={"Authorization": authorize(native_client, "print").headers["Authorization"]},
+        )
         remote = RemoteLibrary("http://scadbuddy", http)
         try:
             file = await remote.library_file(uploaded.id)
@@ -828,7 +832,7 @@ def test_the_internal_routes_read_a_native_file(
 
 
 def test_the_internal_routes_on_bambuddy_answer_404(client: TestClient) -> None:
-    response = client.get("/api/v1/internal/library/1000000001")
+    response = authorize(client, "print").get("/api/v1/internal/library/1000000001")
     assert response.status_code == 404
     assert response.json()["file_id"] == 1000000001
 

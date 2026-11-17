@@ -14,9 +14,16 @@ from fastapi.testclient import TestClient
 from scadbuddy.api.deps import STATE_ATTR, AppState
 from scadbuddy.bambuddy.output_reader import LocalOutputs, OutputReader, RemoteOutputs
 from scadbuddy.library.outputs import MODEL_NAME, OutputNotFoundError
+from tests.api.service_auth import authorize
 from tests.api.test_send import make_output
 
 UNKNOWN = "f" * 32
+
+
+@pytest.fixture
+def client(client: TestClient) -> TestClient:
+    """The print worker's credential on every request: the internal routes need one."""
+    return authorize(client, "print")
 
 
 def state(client: TestClient) -> AppState:

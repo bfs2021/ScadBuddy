@@ -327,3 +327,32 @@ def test_only_a_person_marks_a_message_sent() -> None:
         "scadbuddy.api.order_messages.record_order_message_outcome": "api",
         "scadbuddy.api.order_messages.mark_order_message_sent": "person",
     }
+
+
+INTERNAL_CLASSES = {"internal.outputs", "internal.library", "internal.workspace"}
+
+
+def test_every_internal_module_route_has_its_guard() -> None:
+    """#5297: a route of an internal module needs a service credential holding its class;
+    the transfer route's credential is the slicer's transfer token."""
+    app = create_app(
+        Settings(
+            frontend_dir=Path("/nonexistent"),
+            database_url=UNUSED_DATABASE_URL,
+            temporal_address=UNUSED_TEMPORAL_ADDRESS,
+        )
+    )
+    checked: set[str] = set()
+    for route in _mounted(app.routes):
+        cls = route_class(route)
+        guards = {
+            d.call.__name__
+            for d in _all_dependencies(route.dependant)
+            if d.call is not None and d.call.__name__.startswith("require_service_")
+        }
+        if cls in INTERNAL_CLASSES:
+            assert guards == {f"require_service_{cls.replace('.', '_')}"}, route.path
+            checked.add(cls)
+        else:
+            assert not guards, route.path
+    assert checked == INTERNAL_CLASSES

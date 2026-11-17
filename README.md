@@ -951,7 +951,8 @@ the zones: [docs/security/trust-boundaries.md](docs/security/trust-boundaries.md
    which every caller has run: people in the browser and in Bambuddy's frame, the agent
    (a chat, a flow run), a print, `bambuddy-fs` with a personal access token. A
    `no_credential` count on `internal.*` is a worker without its credential, and an
-   `out_of_scope` count there is a credential without that class (a 403, #5514); `no_request_header`
+   `out_of_scope` count there is a credential without that class (a 403, #5514); since
+   #5297 part 1 each of those is also a refusal in every mode, not only in `enforce`; `no_request_header`
    is a page older than the request header; `author_header` is a caller naming an author
    it may not.
 5. `SCADBUDDY_AUTH_MODE=enforce` on the API and the agent sidecar. The API refuses to
