@@ -495,16 +495,22 @@ export function FilamentPicker({
                         <span className="min-w-0 flex-[1_1_12rem] truncate text-xs">
                           {trays ? trayChoiceLabel(spool) : spoolLabel(spool)}
                         </span>
+                        {/* The spool's number and its badge stay together after the name, in the row's
+                            own wrap, not in the right-hand group's. */}
+                        {((!trays && spool.sb_number != null) || (spool.needs_type && spool.sb_spool_id)) && (
+                          <span className="flex shrink-0 items-center gap-1.5">
+                            {!trays && spool.sb_number != null && (
+                              <span className="sb-num text-[11px] text-muted-foreground">#{spool.sb_number}</span>
+                            )}
+                            <NeedsTypeBadge spool={spool} />
+                          </span>
+                        )}
                         <span className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2.5">
                           {elsewhere && (
                             <span className="shrink-0 text-[11px] text-muted-foreground">
                               used by slot {elsewhere.slot_id}
                             </span>
                           )}
-                          {!trays && spool.sb_number != null && (
-                            <span className="sb-num shrink-0 text-[11px] text-muted-foreground">#{spool.sb_number}</span>
-                          )}
-                          <NeedsTypeBadge spool={spool} />
                           {where && <Badge variant="secondary">{where}</Badge>}
                           {showSides && spool.side && <SideBadge side={spool.side} testId={`side-${spool.spool_id}`} />}
                           <span className="sb-num shrink-0 text-[11px] text-muted-foreground">

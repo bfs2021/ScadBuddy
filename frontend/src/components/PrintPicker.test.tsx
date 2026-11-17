@@ -743,6 +743,28 @@ describe('PrintPicker', () => {
   })
 
   it('remembers the chosen spools by SB number and sends the plan as ids: sb (#6262)', async () => {
+    // Each option carries its SB number (Task 7: an option's spool_id is that number on
+    // Bambuddy's path); the numbers here are far from any Bambuddy id.
+    const sbNumber = (spoolId: number) => spoolId + 700
+    server.use(
+      http.get('/api/v1/print/outputs/:id/choices', () =>
+        HttpResponse.json({
+          ...choicesView,
+          filaments: {
+            ...choicesView.filaments,
+            spools: (choicesView.filaments?.spools ?? []).map((option) => ({
+              ...option,
+              spool_id: sbNumber(option.spool_id),
+              sb_number: sbNumber(option.spool_id),
+            })),
+            suggested: (choicesView.filaments?.suggested ?? []).map((choice) => ({
+              ...choice,
+              spool_id: sbNumber(choice.spool_id),
+            })),
+          },
+        }),
+      ),
+    )
     const remember = vi.spyOn(api, 'putModelChoices')
     const { bodies } = watch('POST', '/run')
     const { user } = renderPicker()
@@ -752,18 +774,19 @@ describe('PrintPicker', () => {
       .getAllByRole('radio')
       .find((radio) => radio.getAttribute('aria-checked') !== 'true') as HTMLButtonElement
     const spool = Number(other.value)
+    expect(spool).toBeGreaterThan(700)
     await user.click(other)
     await user.click(screen.getByRole('button', { name: /^Print$/ }))
     await waitFor(() => expect(bodies).toHaveLength(1))
     expect(bodies[0]).toMatchObject({
       filament_plan: { slots: expect.arrayContaining([{ slot_id: 1, spool_id: spool }]), ids: 'sb' },
     })
-    await waitFor(() =>
-      expect(remember).toHaveBeenCalledWith(
-        output.slug,
-        expect.objectContaining({ filament_plan: expect.arrayContaining([{ slot_id: 1, spool_id: spool }]) }),
-      ),
-    )
+    await waitFor(() => expect(remember).toHaveBeenCalled())
+    // The remembered choices (`ModelPrintChoices`) hold the plan as a slot list by SB number
+    // and carry no `ids` field by design: only the run request names the id space.
+    const saved = remember.mock.calls[0]![1] as { filament_plan: unknown }
+    expect(saved.filament_plan).toEqual(expect.arrayContaining([{ slot_id: 1, spool_id: spool }]))
+    expect(saved).not.toHaveProperty('ids')
   })
 
   /** Slot 1's checked spool, and one that is not. */

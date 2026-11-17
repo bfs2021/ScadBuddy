@@ -451,7 +451,27 @@ describe('FilamentPicker on the native path (source: trays)', () => {
     const row = within(slot(1)).getByTestId(`spool-${TAGGED_TRAY}`).closest('label')!
     const badge = within(row).getByRole('link', { name: 'Needs type' })
     expect(badge.getAttribute('href')).toMatch(/\/filament\/spools\/[^/]+$/)
-    expect(badge).not.toHaveAttribute('target')
+    expect(badge).toHaveAttribute('target', '_blank')
+    expect(badge).toHaveAttribute('rel', 'noopener noreferrer')
+  })
+
+  it('shows the badge on a tray line too, and a click on it leaves the choice alone (#6262)', async () => {
+    const options = hotFilaments()
+    const spools = (options.spools ?? []).map((spool) =>
+      spool.spool_id === TAGGED_TRAY
+        ? { ...spool, needs_type: true }
+        : { ...spool, needs_type: true, sb_spool_id: 'untagged-sb', sb_number: 9 },
+    )
+    const { user } = open({ ...options, spools })
+    const held = within(slot(1)).getByTestId(`sb-spool-${TAGGED_TRAY}`).closest('label')!
+    expect(within(held).getAllByRole('link', { name: 'Needs type' })).toHaveLength(1)
+    await expand(user, 1)
+    const other = within(slot(1)).getByTestId(`spool-${UNTAGGED_TRAY}`).closest('label')!
+    const badge = within(other).getByRole('link', { name: 'Needs type' })
+    badge.addEventListener('click', (event) => event.preventDefault())
+    await user.click(badge)
+    expect(within(slot(1)).getByTestId(`spool-${TAGGED_TRAY}`)).toBeChecked()
+    expect(within(slot(1)).getByTestId(`spool-${UNTAGGED_TRAY}`)).not.toBeChecked()
   })
 
   it('names an inventory spool by its SB number in RGBA (#6262)', () => {
