@@ -19,16 +19,20 @@ The stream's reader (:func:`frames`) then replays the event log after its place 
 agent ``reconnected``, so what had no row in the log (the other channels, the agent's own
 ``session.*``) is read again by whoever follows it, as the agent's listener did after a drop.
 
-**Replay.** Each logged event (one the bus decodes; every one the backend publishes is in the
-``events`` log, `core/pg_events.py`) goes out with its event id as the frame's ``id``, and the
-``ready`` frame carries the newest logged id, or :data:`START` for an empty log. A reconnect
+**Replay.** Each logged event (every one the backend publishes is in the ``events`` log,
+`core/pg_events.py`) goes out with its event id as the frame's ``id``, and the ``ready`` frame
+carries the newest logged id, or :data:`START` for an empty log. The kinds the agent NOTIFYs
+itself and the log never holds (:data:`NOTIFY_ONLY`: ``session.*``, ``ai_operation.changed``),
+and a payload the bus cannot decode, go out with no ``id``, so the agent's place stays on a
+logged event. A reconnect
 sends the last one as ``Last-Event-ID``; the stream subscribes first, then replays the log after
 it (`PgNotifyEventBus.position`, `replay`), at most :data:`REPLAY_MAX` events, and skips the live
 copies of what it replayed. An id it cannot place (pruned, malformed, never logged), a pruned
 gap or a longer replay is a ``resync``: the agent re-reads everything it follows.
 
-**Bounds.** At most :data:`STREAMS_PER_CREDENTIAL` streams per service credential and
-:data:`STREAMS_MAX` in all are open at once; another is refused 429. The process's shutdown ends
+**Bounds.** At most :data:`STREAMS_PER_CREDENTIAL` streams per service credential and peer
+address (`api/crud_agent_changes.py` `stream_key`) and :data:`STREAMS_MAX` in all are open at
+once; another is refused 429. The process's shutdown ends
 every stream (:meth:`ChangeHub.shutdown`), so a stream never holds the server's drain.
 """
 
@@ -43,7 +47,13 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Final, Protocol
 
-from scadbuddy.core.events import PG_CHANNEL, Event, encode_event
+from scadbuddy.core.events import (
+    PG_CHANNEL,
+    AgentOperationEvent,
+    Event,
+    SessionBusEvent,
+    encode_event,
+)
 from scadbuddy.core.pg_events import MAX_REPLAY_LIMIT, Replay
 
 logger = logging.getLogger(__name__)
@@ -59,6 +69,9 @@ CHANNELS: Final = (
     "scadbuddy_warm_evict",
     "scadbuddy_settings",
 )
+#: The bus's kinds that only the agent NOTIFYs, never in the ``events`` log: their frames carry
+#: no ``id``, since a ``Last-Event-ID`` naming one could not be placed (a resync).
+NOTIFY_ONLY: Final = (SessionBusEvent, AgentOperationEvent)
 #: The stream's place before the first logged event: replay from the log's start.
 START: Final = "0"
 #: An event's id as `core/events.py` makes it (32 hex digits), or one a newer build might: a
@@ -66,8 +79,8 @@ START: Final = "0"
 EVENT_ID: Final = re.compile(r"[0-9A-Za-z-]{1,64}")
 #: A stream's queue at most; past it the stream is marked with a gap (see above).
 QUEUE_MAX: Final = 10_000
-#: Streams at once per service credential (an agent process holds one; a reconnect may
-#: overlap the old one until the server sees it gone), and in all.
+#: Streams at once per service credential and peer address (an agent process holds one; a
+#: reconnect may overlap the old one until the server sees it gone), and in all.
 STREAMS_PER_CREDENTIAL: Final = 4
 STREAMS_MAX: Final = 64
 #: The most logged events one reconnect replays before it resyncs instead.
@@ -196,7 +209,8 @@ class ChangeHub:
             stream.offer(END)
 
     def _heard_event(self, payload: str, event: Event | None) -> None:
-        self.publish(Change(PG_CHANNEL, payload, None if event is None else event.id))
+        logged = None if event is None or isinstance(event, NOTIFY_ONLY) else event.id
+        self.publish(Change(PG_CHANNEL, payload, logged))
 
     def _connected(self, reconnected: bool) -> None:
         if not reconnected:

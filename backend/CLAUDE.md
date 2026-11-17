@@ -456,8 +456,9 @@ so a write sent again after its answer was lost is added once), the turn's end o
   the `events` log (`position`, `replay`, at most `REPLAY_MAX`; else `resync`) before `ready`. A
   stream's queue is bounded (`QUEUE_MAX`): a reader that falls behind loses it and gets a replay
   and `reconnected`, as every stream does when the listener reconnects, and the listener never
-  waits on a reader. `STREAMS_PER_CREDENTIAL` and `STREAMS_MAX` cap them (429). uvicorn waits for
-  open responses before the lifespan's shutdown, so the component chains a SIGTERM/SIGINT handler
+  waits on a reader. `STREAMS_PER_CREDENTIAL` (per credential and peer address, `stream_key`)
+  and `STREAMS_MAX` cap them (429). uvicorn waits for open responses before the lifespan's
+  shutdown, so the component chains a SIGTERM/SIGINT handler
   in front of uvicorn's that ends every stream first. Tests `tests/crud/test_crud_agent_changes.py`.
   `api/crud_agent_publish.py` (areas `publish` and `session-reads`, #6501): the NOTIFYs the
   agent sent outside a store's write, a `session.*` bus event on `scadbuddy_events` (each field

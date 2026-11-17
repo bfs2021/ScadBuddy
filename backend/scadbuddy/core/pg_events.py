@@ -381,9 +381,8 @@ class PgNotifyEventBus:
         #: Set on the listener's first connect: what `start` waits for.
         self._listening = asyncio.Event()
         #: Told of every payload heard on the channel, as it was heard, with its event when
-        #: it decodes (a logged one) and None when not (the agent's NOTIFY-only
-        #: ``session.*``): the agent's change stream (`agent_changes/hub.py`, #5299 D4). Each
-        #: runs on the event loop and must not block.
+        #: it decodes and None when not: the agent's change stream (`agent_changes/hub.py`,
+        #: #5299 D4). Each runs on the event loop and must not block.
         self.taps: list[Callable[[str, Event | None], None]] = []
         listener.listen(PG_CHANNEL, on_notify=self._received, on_connect=self._connected)
 

@@ -181,6 +181,24 @@ describe('the change stream client', () => {
     expect(resyncs()).toBe(1)
   })
 
+  it('keeps its place on a logged change: a NOTIFY-only event or another frame never moves it', async () => {
+    const { heard } = open()
+    const first = await api.open(1)
+    send(first.res, 'ready', { resync: false, reconnect: false }, 'p1')
+    const logged = busEvent({ kind: 'job.done', job_id: 'a' })
+    change(first.res, 'scadbuddy_events', JSON.stringify(logged), logged.id)
+    // The agent's own session.* bus event: NOTIFY only, never in the log, so the API sends no id.
+    const unlogged = busEvent({ kind: 'session.waiting', session_id: 's1', seq: 3 })
+    change(first.res, 'scadbuddy_events', JSON.stringify(unlogged))
+    // An id on any frame but `change` or `ready` names no place.
+    send(first.res, 'reconnected', { resync: false }, 'not-a-place')
+    send(first.res, 'unknown', {}, 'nor-this')
+    await until(() => heard.length === 2, 'both bus events')
+    first.res.destroy()
+    const second = await api.open(2)
+    expect(second.lastEventId).toBe(logged.id)
+  })
+
   it('retries a refused or missing route with back-off, and never takes a non-CRUD answer', async () => {
     api.refuse = [
       { status: 404, crud: false },

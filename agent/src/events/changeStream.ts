@@ -218,7 +218,8 @@ export class ChangeStream implements EventSource {
       this.#log(`change stream: ignored a malformed ${frame.event} frame`)
       return false
     }
-    if (frame.id !== undefined) this.#lastId = frame.id
+    // Only a logged change or the stream's place moves it: another frame's id names nothing to replay from.
+    if (frame.id !== undefined && (frame.event === 'change' || frame.event === 'ready')) this.#lastId = frame.id
     switch (frame.event) {
       case 'ready': {
         const resync = (data as { resync?: unknown }).resync === true

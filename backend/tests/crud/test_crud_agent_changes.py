@@ -23,6 +23,7 @@ import psycopg
 import pytest
 import pytest_asyncio
 from fastapi import Depends, FastAPI
+from starlette.requests import Request
 
 from scadbuddy.agent_changes import hub as hub_module
 from scadbuddy.agent_changes.component import CHANGES, chain_signals
@@ -39,13 +40,20 @@ from scadbuddy.agent_changes.hub import (
 from scadbuddy.api import crud_agent_changes, crud_areas
 from scadbuddy.auth.check import auth_check
 from scadbuddy.auth.component import AUTH
-from scadbuddy.auth.gate import AuthGate
+from scadbuddy.auth.gate import CALLER_SCOPE_KEY, AuthGate
+from scadbuddy.auth.models import Service
 from scadbuddy.auth.service_credentials import (
     InProcessProvider,
     ServiceCaller,
     ServiceCredentialStore,
 )
-from scadbuddy.core.events import PG_CHANNEL, ModelEvent, encode_event
+from scadbuddy.core.events import (
+    PG_CHANNEL,
+    AgentOperationEvent,
+    ModelEvent,
+    SessionBusEvent,
+    encode_event,
+)
 from scadbuddy.core.metrics import Metrics
 from scadbuddy.core.pg_events import LoggedEvent, PgNotifyEventBus, Replay
 from scadbuddy.core.pg_listener import PgListener
@@ -229,6 +237,24 @@ def test_the_streams_are_capped_per_credential_and_in_all() -> None:
         hub.open("three")
     hub.close(a)
     hub.open("three")
+
+
+def test_one_credential_from_two_pods_is_two_keys() -> None:
+    """Every agent process that reads the sealed credential from its view holds the same one;
+    the cap counts each pod's streams, so a fifth process is not refused for good."""
+
+    def key(host: str) -> str:
+        caller = Service(caller="agent", scopes=frozenset(), credential_id="cred-1")
+        scope = {"type": "http", "client": (host, 4000), CALLER_SCOPE_KEY: caller}
+        return crud_agent_changes.stream_key(Request(scope))
+
+    assert key("10.0.0.1") == key("10.0.0.1")
+    assert key("10.0.0.1") != key("10.0.0.2")
+    hub = ChangeHub(per_credential=1, total=8)
+    hub.open(key("10.0.0.1"))
+    hub.open(key("10.0.0.2"))
+    with pytest.raises(StreamsFullError):
+        hub.open(key("10.0.0.1"))
 
 
 async def test_shutdown_ends_every_stream_and_opens_none() -> None:
@@ -422,6 +448,39 @@ async def test_a_reconnect_replays_the_log_after_its_last_event_id(served: Serve
         assert [g.get("id") for g in got] == [second.id, third.id, third.id]
         assert got[2]["event"] == "ready"
         assert got[2]["data"] == {"resync": False, "reconnect": True}
+        await ctx.__aexit__(None, None, None)
+
+
+@pytest.mark.requires_postgres
+async def test_the_agents_notify_only_events_carry_no_id_so_a_reconnect_still_replays(
+    served: Served,
+) -> None:
+    logged, later = _model("logged"), _model("later")
+    session = SessionBusEvent(kind="session.waiting", session_id="s1", seq=7, status="idle")
+    operation = AgentOperationEvent(operation_id="op-1")
+    async with httpx.AsyncClient(timeout=None) as client:
+        ctx, sse = await _open(client, served)
+        await sse.next()
+        served.bus.publish(logged)
+        assert (await sse.next())["id"] == logged.id
+        # As the agent sends them: NOTIFY only, never in the log.
+        for unlogged in (session, operation):
+            await asyncio.to_thread(_notify, served.conninfo, PG_CHANNEL, encode_event(unlogged))
+            heard = await sse.next()
+            assert "id" not in heard
+            assert json.loads(heard["data"]["p"])["id"] == unlogged.id
+        await ctx.__aexit__(None, None, None)
+        served.bus.publish(later)
+        deadline = time.monotonic() + PROMPTLY
+        while await served.bus.newest() != later.id:
+            assert time.monotonic() < deadline
+            await asyncio.sleep(0.05)
+        # The agent's place is still the logged event: a replay, not a resync.
+        ctx, sse = await _open(client, served, {"last-event-id": logged.id})
+        got = [await sse.next() for _ in range(2)]
+        assert [g.get("id") for g in got] == [later.id, later.id]
+        assert got[1]["event"] == "ready"
+        assert got[1]["data"] == {"resync": False, "reconnect": True}
         await ctx.__aexit__(None, None, None)
 
 

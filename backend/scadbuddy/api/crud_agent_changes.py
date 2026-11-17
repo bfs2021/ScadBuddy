@@ -16,7 +16,8 @@ backend's ``events`` log (`agent_changes/hub.py` has the design). Frames:
 
 A ``Last-Event-ID`` that is not an event id (`hub.py` ``EVENT_ID``) or ``0`` names no place:
 the stream starts with ``resync``, never a guess. A credential may hold
-`STREAMS_PER_CREDENTIAL` streams and the process `STREAMS_MAX`; one more is 429.
+`STREAMS_PER_CREDENTIAL` streams from one address (`stream_key`) and the process `STREAMS_MAX`;
+one more is 429.
 """
 
 from __future__ import annotations
@@ -46,6 +47,20 @@ LAST_EVENT_ID_MAX = 64
 HubDep = Annotated[ChangeHub, component_dep(CHANGES)]
 
 
+def stream_key(request: Request) -> str:
+    """What the streams are capped by: the credential and the peer's address. Every agent
+    process that reads the sealed credential from its view holds the same one, so a cap by the
+    credential alone would refuse the fifth process for as long as the others stay; each process
+    connects from its own pod's address (the API is reached directly, never through the
+    ingress), so the pair counts one process's streams."""
+    principal = caller_of(request.scope)
+    credential = (
+        principal.credential_id or principal.caller if isinstance(principal, Service) else "unknown"
+    )
+    peer = request.client.host if request.client else "unknown"
+    return f"{credential}@{peer}"
+
+
 @router.get("/changes", name="crud_agent_changes")
 async def changes(
     request: Request,
@@ -56,10 +71,7 @@ async def changes(
     log = state.events
     if not isinstance(log, PgNotifyEventBus):
         raise ApiError(status.HTTP_503_SERVICE_UNAVAILABLE, "this process has no event log")
-    principal = caller_of(request.scope)
-    key = (
-        principal.credential_id or principal.caller if isinstance(principal, Service) else "unknown"
-    )
+    key = stream_key(request)
     if last_event_id is not None and len(last_event_id) > LAST_EVENT_ID_MAX:
         last_event_id = ""  # no place: a resync, as any other malformed id
     try:

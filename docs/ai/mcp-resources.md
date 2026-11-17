@@ -218,8 +218,9 @@ credential (no database and no proof) `/mcp` is not served at all (`createApp()`
   was on its side: its own `LISTEN` connection dropped, or the agent fell more than 10,000
   changes behind. A stream silent for 45 s (the API sends a keepalive every 15 s) is
   opened again.
-- **Bounds.** A service credential may hold 4 streams at once and an API process 64; one
-  more is answered 429 and retried. The API's shutdown ends every stream first, so a stream
+- **Bounds.** A service credential may hold 4 streams at once from one address (an agent
+  process's pod; the processes that read one credential from the view share it) and an API
+  process 64; one more is answered 429 and retried. The API's shutdown ends every stream first, so a stream
   never holds a rolling deploy's drain.
 - **Channels are per database.** Two deployments sharing a database would hear each other
   (the same caveat the backend's `pg_events.py` states).
