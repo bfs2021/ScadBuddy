@@ -123,8 +123,8 @@ the give-back is fenced on the turn id). An edit of a session (area
 the principal owns it, the rename, done and archive, the warm eviction, an archive's `done`
 summaries dismissed and their events. The edit is sent untold first, and the route refuses a newly
 done session not `told` (`untold`) only after every other check passed, writing nothing; only then
-is the workflow told and the edit sent again, so a refusal, a 503 or a lost answer ends no
-workflow, and nothing is written that the workflow was not told of. A
+is the workflow told and the edit sent again, so a refusal, a 503 or a lost answer on the first
+call ends no workflow, and nothing is written that the workflow was not told of. A
 session's transcript (area `transcripts`, part b, backend `api/crud_agent_transcripts.py`;
 `src/sessions/store.ts` `TranscriptRows`: `PgTranscriptRows`, and `src/sessions/crudTranscripts.ts`
 `CrudTranscriptRows`) is sealed and opened by the API under the session's data key with the
