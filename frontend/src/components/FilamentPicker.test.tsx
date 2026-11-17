@@ -430,13 +430,52 @@ describe('FilamentPicker on the native path (source: trays)', () => {
     expect(within(slot(2)).queryByTestId(`sb-spool-${UNTAGGED_TRAY}`)).not.toBeInTheDocument()
   })
 
+  it('draws a translucent spool as RGBA with its grams arc (#6262)', () => {
+    const options = hotFilaments()
+    const spools = (options.spools ?? []).map((spool) =>
+      spool.spool_id === TAGGED_TRAY ? { ...spool, rgba: '#0047BB80', label_weight_g: 1000, remaining_g: 250 } : spool,
+    )
+    open({ ...options, spools })
+    const row = within(slot(1)).getByTestId(`spool-${TAGGED_TRAY}`).closest('label')!
+    const chip = within(row).getByTestId('rgba-swatch')
+    expect(chip).toHaveAttribute('data-colour', '#0047BB80')
+    expect(chip.querySelector('[data-layer="grams"]')).toHaveAttribute('data-fraction', '0.25')
+  })
+
+  it('links a spool with no type to its page in the Filament section (#6262)', () => {
+    const options = hotFilaments()
+    const spools = (options.spools ?? []).map((spool) =>
+      spool.spool_id === TAGGED_TRAY ? { ...spool, needs_type: true } : spool,
+    )
+    open({ ...options, spools })
+    const row = within(slot(1)).getByTestId(`spool-${TAGGED_TRAY}`).closest('label')!
+    const badge = within(row).getByRole('link', { name: 'Needs type' })
+    expect(badge.getAttribute('href')).toMatch(/\/filament\/spools\/[^/]+$/)
+    expect(badge).not.toHaveAttribute('target')
+  })
+
+  it('names an inventory spool by its SB number in RGBA (#6262)', () => {
+    const suggested = fixtures.filamentOptions.suggested?.find((choice) => choice.slot_id === 1)?.spool_id
+    const options: FilamentOptions = {
+      ...fixtures.filamentOptions,
+      spools: (fixtures.filamentOptions.spools ?? []).map((spool) =>
+        spool.spool_id === suggested ? { ...spool, rgba: '#FF149380', sb_number: 7, sb_spool_id: 'abc', needs_type: true } : spool,
+      ),
+    }
+    open(options)
+    const row = within(slot(1)).getByTestId(`spool-${suggested}`).closest('label')!
+    expect(within(row).getByTestId('rgba-swatch')).toHaveAttribute('data-colour', '#FF149380')
+    expect(within(row).getByText('#7')).toBeInTheDocument()
+    expect(within(row).getByRole('link', { name: 'Needs type' }).getAttribute('href')).toMatch(/\/filament\/spools\/abc$/)
+  })
+
   it('says when the SB spool has no type yet (#6261)', () => {
     const options = hotFilaments()
     const spools = (options.spools ?? []).map((spool) =>
       spool.spool_id === TAGGED_TRAY ? { ...spool, brand: null, needs_type: true } : spool,
     )
     open({ ...options, spools })
-    expect(within(slot(1)).getByTestId(`sb-spool-${TAGGED_TRAY}`)).toHaveTextContent('Spool #1: Blue · 812 g · no type yet')
+    expect(within(slot(1)).getByTestId(`sb-spool-${TAGGED_TRAY}`)).toHaveTextContent('Spool #1: Blue · 812 g')
   })
 
   it('offers only the loaded trays: a shelf spool is for linking, never a print choice', async () => {

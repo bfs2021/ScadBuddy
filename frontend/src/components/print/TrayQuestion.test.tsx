@@ -101,6 +101,22 @@ describe('TrayQuestion on the native path', () => {
     expect(screen.getByText(/spool #7/)).toBeInTheDocument()
   })
 
+  it('draws a candidate in RGBA and links a spool with no type to its page (#6262)', () => {
+    render(
+      <TrayQuestion
+        native={{ printer }}
+        tray={{ ...tray, candidates: [16] }}
+        spools={[{ ...record, rgba: '#1A1A1A80', needs_type: true }]}
+        onAssigned={vi.fn()}
+        onDecline={vi.fn()}
+      />,
+    )
+    const chips = screen.getAllByTestId('rgba-swatch')
+    expect(chips.some((chip) => chip.getAttribute('data-colour') === '#1A1A1A80')).toBe(true)
+    const badge = screen.getByRole('link', { name: 'Needs type' })
+    expect(badge.getAttribute('href')).toMatch(new RegExp(`/filament/spools/${SB}$`))
+  })
+
   it('posts {spool_id: <uuid>} to PUT …/trays/{ams}/{tray}/spool and re-reads', async () => {
     const link = vi.spyOn(api, 'linkTraySpool').mockResolvedValue(placed)
     const assign = vi.spyOn(api, 'assignTraySpool')

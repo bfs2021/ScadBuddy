@@ -24,6 +24,8 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import { NeedsTypeBadge } from './filament/NeedsTypeBadge'
+import { RgbaSwatch } from './filament/RgbaSwatch'
 import { Swatch } from './print/Swatch'
 
 /**
@@ -207,8 +209,22 @@ function TraySpool({ spool }: { spool: SpoolOption }) {
       {spool.remaining_g !== null && spool.remaining_g !== undefined && (
         <span className="sb-num"> · {grams(spool.remaining_g)}</span>
       )}
-      {spool.needs_type && <span> · no type yet</span>}
     </p>
+  )
+}
+
+/**
+ * #6262 — a spool's chip: its `#RRGGBBAA` (the file's `colour` for a row with no `rgba`),
+ * with the grams left as an arc around it where the row lists a spool, not a "prints in".
+ */
+function SpoolChip({ spool, grams: arc = false }: { spool: SpoolOption; grams?: boolean }) {
+  return (
+    <RgbaSwatch
+      rgba={spool.rgba ?? spool.colour ?? '#000000'}
+      size="sm"
+      gramsLeft={arc ? spool.remaining_g : null}
+      labelWeight={arc ? spool.label_weight_g : null}
+    />
   )
 }
 
@@ -437,7 +453,7 @@ export function FilamentPicker({
                     data-testid={`slot-prints-in-${slot.slot_id}`}
                   >
                     <span aria-hidden="true">→</span>
-                    <Swatch colour={chosenSpool.colour} size="sm" />
+                    <SpoolChip spool={chosenSpool} />
                     prints in {chosenSpool.color_name ?? normalizeHex(chosenSpool.colour ?? '#000000')}
                     {showSides && chosenSpool.side && (
                       <SideBadge side={chosenSpool.side} testId={`slot-side-${slot.slot_id}`} />
@@ -473,7 +489,7 @@ export function FilamentPicker({
                         )}
                       >
                         <RadioGroupItem value={String(spool.spool_id)} data-testid={`spool-${spool.spool_id}`} />
-                        <Swatch colour={spool.colour} size="sm" />
+                        <SpoolChip spool={spool} grams />
                         {/* The name takes at least 12rem; when the row is narrower than that
                             plus the details, the details wrap onto a second line (#944). */}
                         <span className="min-w-0 flex-[1_1_12rem] truncate text-xs">
@@ -485,6 +501,10 @@ export function FilamentPicker({
                               used by slot {elsewhere.slot_id}
                             </span>
                           )}
+                          {!trays && spool.sb_number != null && (
+                            <span className="sb-num shrink-0 text-[11px] text-muted-foreground">#{spool.sb_number}</span>
+                          )}
+                          <NeedsTypeBadge spool={spool} />
                           {where && <Badge variant="secondary">{where}</Badge>}
                           {showSides && spool.side && <SideBadge side={spool.side} testId={`side-${spool.spool_id}`} />}
                           <span className="sb-num shrink-0 text-[11px] text-muted-foreground">

@@ -9,6 +9,8 @@ import { Card } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Spinner } from '../ui/spinner'
+import { NeedsTypeBadge } from '../filament/NeedsTypeBadge'
+import { RgbaSwatch } from '../filament/RgbaSwatch'
 import { Swatch } from './Swatch'
 
 function candidateName(spool: SpoolOption): string {
@@ -95,11 +97,17 @@ export function TrayQuestion({ tray, spools, onAssigned, onDecline, ...target }:
   // Bambuddy's path `spool_id`, which is that number there (Task 7).
   const spoolRow = (spool: (typeof candidates)[number]) => (
     <>
-      <Swatch colour={spool.colour} size="sm" />
+      <RgbaSwatch
+        rgba={spool.rgba ?? spool.colour ?? '#000000'}
+        size="sm"
+        gramsLeft={spool.remaining_g}
+        labelWeight={spool.label_weight_g}
+      />
       <span>{candidateName(spool)}</span>
       {howFull(spool) && <span className="text-muted-foreground">{howFull(spool)}</span>}
       {spool.storage_location && <span className="text-muted-foreground">· kept in {spool.storage_location}</span>}
       <span className="text-muted-foreground">· spool #{native ? spool.sb_number : spool.spool_id}</span>
+      <NeedsTypeBadge spool={spool} />
     </>
   )
 

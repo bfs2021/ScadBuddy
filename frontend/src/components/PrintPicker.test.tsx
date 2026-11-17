@@ -742,6 +742,30 @@ describe('PrintPicker', () => {
     })
   })
 
+  it('remembers the chosen spools by SB number and sends the plan as ids: sb (#6262)', async () => {
+    const remember = vi.spyOn(api, 'putModelChoices')
+    const { bodies } = watch('POST', '/run')
+    const { user } = renderPicker()
+    await loaded()
+    await user.click(screen.getByTestId('change-slot-1'))
+    const other = within(screen.getByTestId('filament-slot-1'))
+      .getAllByRole('radio')
+      .find((radio) => radio.getAttribute('aria-checked') !== 'true') as HTMLButtonElement
+    const spool = Number(other.value)
+    await user.click(other)
+    await user.click(screen.getByRole('button', { name: /^Print$/ }))
+    await waitFor(() => expect(bodies).toHaveLength(1))
+    expect(bodies[0]).toMatchObject({
+      filament_plan: { slots: expect.arrayContaining([{ slot_id: 1, spool_id: spool }]), ids: 'sb' },
+    })
+    await waitFor(() =>
+      expect(remember).toHaveBeenCalledWith(
+        output.slug,
+        expect.objectContaining({ filament_plan: expect.arrayContaining([{ slot_id: 1, spool_id: spool }]) }),
+      ),
+    )
+  })
+
   /** Slot 1's checked spool, and one that is not. */
   function slot1Radios() {
     if (screen.getByTestId('change-slot-1').getAttribute('aria-expanded') === 'false') {
