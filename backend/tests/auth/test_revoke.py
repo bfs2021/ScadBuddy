@@ -245,9 +245,9 @@ def test_the_role_can_be_dropped_after_the_revoke(pg_conninfo: str, conn: Conn) 
 
 
 def test_only_what_this_connections_roles_granted_is_taken_back(conn: Conn, role: str) -> None:
-    """In the deployment the agent's role owns the `ai_*` tables and grants them itself
-    (`agent/src/db/grants.ts`); the API takes back only its own grants and the policies on
-    its own tables, and does not fail on the agent's."""
+    """Where the agent's role owns older `ai_*` tables and granted them (before #6501), the
+    API takes back only its own grants and the policies on its own tables, and does not fail
+    on the agent's."""
     suffix = uuid.uuid4().hex[:12]
     api, agent = f"api_{suffix}", f"agent_{suffix}"
     for name in (api, agent):

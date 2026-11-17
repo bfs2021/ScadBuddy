@@ -14,9 +14,9 @@ role's grants on `events`, `workflow_runs`, `workflow_run_decisions`, `flow_gran
 `flow_grant_uses` at every start
 (`backend/scadbuddy/auth/revoke.py` `RETIRED_GRANTS`), which binds nothing while the agent
 connects as the owner (until #5299 step 12); `test/retiredTables.test.ts` is the guard. The workspace files' `blob_refs` holds go through CRUD routes
-(#5299, below), no longer a trigger. `src/db/grants.ts`
-grants the API's role its `ai_*` reads and writes, and revokes what it once granted the
-projects worker's role `scadbuddy_projects` (#5298; the worker holds no database).
+(#5299, below), no longer a trigger. The agent grants and revokes nothing at its start
+(#6501): the API's role owns or is the `ai_*` tables' owner, and the API revokes the retired
+roles itself (`backend/scadbuddy/auth/revoke.py`).
 Claude Code, and any plugin package approved with `allow_refused`, runs in the same pod
 as the owner URL and the KEK (`docs/ai/security.md`, "Plugin packages").
 
@@ -30,11 +30,18 @@ service credential instead.
 The agent's service credential (`src/api/serviceCredential.ts`, wired in `main.ts`): with
 `SCADBUDDY_SERVICE_TOKEN_FILE` or `SCADBUDDY_SERVICE_BOOTSTRAP_FILE` (both is a `ConfigError`)
 `ExchangeCredential` exchanges that proof at the backend's `POST /api/v1/auth/service-token`
-for a 15-minute credential, renews it at half-life and after a 401, and falls back to the view
-on a 404 while it has a database. A failed exchange is tried again after 5 s doubling to 60 s,
+for a 15-minute credential and renews it at half-life and after a 401; it reads no view (a 404
+is a failed exchange, #6501). A failed exchange is tried again after 5 s doubling to 60 s,
 but a refused connection (the backend not up yet, `src/api/backendUp.ts` `backendNotUp`, #5868)
 is tried again at the next call and logged once as "waiting for the backend". Without a proof `ServiceCredential` reads the sealed one from
-`service_credentials_agent`, as before (#5494).
+`service_credentials_agent` over SQL, as before (#5494), until #5299 step 12 makes a proof
+required. A signed-in person's session (`src/auth/browserSession.ts`) is looked up through the
+API's `…/agent/auth-sessions/lookup` once it lists area `auth-sessions` (`CrudSessionLookup`,
+only the cookie's hash travels, at most `LOOKUPS_IN_FLIGHT` requests at once, the rest waiting their turn), the view `auth_sessions_agent` over SQL until then. The ledger
+`ready()` waits for is read through `…/agent/migrations/ledger` once the API lists area
+`migrations` (`src/db/schema.ts` `crudLedger`), and `/healthz`'s `database` is the Postgres
+ping and, once the API lists every area, whether it answers them (`CrudAreas.answers`); the ping
+stays while the agent still runs SQL, until #5299 step 12 (backend `api/crud_agent_start.py`, #6501; test `test/crudStart.test.ts`).
 
 The agent's own CRUD routes (`/api/v1/internal/crud/agent/`, class `crud.agent`, #5330): the
 holds of the workspace files' blobs (`workspace-blob-refs`, #5299; see the workspace under
