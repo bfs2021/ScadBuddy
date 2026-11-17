@@ -26,7 +26,10 @@ the render worker's old role `scadbuddy_render` held (#5298 Task 22). The render
 worker also holds no KEK and runs only on a remote store (plan D11). Its blob-index
 routes take an allowlist (`api/crud_render.py` `RENDER_KEY`, `HELD_KEY`): it writes only
 a render job's own `piece` keys, never a meta key of the slicer's output mark
-(`SLICED_OUTPUT_META`, #6179), and its settings route never releases the full Bambuddy
+(`SLICED_OUTPUT_META`, #6179), an output only while its job runs (`_open_jobs_only`),
+and a ref only at the object its bytes name, read and hashed by the API unless a row it
+verified (`store_blobs.verified_at`) names it (`_verified`, #6233).
+Its settings route never releases the full Bambuddy
 key (`withheld`; with no render key saved the worker gets none). Template `pipeline/`
 Python runs in the render worker's pod, and openscad and `openscad-lsp` run in the API's
 pod.
@@ -449,6 +452,11 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   `parent` for the session named), the hop's timeout sweep, and a delivery's claim, hand back and
   skip, with the record of a run's own calls sent. Who may answer stays the agent's check. Tests
   `tests/crud/test_crud_agent_escalations.py`.
+  `api/crud_agent_mcp.py` (area `mcp-relay`, #5299 step 11) is the agent's `mcp/relayRows.ts`
+  `PgRelayRows` statement for statement: the /mcp session directory (`ai_mcp_sessions`), a relay
+  message's body row and its `scadbuddy_mcp` NOTIFY in one transaction (the header checked against
+  the relay's shapes and the NOTIFY payload cap), a row taken or withdrawn once, and the sweep.
+  Tests `tests/crud/test_crud_agent_mcp.py`.
   `api/crud_agent_publish.py` (areas `publish` and `session-reads`, #6501): the NOTIFYs the
   agent sent outside a store's write, a `session.*` bus event on `scadbuddy_events` (each field
   checked, so the payload stays small) and a warm eviction on `scadbuddy_warm_evict`; and two

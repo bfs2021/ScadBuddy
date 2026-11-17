@@ -227,7 +227,13 @@ before a call go through area `session-reads` (`src/sessions/sessionReads.ts`
 `PgSessionReads`, `CrudSessionReads`), and a session's owner as a tool call
 (`toolActivities.ts` `RowSessionOwners`), a flow run's call (`flowRuns.ts`, `flowSessions.ts`)
 and an escalation read it, from the `sessions` area's row (`SessionRows.get`). Test
-`test/crudPublish.test.ts`. A route's
+`test/crudPublish.test.ts`. Area `mcp-relay` (#5299 step 11, `RELAY_AREAS`, backend
+`api/crud_agent_mcp.py`, `src/mcp/relayRows.ts` `CrudRelayRows` behind `RelayRows`, which
+`SharedMcpSessionRelay` takes) takes the /mcp session relay's directory (`ai_mcp_sessions`) and
+messages (`ai_mcp_relay_messages`): a session hash, a replica, a request and a row id travel in the
+body only, and a message's row and its `scadbuddy_mcp` NOTIFY commit in one transaction on the API.
+`test/mcpSessions.pg.test.ts` runs every relay case over both `PgRelayRows` and `CrudRelayRows`.
+A route's
 answer counts only with `X-ScadBuddy-Crud: 1`; any other failure takes the read's existing
 error path (a lookup failure the activity retries, a 500, a resync). A session's successful `order_item_revision_add` (or
 `_after_acceptance`) is an `ai_session_order_costs` row (`src/sessions/orderCosts.ts`

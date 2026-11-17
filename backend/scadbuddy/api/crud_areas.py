@@ -130,10 +130,13 @@ from scadbuddy.crud.guard import CrudCaller, crud_router
 #: ``…/agent/turns/stale``: a durable turn's writes of its session's row, each with its events
 #: in one transaction and its fence checked there (a send's claim and give-back, a Stop's flag, a
 #: placement's claim, its spend, the turn's end with the queue's head, the queue's event, and the
-#: running sweep's end of a lost turn; #6449, `api/crud_agent_turns.py`). Its ``session-edits``
-#: area is ``…/agent/sessions/{id}/edit``: a rename, marking a session done and archiving it, under
-#: the row's lock with its warm eviction, an archive's ``done`` summaries dismissed and their
-#: events in one transaction (#6449, `api/crud_agent_edits.py`).
+#: running sweep's end of a lost turn; #6449, `api/crud_agent_turns.py`). Its
+#: ``mcp-relay`` area is ``…/agent/mcp-relay/*``: the /mcp session directory, the relay's messages
+#: (a body row and its ``scadbuddy_mcp`` NOTIFY in one transaction) and their sweep (#5299 step
+#: 11, `api/crud_agent_mcp.py`).
+#: Its ``session-edits`` area is ``…/agent/sessions/{id}/edit``: a rename, marking a session done
+#: and archiving it, under the row's lock with its warm eviction, an archive's ``done`` summaries
+#: dismissed and their events in one transaction (#6449, `api/crud_agent_edits.py`).
 CRUD_AREAS: dict[CrudCaller, list[str]] = {
     "projects": ["flows", "operations", "payload-keys"],
     "render": ["settings", "jobs", "refs", "blob-index", "store-folders", "assets", "libraries"],
@@ -202,6 +205,7 @@ CRUD_AREAS: dict[CrudCaller, list[str]] = {
         "approvals",
         "questions",
         "escalations",
+        "mcp-relay",
         "publish",
         "session-reads",
         "session-turns",
