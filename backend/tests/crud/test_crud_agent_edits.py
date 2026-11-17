@@ -6,17 +6,21 @@ The agent's tables are made from its own migration files (#5299 D6)."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 import uuid
 from collections.abc import Iterator
+from types import SimpleNamespace
 from typing import Any
 
+import psycopg_pool
 import pytest
 from fastapi.testclient import TestClient
 
 from scadbuddy.agent_data import edits
-from scadbuddy.api import crud_agent_edits
+from scadbuddy.api import crud_agent_edits, crud_agent_turns
+from scadbuddy.core.problems import ApiError
 from tests.conftest import PgPool
 from tests.crud.test_crud_agent_turns import BASE, Agent, _app, _row, _session, _sql, _token
 
@@ -235,3 +239,16 @@ def test_an_edit_waits_for_a_claim_holding_the_row(agent: Agent, tables: PgPool)
     # The edit read the row once the claim committed: a turn holds it, so it is not marked done.
     assert result == {"status": 409, "reason": "busy_done"}
     assert _row(tables, sid)["status"] == "running"
+
+
+def test_an_edit_that_waits_past_the_pools_bound_is_refused() -> None:
+    class Busy:
+        def connection(self, timeout: float) -> Any:
+            assert timeout == crud_agent_turns.POOL_WAIT_S
+            raise psycopg_pool.PoolTimeout("couldn't get a connection")
+
+    state = SimpleNamespace(settings_store=SimpleNamespace(pool=Busy()))
+    body = crud_agent_edits.Edit.model_validate({"principal": BROWSER, "title": "x"})
+    with pytest.raises(ApiError) as refused:
+        asyncio.run(crud_agent_edits.edit(str(uuid.uuid4()), body, state))  # type: ignore[arg-type]
+    assert (refused.value.status, refused.value.extensions["reason"]) == (503, "pool_busy")

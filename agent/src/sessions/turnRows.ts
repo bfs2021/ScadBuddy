@@ -332,8 +332,15 @@ const nextBody = (next: NextClaim) => ({
   started: next.started.map((e) => JSON.stringify(e)),
 })
 
-/** A route's longest wait: a turn's end waits on the row's lock behind the turn's own writes. */
-const TIMEOUT_MS = 30_000
+/**
+ * A row write's request through the API (the turn routes, and an edit's, edits.ts): longer than
+ * the route's own waits, a pooled connection (`POOL_WAIT_S`, 10 s) and then the row's lock
+ * (`turns.LOCK_TIMEOUT_MS`, 10 s, backend api/crud_agent_turns.py), so the route gives up before
+ * the agent does and a write never commits after the agent reported it failed. Change them
+ * together.
+ */
+export const ROW_WRITE_TIMEOUT_MS = 30_000
+const TIMEOUT_MS = ROW_WRITE_TIMEOUT_MS
 
 /** `PgTurnRows` over the API's CRUD routes (area `session-turns`). */
 export class CrudTurnRows implements TurnRows {

@@ -7,6 +7,7 @@ import { appendEventsIn, type EventLog } from './eventLog.js'
 import { SessionError, type SessionRecord } from './manager.js'
 import { event, type Owner, type ServerEvent, sameOwner } from './protocol.js'
 import { sessionPath, type Who } from './rows.js'
+import { ROW_WRITE_TIMEOUT_MS } from './turnRows.js'
 import type { WarmSessions } from './warm.js'
 import { notifyWarmEvict } from './warmEvict.js'
 
@@ -167,6 +168,9 @@ export class CrudEditRows implements EditRows {
   readonly #base: string
   readonly #fetch: typeof fetch
 
+  /** Each call's request: past the route's own waits (turnRows.ts `ROW_WRITE_TIMEOUT_MS`). */
+  readonly timeoutMs = ROW_WRITE_TIMEOUT_MS
+
   constructor(baseUrl: string, options: { fetch?: typeof fetch } = {}) {
     this.#base = baseUrl
     this.#fetch = options.fetch ?? globalThis.fetch
@@ -184,6 +188,7 @@ export class CrudEditRows implements EditRows {
         `${path}/edit`,
         {
           method: 'POST',
+          timeoutMs: this.timeoutMs,
           // Well-formed: the API refuses a lone surrogate in a title (crudRead.ts).
           body: wellFormed({
             principal: { kind: write.principal.kind, id: write.principal.id },

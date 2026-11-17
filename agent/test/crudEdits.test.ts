@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { CrudEditRows } from '../src/sessions/edits.js'
 import { SessionError } from '../src/sessions/manager.js'
+import { ROW_WRITE_TIMEOUT_MS } from '../src/sessions/turnRows.js'
 
 // An edit of a session through the API's CRUD route (#6449), against a fake API that answers as
 // the backend's api/crud_agent_edits.py does (tests/crud/test_crud_agent_edits.py covers the
@@ -94,6 +95,21 @@ describe('an edit over the CRUD route', () => {
     // Anything else is no refusal the edit knows: it throws as it came.
     const { rows } = fakeApi([503, { detail: 'down' }])
     await expect(rows.edit(SESSION, { principal: BROWSER, title: 'x', done: false }, async () => {})).rejects.not.toBeInstanceOf(SessionError)
+  })
+
+  it('waits for the route past its own waits, as the turn routes do', async () => {
+    expect(new CrudEditRows(BASE).timeoutMs).toBe(ROW_WRITE_TIMEOUT_MS)
+    // The route waits up to 10 s for a connection, then up to 10 s for the row's lock.
+    expect(ROW_WRITE_TIMEOUT_MS).toBeGreaterThan(20_000)
+    // Each call's request is bounded by it, the told one too.
+    const timeout = vi.spyOn(AbortSignal, 'timeout')
+    try {
+      const { rows } = fakeApi([409, { detail: 'refused', reason: 'untold' }], [200, ok])
+      await rows.edit(SESSION, { principal: BROWSER, done: true }, async () => {})
+      expect(timeout.mock.calls).toEqual([[ROW_WRITE_TIMEOUT_MS], [ROW_WRITE_TIMEOUT_MS]])
+    } finally {
+      timeout.mockRestore()
+    }
   })
 
   it('sends no call for an id that is no session', async () => {

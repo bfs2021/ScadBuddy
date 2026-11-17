@@ -75,8 +75,9 @@ STALE_MAX = 1000
 #: attempt and turn id and ``end``.
 SPEND_KEY_MAX = ATTEMPT_MAX + 64
 #: How long a call waits for a pooled connection. With the row's lock wait
-#: (``turns.LOCK_TIMEOUT_MS``) it stays under the agent's request (``CrudTurnRows``, 30 s), so a
-#: write never commits after the agent gave up on it and read the row back.
+#: (``turns.LOCK_TIMEOUT_MS``) it stays under the agent's request (``sessions/turnRows.ts``
+#: ``ROW_WRITE_TIMEOUT_MS``, 30 s, for these routes and the edit's), so a write never commits after
+#: the agent gave up on it and read the row back. Change them together.
 POOL_WAIT_S = 10.0
 
 SessionIdPath = Annotated[str, Path(pattern=UUID_PATTERN)]

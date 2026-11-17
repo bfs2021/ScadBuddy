@@ -9,7 +9,9 @@ which the agent audits; a refusal is 404 ``gone`` or 409 with its reason (``chan
 ``busy_done``, ``busy_archive``, ``parked``, and last ``untold``: a newly done session whose
 workflow the agent did not say it told, which the agent sends first and then tells the
 workflow). A lock or connection wait past the turn routes' bounds is 503, as theirs
-(``crud_agent_turns.py`` ``_in_conn``).
+(``crud_agent_turns.py`` ``_in_conn``): 10 s for a connection, then 10 s for the row's lock, under
+the agent's 30 s request (``sessions/turnRows.ts`` ``ROW_WRITE_TIMEOUT_MS``, which ``CrudEditRows``
+uses too). Change them together.
 
 The session id is the only id in a path, a UUID checked by its pattern. The body is bounded."""
 
