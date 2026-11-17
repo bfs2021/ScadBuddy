@@ -67,6 +67,8 @@ export function SpoolImport({ open, onOpenChange, onImported }: Props) {
 
   const close = (next: boolean) => {
     if (next) return onOpenChange(true)
+    // The write commits whatever the dialog does, so it stays open until the answer.
+    if (working === 'write') return
     latest.current += 1
     setBusy(false)
     setWorking(null)

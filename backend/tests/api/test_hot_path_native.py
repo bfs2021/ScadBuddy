@@ -512,7 +512,8 @@ def test_a_repeat_under_one_key_is_the_first_answer_after_a_spool_changes(
     filament.spools.add_event(spool.id, SpoolEventAdd(kind="weighed", grams=120), actor="test")
     again = native_app.post(url, json=body, headers=key)
 
-    assert again.status_code == 202, again.text
+    # 202 while the first slice runs, 200 once it has finished: either is the first answer.
+    assert again.status_code in (200, 202), again.text
     assert again.json()["id"] == first.json()["id"]
     follow_operation(native_app, first.json(), timeout=60, poll=0.1)
 
