@@ -63,6 +63,13 @@ describe('the spools CSV', () => {
     expect(readSpoolsCsv('').rows).toEqual([])
   })
 
+  it('reads back a note that already starts with a quote and a formula start unchanged', () => {
+    for (const note of ["'=x", "''=x", "'+1"]) {
+      const text = spoolsCsv([{ ...spool, note } as Spool], ['number', 'note'])
+      expect(readSpoolsCsv(text).rows).toEqual([{ number: '12', note }])
+    }
+  })
+
   it('guards a formula-like text cell with a quote and reads it back unchanged', () => {
     const formula = { ...spool, note: '=HYPERLINK("http://x","y")' } as Spool
     const text = spoolsCsv([formula], ['number', 'note'])

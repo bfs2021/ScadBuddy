@@ -20,7 +20,7 @@ describe('the Spools tab', () => {
     expect(within(rows[0]!).getByRole('link', { name: '#1' })).toHaveAttribute('href', '/filament/spools/62620000-0000-4000-8000-000000000001')
   })
 
-  it('marks a spool that needs a type, and one whose material is Unknown, with Set type', async () => {
+  it('marks the spools that need a type, #6 and #7 (whose material is Unknown), with Set type', async () => {
     render()
     const rows = spoolRows(await table())
     const badge = (number: string) => rows.find((one) => one.dataset.spool === number)!
@@ -54,6 +54,28 @@ describe('the Spools tab', () => {
   it('keeps Needs type to spools with no type: the two seed spools, 6 and 7', async () => {
     render('/filament/spools?needs_type=true')
     await waitFor(async () => expect(spoolRows(await table()).map((row) => row.dataset.spool)).toEqual(['6', '7']))
+  })
+
+  it('filters by insert type from the Filter menu', async () => {
+    const { user } = render()
+    await table()
+    await user.click(screen.getByRole('button', { name: /Filter/ }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Insert type' }))
+    const cardboard = await screen.findByRole('menuitemradio', { name: 'Cardboard spool' })
+    cardboard.focus()
+    await user.keyboard('{Enter}')
+    expect(await screen.findByRole('button', { name: 'Clear filter Insert: Cardboard spool' })).toBeInTheDocument()
+    const rows = spoolRows(await table())
+    expect(rows.length).toBeGreaterThan(0)
+    expect(rows.length).toBeLessThan(11)
+  })
+
+  it('checks the radio of a URL filter that differs in case from the list name', async () => {
+    const { user } = render('/filament/spools?material=petg')
+    await table()
+    await user.click(screen.getByRole('button', { name: /Filter/ }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Material' }))
+    expect(await screen.findByRole('menuitemradio', { name: 'PETG' })).toHaveAttribute('aria-checked', 'true')
   })
 
   it('filters by material, and by use, from the Filter menu; the URL keeps the state', async () => {

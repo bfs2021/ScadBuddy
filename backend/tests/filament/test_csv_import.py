@@ -17,7 +17,7 @@ from scadbuddy.filament.csv_import import (
     import_rows,
 )
 from scadbuddy.filament.inventory import FilamentInventory
-from scadbuddy.filament.locations import LocationStore
+from scadbuddy.filament.locations import LocationStore, MoveTargetError
 from scadbuddy.filament.models import (
     Brand,
     LocationCreate,
@@ -25,6 +25,7 @@ from scadbuddy.filament.models import (
     LocationPatch,
     Material,
     SpoolCreate,
+    SpoolPatch,
     SpoolTypeCreate,
 )
 from scadbuddy.filament.presets import PoolSpoolPresets
@@ -243,7 +244,7 @@ def test_a_spool_gone_mid_import_is_a_row_error(
 
 def test_the_dry_run_checks_temperatures_against_the_new_type(pg_pool: PgPool) -> None:
     f = _filament(pg_pool)
-    kind = f.types.create(
+    f.types.create(
         SpoolTypeCreate(
             code="HOT",
             material_id=_material(f),
@@ -261,4 +262,60 @@ def test_the_dry_run_checks_temperatures_against_the_new_type(pg_pool: PgPool) -
     with pytest.raises(ImportRefusedError):
         import_rows(f, [row], dry_run=False, actor="ann")
     assert f.spools.get(_by_number(f, number)).type_id is None  # type: ignore[union-attr]
-    assert kind.code == "HOT"
+
+
+def _row_error(f: Filament, row: CsvRow) -> str | None:
+    with pytest.raises(ImportRefusedError) as refused:
+        import_rows(f, [row], dry_run=False, actor="ann")
+    return refused.value.preview.rows[0].error
+
+
+def test_a_validation_failure_is_a_short_row_error(
+    pg_pool: PgPool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    f = _filament(pg_pool)
+    number = _spool(f, note="old")
+
+    def refuse(*_a: object, **_k: object) -> bool:
+        SpoolPatch.model_validate({"material_id": "not-a-uuid"})
+        return True
+
+    monkeypatch.setattr(FilamentSpoolStore, "update_on", refuse)
+    error = _row_error(f, CsvRow(number=str(number), note="new"))
+    assert error is not None
+    assert error.startswith("material: ")
+    assert "material_id" not in error
+    assert "pydantic" not in error
+    assert "\n" not in error
+
+
+def test_a_missing_catalog_row_is_a_row_error_naming_the_column(
+    pg_pool: PgPool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    f = _filament(pg_pool)
+    number = _spool(f, note="old")
+
+    def refuse(*_a: object, **_k: object) -> bool:
+        with pg_pool.connection() as conn:
+            conn.execute("UPDATE filament_spools SET insert_type_id = gen_random_uuid() WHERE true")
+        return True
+
+    monkeypatch.setattr(FilamentSpoolStore, "update_on", refuse)
+    assert _row_error(f, CsvRow(number=str(number), note="new")) == (
+        "insert_type: that value no longer exists"
+    )
+
+
+def test_a_failed_move_is_a_row_error(pg_pool: PgPool, monkeypatch: pytest.MonkeyPatch) -> None:
+    f = _filament(pg_pool)
+    number = _spool(f)
+    _place(f, "Shelf")
+
+    def refuse(*_a: object, **_k: object) -> None:
+        raise MoveTargetError()
+
+    monkeypatch.setattr(LocationStore, "move_on", staticmethod(refuse))
+    assert _row_error(f, CsvRow(number=str(number), location="shelf")) == (
+        "location: 'Shelf' cannot be moved to"
+    )
+    assert f.spools.get(_by_number(f, number)).location_id is None  # type: ignore[union-attr]

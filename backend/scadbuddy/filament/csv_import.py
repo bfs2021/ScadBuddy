@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from scadbuddy.filament import models as m
 from scadbuddy.filament.bambuddy_pull import _catalog_id
 from scadbuddy.filament.component import Filament
-from scadbuddy.filament.locations import LocationStore
+from scadbuddy.filament.locations import LocationStore, MoveTargetError
 from scadbuddy.filament.spools import FilamentSpoolStore, SpoolTypelessError
 from scadbuddy.filament.types import TypeTempError
 from scadbuddy.filament.types import effective as work_out_effective
@@ -317,10 +317,19 @@ def _plan(
                 conn, spool_id, m.SpoolPatch(**values), actor=actor
             ):
                 raise _RowError(f"no spool #{spool.number}")
-    except (TypeTempError, SpoolTypelessError, ValidationError, errors.ForeignKeyViolation) as exc:
+    except (TypeTempError, SpoolTypelessError) as exc:
         raise _RowError(str(exc)) from None
+    except ValidationError as exc:
+        raise _RowError(_readable(exc)) from None
+    except errors.ForeignKeyViolation as exc:
+        raise _RowError(_missing(exc)) from None
     if location is not None:
-        LocationStore.move_on(conn, spool_id, location, actor=actor)
+        try:
+            LocationStore.move_on(conn, spool_id, location, actor=actor)
+        except (MoveTargetError, LookupError):
+            raise _RowError(
+                f"location: {_name(conn, 'filament_locations', location)!r} cannot be moved to"
+            ) from None
     made = conn.execute("SELECT number FROM filament_spools WHERE id = %s", (spool_id,)).fetchone()
     assert made is not None
     return ImportRowResult(
@@ -330,6 +339,35 @@ def _plan(
         changes=changes,
         error=None,
     )
+
+
+#: The CSV column behind a spool column that names a catalog row, a type or a place.
+_ID_COLUMNS: Final = {
+    "type_id": "type",
+    "location_id": "location",
+    "insert_type_id": "insert_type",
+    **{field: column for column, (field, _table) in _CATALOGS.items()},
+}
+
+
+def _readable(exc: ValidationError) -> str:
+    """A validation failure as ``column: problem`` lines, without the library's prefixes."""
+    parts = []
+    for e in exc.errors():
+        column = ".".join(_ID_COLUMNS.get(str(p), str(p)) for p in e["loc"])
+        problem = str(e["msg"]).removeprefix("Value error, ")
+        parts.append(f"{column}: {problem}" if column else problem)
+    return "; ".join(parts)
+
+
+def _missing(exc: errors.ForeignKeyViolation) -> str:
+    """A foreign key failure as the column whose value no longer exists (a catalog row
+    archived or deleted while the import ran)."""
+    constraint = exc.diag.constraint_name or ""
+    for field, column in sorted(_ID_COLUMNS.items(), key=lambda kv: -len(kv[0])):
+        if field in constraint:
+            return f"{column}: that value no longer exists"
+    return "a value refers to something that no longer exists"
 
 
 def _plain(row: CsvRow) -> dict[str, Any]:
@@ -344,9 +382,7 @@ def _plain(row: CsvRow) -> dict[str, Any]:
     try:
         patch = m.SpoolPatch.model_validate(cells)
     except ValidationError as exc:
-        raise _RowError(
-            "; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors())
-        ) from None
+        raise _RowError(_readable(exc)) from None
     return {field: getattr(patch, field) for field in cells}
 
 

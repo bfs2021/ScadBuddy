@@ -110,16 +110,18 @@ const NUMERIC_COLUMNS = new Set<CsvColumn>([
 ])
 /** What makes a spreadsheet read a cell as a formula (OWASP, "CSV Injection"). */
 const FORMULA_START = /^[=+\-@\t\r]/
+/** A formula start behind any number of `'`: what the import's one-`'` strip would damage. */
+const QUOTED_FORMULA = /^'+[=+\-@\t\r]/
 
 /**
- * A cell as CSV text. A text cell that starts like a formula gets a leading `'`, so a
+ * A cell as CSV text. A text cell that starts like a formula (or like `'` and a formula) gets a leading `'`, so a
  * spreadsheet shows it as text (CSV injection,
  * https://owasp.org/www-community/attacks/CSV_Injection); `readSpoolsCsv` removes it again.
  */
 function quote(value: Cell, column: CsvColumn): string {
   if (value === null || value === undefined) return ''
   let text = String(value)
-  if (!NUMERIC_COLUMNS.has(column) && FORMULA_START.test(text)) text = `'${text}`
+  if (!NUMERIC_COLUMNS.has(column) && (FORMULA_START.test(text) || QUOTED_FORMULA.test(text))) text = `'${text}`
   return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text
 }
 
@@ -178,7 +180,7 @@ const DERIVED = new Set<string>(DERIVED_CSV_COLUMNS)
 
 /** Undoes the export's `'` guard: one leading `'` before a formula start, in a text column. */
 function unprefix(column: string, value: string): string {
-  return !NUMERIC_COLUMNS.has(column as CsvColumn) && value.startsWith("'") && FORMULA_START.test(value.slice(1)) ? value.slice(1) : value
+  return !NUMERIC_COLUMNS.has(column as CsvColumn) && value.startsWith("'") && (FORMULA_START.test(value.slice(1)) || QUOTED_FORMULA.test(value.slice(1))) ? value.slice(1) : value
 }
 
 /** A spools CSV's rows, as the import route takes them. */

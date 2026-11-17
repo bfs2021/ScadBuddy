@@ -81,6 +81,7 @@ const CHIPS: { key: keyof SpoolsQuery; title: (q: SpoolsQuery) => string }[] = [
 const NAME_FILTERS = [
   { key: 'material', title: 'Material', name: (spool: Spool) => spool.names?.material },
   { key: 'brand', title: 'Brand', name: (spool: Spool) => spool.names?.brand },
+  { key: 'insertType', title: 'Insert type', name: (spool: Spool) => spool.names?.insert_type },
   { key: 'location', title: 'Location', name: (spool: Spool) => spool.names?.location },
 ] as const
 
@@ -226,21 +227,27 @@ export function SpoolsTab() {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start">
-            {NAME_FILTERS.map((filter) => (
-              <DropdownMenuSub key={filter.key}>
-                <DropdownMenuSubTrigger>{filter.title}</DropdownMenuSubTrigger>
-                <DropdownMenuSubContent className="max-h-72 overflow-y-auto">
-                  <DropdownMenuRadioGroup value={q[filter.key] ?? ''} onValueChange={(value) => update({ [filter.key]: value || undefined })}>
-                    <DropdownMenuRadioItem value="">Any {filter.title.toLowerCase()}</DropdownMenuRadioItem>
-                    {namesIn(data?.spools ?? [], filter.name).map((name) => (
-                      <DropdownMenuRadioItem key={name} value={name}>
-                        {name}
-                      </DropdownMenuRadioItem>
-                    ))}
-                  </DropdownMenuRadioGroup>
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
-            ))}
+            {NAME_FILTERS.map((filter) => {
+              const names = namesIn(data?.spools ?? [], filter.name)
+              const picked = q[filter.key]
+              // A link may differ in case from the list's name; the filter matches in any case.
+              const current = names.find((name) => name.toUpperCase() === picked?.toUpperCase()) ?? picked ?? ''
+              return (
+                <DropdownMenuSub key={filter.key}>
+                  <DropdownMenuSubTrigger>{filter.title}</DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent className="max-h-72 overflow-y-auto">
+                    <DropdownMenuRadioGroup value={current} onValueChange={(value) => update({ [filter.key]: value || undefined })}>
+                      <DropdownMenuRadioItem value="">Any {filter.title.toLowerCase()}</DropdownMenuRadioItem>
+                      {names.map((name) => (
+                        <DropdownMenuRadioItem key={name} value={name}>
+                          {name}
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+              )
+            })}
             <DropdownMenuSeparator />
             <DropdownMenuLabel>Use</DropdownMenuLabel>
             <DropdownMenuRadioGroup
