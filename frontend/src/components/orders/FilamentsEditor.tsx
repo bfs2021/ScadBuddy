@@ -1,5 +1,7 @@
 import { useState } from 'react'
+import { Link } from 'react-router'
 import { api } from '../../api/client'
+import type { SpoolType } from '../../api/filament'
 import type { DensityFillRow, Filament, FilamentInput, SpoolImportRow } from '../../api/types'
 import { useAsync } from '../../lib/useAsync'
 import { displayHex, swatchStyle } from '../../lib/filamentSwatch'
@@ -7,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { makeTypeFromBook } from '../filament/makeType'
 import { DataTable, type Column } from '../records/DataTable'
 import { refusalText } from './refusal'
 
@@ -96,8 +99,8 @@ function fillLine(row: DensityFillRow): string {
 }
 
 /**
- * #4250 — the price book's filaments (spec 2026-10-18 §5.1, plan Ruling 4), under the
- * Settings page's Orders section: what a kilogram of each costs, and its density for the
+ * #4250 — the price book's filaments (spec 2026-10-18 §5.1, plan Ruling 4), once under the
+ * Settings page's Orders section, now the Types tab's Price book panel: what a kilogram of each costs, and its density for the
  * rough estimate. A record is never deleted, only archived: a quote priced with it keeps
  * its lines, and an item may still name it. "Show archived" lists the archived ones, each
  * with an Unarchive that brings the same record back (#4977). "Import from spools" makes
@@ -107,8 +110,12 @@ function fillLine(row: DensityFillRow): string {
  * always true). Each density says where it came from; "Fill densities" writes into every
  * empty one the density its spools give: their own, else their slicer preset's, else
  * the preset's their tray reports (#6136).
+ *
+ * #6262 Task 16 (Decision 8): the Filament section's Types tab mounts this as its "Price
+ * book" panel, the book's one UI. With `types`, each row shows the type it is linked to
+ * (`SpoolType.filament_id`) as a link, or "Make a type" for a row with none.
  */
-export function FilamentsEditor() {
+export function FilamentsEditor({ types, onTypesChanged }: { types?: SpoolType[]; onTypesChanged?: () => void } = {}) {
   const [showArchived, setShowArchived] = useState(false)
   const book = useAsync(() => api.priceBook(showArchived), [showArchived])
   const [draft, setDraft] = useState<Draft>(EMPTY)
@@ -142,6 +149,20 @@ export function FilamentsEditor() {
     try {
       setImported((await api.importSpools()).rows)
       book.refresh()
+    } catch (err) {
+      setError(refusalText(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // Not `act`: a draft being typed stays.
+  async function makeType(filament: Filament) {
+    setBusy(true)
+    setError(null)
+    try {
+      await makeTypeFromBook(filament)
+      onTypesChanged?.()
     } catch (err) {
       setError(refusalText(err))
     } finally {
@@ -220,6 +241,31 @@ export function FilamentsEditor() {
         return <span className={missing ? 'text-xs text-warn' : 'sb-num'}>{text}</span>
       },
     },
+    ...(types
+      ? [
+          {
+            key: 'type',
+            header: 'Type',
+            className: 'whitespace-nowrap',
+            cell: (f: Filament) => {
+              const linked = types.find((one) => one.filament_id === f.id)
+              if (linked) {
+                return (
+                  <Link to={`/filament/types/${linked.id}`} className="underline-offset-4 hover:underline">
+                    {linked.code}
+                  </Link>
+                )
+              }
+              if (f.archived_at) return <span className="text-xs text-muted-foreground">None</span>
+              return (
+                <Button size="xs" variant="outline" disabled={busy} onClick={() => void makeType(f)} aria-label={`Make a type from ${filamentLabel(f)}`}>
+                  Make a type
+                </Button>
+              )
+            },
+          } satisfies Column<Filament>,
+        ]
+      : []),
     {
       key: 'actions',
       header: <span className="sr-only">Actions</span>,

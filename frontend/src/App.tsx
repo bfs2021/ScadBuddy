@@ -18,6 +18,7 @@ const CustomerPage = lazyRetry(async () => ({ default: (await import('./pages/Cu
 const CustomersPage = lazyRetry(async () => ({ default: (await import('./pages/CustomersPage')).CustomersPage }))
 const CustomizePage = lazyRetry(async () => ({ default: (await import('./pages/CustomizePage')).CustomizePage }))
 const EditPage = lazyRetry(async () => ({ default: (await import('./pages/EditPage')).EditPage }))
+const TypePage = lazyRetry(async () => ({ default: (await import('./pages/filament/TypePage')).TypePage }))
 const FilamentPage = lazyRetry(async () => ({ default: (await import('./pages/filament/FilamentPage')).FilamentPage }))
 const FlowPage = lazyRetry(async () => ({ default: (await import('./pages/FlowPage')).FlowPage }))
 const HistoryPage = lazyRetry(async () => ({ default: (await import('./pages/HistoryPage')).HistoryPage }))
@@ -112,6 +113,7 @@ export function App() {
         <Route path="prints/queue/:itemId" element={<QueueItemPage />} />
         <Route path="library/*" element={<LibraryPage />} />
         <Route path="filament" element={<Navigate to={FILAMENT_HOME} replace />} />
+        <Route path="filament/types/:id" element={<TypePage />} />
         {FILAMENT_TABS.filter((tab) => tab.available).map((tab) => (
           <Route key={tab.id} path={tab.path} element={<FilamentPage tab={tab.id} />} />
         ))}
