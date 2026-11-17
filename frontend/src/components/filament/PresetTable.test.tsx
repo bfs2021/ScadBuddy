@@ -48,6 +48,14 @@ describe('PresetTable', () => {
     expect(presetRowsError([ROW])).toBeNull()
   })
 
+  it('removes an own row', async () => {
+    const user = userEvent.setup()
+    const spy = vi.fn()
+    render(<Harness start={[ROW]} spy={spy} />)
+    await user.click(screen.getByRole('button', { name: 'Remove preset H2C 0.4' }))
+    expect(spy).toHaveBeenLastCalledWith([])
+  })
+
   it('refuses two rows for one printer model and nozzle', () => {
     expect(presetRowsError([ROW, { ...ROW, slicer_filament: 'GFA01' }])).toMatch(/H2C 0\.4/)
   })

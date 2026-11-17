@@ -50,7 +50,7 @@ multi-colour rules, connecting Bambuddy and each feature.
   the slice (every plate's grams and time at the price book's filaments and rates, kept
   with the sliced file it was read from), fulfilled, shipped and closed, with an audit
   line per order; a rough estimate from a render's volume before anything is sliced; the
-  pages under Orders, the price book in Settings, and the assistant's `order_*` and
+  pages under Orders, the price book on the Filament page's Types tab, and the assistant's `order_*` and
   `price_book_*` tools (phases 1 and 2 of #4248).
 - **Fonts**: the image's fonts, plus any Google Fonts family, which is installed on
   demand.

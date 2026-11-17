@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { makeTypeFromBook } from '../filament/makeType'
+import { MakeTypeError, makeTypeFromBook } from '../filament/makeType'
 import { DataTable, type Column } from '../records/DataTable'
 import { refusalText } from './refusal'
 
@@ -99,9 +99,8 @@ function fillLine(row: DensityFillRow): string {
 }
 
 /**
- * #4250 — the price book's filaments (spec 2026-10-18 §5.1, plan Ruling 4), once under the
- * Settings page's Orders section, now the Types tab's Price book panel: what a kilogram of each costs, and its density for the
- * rough estimate. A record is never deleted, only archived: a quote priced with it keeps
+ * #4250 — the price book's filaments (spec 2026-10-18 §5.1, plan Ruling 4): what a
+ * kilogram of each costs, and its density for the rough estimate. A record is never deleted, only archived: a quote priced with it keeps
  * its lines, and an item may still name it. "Show archived" lists the archived ones, each
  * with an Unarchive that brings the same record back (#4977). "Import from spools" makes
  * or updates one record per filament of ScadBuddy's spools (names and `#RRGGBBAA`, so an
@@ -164,7 +163,10 @@ export function FilamentsEditor({ types, onTypesChanged }: { types?: SpoolType[]
       await makeTypeFromBook(filament)
       onTypesChanged?.()
     } catch (err) {
-      setError(refusalText(err))
+      if (err instanceof MakeTypeError) {
+        const kept = err.added.length > 0 ? ` ${err.added.join(', ')} stays in the catalog.` : ''
+        setError(`${refusalText(err.cause)}${kept}`)
+      } else setError(refusalText(err))
     } finally {
       setBusy(false)
     }

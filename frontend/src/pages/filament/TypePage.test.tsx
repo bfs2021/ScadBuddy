@@ -1,7 +1,9 @@
 import { screen, waitFor, within } from '@testing-library/react'
-import { Link, Route, Routes } from 'react-router'
+import { http, HttpResponse } from 'msw'
+import { Link, Route, Routes, useLocation } from 'react-router'
 import { describe, expect, it } from 'vitest'
 import { getType, listTypes } from '../../api/filament'
+import { server } from '../../mocks/server'
 import { T } from '../../mocks/features/filament/seed'
 import { choose } from '../../test/select'
 import { renderPage } from '../../test/utils'
@@ -117,5 +119,109 @@ describe('the type page', () => {
   it('says a type is gone for a 404', async () => {
     render('/filament/types/62620000-0000-4000-8000-0000000000ff')
     expect(await screen.findByText(/That type is gone/)).toBeInTheDocument()
+  })
+
+  it('keeps a created type as one type: a failed preset save retries as an edit, never a second POST', async () => {
+    let posts = 0
+    const puts: string[] = []
+    let refuse = true
+    server.use(
+      http.post('/api/v1/filament/types', () => {
+        posts += 1
+        return undefined
+      }),
+      http.put('/api/v1/filament/types/:id/presets', ({ params }) => {
+        puts.push(String(params.id))
+        if (refuse) return HttpResponse.json({ type: 'about:blank', title: 'Unprocessable', status: 422, detail: 'preset refused' }, { status: 422, headers: { 'Content-Type': 'application/problem+json' } })
+        return undefined
+      }),
+    )
+    const { user } = render('/filament/types/new')
+    await user.type(await code(), 'TEST-RETRY')
+    await choose(user, screen.getByRole('combobox', { name: 'Material' }), 'PLA')
+    await user.click(screen.getByRole('button', { name: 'Add preset' }))
+    const row = screen.getByRole('row', { name: 'New preset' })
+    await user.type(within(row).getByLabelText('Printer model'), 'H2C')
+    await user.type(within(row).getByLabelText('Slicer filament'), 'GFA00')
+    await user.click(screen.getByRole('button', { name: 'Save type' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('preset refused')
+    const made = (await listTypes()).filter((type) => type.code === 'TEST-RETRY')
+    expect(made).toHaveLength(1)
+    refuse = false
+    await user.click(screen.getByRole('button', { name: 'Save type' }))
+    await waitFor(async () => expect((await getType(made[0]!.id)).presets).toHaveLength(1))
+    expect(posts).toBe(1)
+    expect(puts).toEqual([made[0]!.id, made[0]!.id])
+    expect((await listTypes()).filter((type) => type.code === 'TEST-RETRY')).toHaveLength(1)
+  })
+
+  it('moves to the new type address with replace once everything saved, and says Saved', async () => {
+    function Where() {
+      return <p data-testid="where">{useLocation().pathname}</p>
+    }
+    const { user } = renderPage(
+      <>
+        <Where />
+        <Routes>
+          <Route path="/filament/types/:id" element={<TypePage />} />
+        </Routes>
+      </>,
+      { route: '/filament/types/new' },
+    )
+    await user.type(await code(), 'TEST-WHERE')
+    await choose(user, screen.getByRole('combobox', { name: 'Material' }), 'PLA')
+    await user.click(screen.getByRole('button', { name: 'Save type' }))
+    await waitFor(async () => {
+      const made = (await listTypes()).find((type) => type.code === 'TEST-WHERE')
+      expect(made).toBeDefined()
+      expect(screen.getByTestId('where')).toHaveTextContent(`/filament/types/${made!.id}`)
+    })
+  })
+
+  it('says Saved after a save, in a polite status', async () => {
+    const { user } = render(`/filament/types/${T.JADE}`)
+    await user.type(await screen.findByLabelText('Colour name'), 'x')
+    await user.click(screen.getByRole('button', { name: 'Save type' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Saved')
+    expect(screen.getByRole('button', { name: 'Save type' })).toBeDisabled()
+  })
+
+  it('releases the leave guard once saved', async () => {
+    const { user } = renderPage(
+      <>
+        <Link to="/other">Away</Link>
+        <Routes>
+          <Route path="/filament/types/:id" element={<TypePage />} />
+          <Route path="*" element={<p>Elsewhere</p>} />
+        </Routes>
+      </>,
+      { route: `/filament/types/${T.JADE}` },
+    )
+    await user.type(await screen.findByLabelText('Colour name'), 'x')
+    await user.click(screen.getByRole('button', { name: 'Save type' }))
+    await screen.findByRole('status')
+    await user.click(screen.getByRole('link', { name: 'Away' }))
+    expect(await screen.findByText('Elsewhere')).toBeInTheDocument()
+  })
+
+  it('clears the subtype when the material changes to one it does not belong to', async () => {
+    const { user } = render(`/filament/types/${T.JADE}`)
+    await code()
+    expect(screen.getByRole('combobox', { name: 'Subtype' })).toHaveTextContent('Basic')
+    await choose(user, screen.getByRole('combobox', { name: 'Material' }), 'PETG')
+    expect(screen.getByRole('combobox', { name: 'Subtype' })).not.toHaveTextContent('Basic')
+    await user.click(screen.getByRole('button', { name: 'Save type' }))
+    await waitFor(async () => expect((await getType(T.JADE)).material_id).not.toBe((await listTypes()).find((one) => one.id === T.BLACK)!.material_id))
+    expect((await getType(T.JADE)).subtype_id).toBeNull()
+  })
+
+  it('offers only the subtypes of the chosen material', async () => {
+    const { user } = render(`/filament/types/${T.JADE}`)
+    await code()
+    await choose(user, screen.getByRole('combobox', { name: 'Material' }), 'PETG')
+    await user.click(screen.getByRole('combobox', { name: 'Subtype' }))
+    const options = (await screen.findAllByRole('option')).map((one) => one.textContent)
+    expect(options).toContain('HF')
+    expect(options).not.toContain('Silk')
   })
 })

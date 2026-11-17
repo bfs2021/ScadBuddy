@@ -1,7 +1,8 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { listTypes } from '../../api/filament'
-import { T } from '../../mocks/features/filament/seed'
+import { api } from '../../api/client'
+import { listCatalog, listTypes, upsertCatalog, upsertType, type SpoolTypeCreate } from '../../api/filament'
+import { M, ST, T } from '../../mocks/features/filament/seed'
 import { FILAMENT_PETG } from '../../mocks/features/orders/state'
 import { renderPage } from '../../test/utils'
 import { TypesTab } from './TypesTab'
@@ -53,6 +54,43 @@ describe('the Types tab', () => {
       const link = await within(await screen.findByTestId(`filament-${FILAMENT_PETG}`)).findByRole('link', { name: made.code })
       expect(link).toHaveAttribute('href', `/filament/types/${made.id}`)
       expect(await types()).toHaveTextContent(made.code)
+    })
+
+    it('keeps the translucent alpha of a book row in the type it makes', async () => {
+      const row = await api.createFilament({ material: 'PLA', colour: '#336699', alpha: 128, cost_per_kg: '20' })
+      const { user } = renderPage(<TypesTab />)
+      const made = await within(await screen.findByTestId(`filament-${row.id}`)).findByRole('button', { name: /Make a type/ })
+      await user.click(made)
+      await waitFor(async () => expect((await listTypes()).some((type) => type.rgba === '#33669980')).toBe(true))
+    })
+
+    it('makes the subtype under the row material, not the same name of another material', async () => {
+      const petgBasic = await upsertCatalog('subtypes', { name: 'Basic', material_id: M.PETG })
+      const row = await api.createFilament({ material: 'PETG', subtype: 'Basic', colour: '#112233', cost_per_kg: '22' })
+      const { user } = renderPage(<TypesTab />)
+      await user.click(await within(await screen.findByTestId(`filament-${row.id}`)).findByRole('button', { name: /Make a type/ }))
+      await waitFor(async () => expect((await listTypes()).some((type) => type.rgba === '#112233FF')).toBe(true))
+      const made = (await listTypes()).find((type) => type.rgba === '#112233FF')!
+      expect(made.subtype_id).toBe(petgBasic.id)
+      expect(made.subtype_id).not.toBe(ST.BASIC)
+    })
+
+    it('creates a missing subtype under the row material', async () => {
+      const row = await api.createFilament({ material: 'PETG', subtype: 'Galaxy', colour: '#445566', cost_per_kg: '22' })
+      const { user } = renderPage(<TypesTab />)
+      await user.click(await within(await screen.findByTestId(`filament-${row.id}`)).findByRole('button', { name: /Make a type/ }))
+      await waitFor(async () => expect((await listTypes()).some((type) => type.rgba === '#445566FF')).toBe(true))
+      const made = (await listTypes()).find((type) => type.rgba === '#445566FF')!
+      expect((await listCatalog('subtypes')).find((one) => one.id === made.subtype_id)).toMatchObject({ name: 'Galaxy', material_id: M.PETG })
+    })
+
+    it('says which catalog names stay when the type itself is refused', async () => {
+      const taken: SpoolTypeCreate = { code: 'ZED-PLA-RED', material_id: M.PLA, rgba: '#FF0000FF', label_weight_g: 1000, diameter_mm: '1.75' }
+      await upsertType(taken)
+      const row = await api.createFilament({ material: 'PLA', brand: 'Zed', colour_name: 'Red', colour: '#FF0000', cost_per_kg: '20' })
+      const { user } = renderPage(<TypesTab />)
+      await user.click(await within(await screen.findByTestId(`filament-${row.id}`)).findByRole('button', { name: /Make a type/ }))
+      expect(await screen.findByRole('alert')).toHaveTextContent(/Zed stays in the catalog/)
     })
   })
 })

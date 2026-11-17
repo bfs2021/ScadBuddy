@@ -152,4 +152,15 @@ describe('FilamentsEditor (#4250)', () => {
     const opaque = await api.createFilament({ material: 'PLA', subtype: 'Basic', brand: 'Bambu Lab', colour_name: 'Hot Pink', colour: '#F5547C', cost_per_kg: '20', density_g_cm3: null })
     expect(opaque.density_g_cm3).toBe('1.26')
   })
+
+  // #6262 Task 16 review: the Type column waits for the types, so no row offers "Make a type" for a type not yet read.
+  it('shows the Type column only when the types are given', async () => {
+    const first = renderPage(<FilamentsEditor />)
+    await screen.findByRole('table', { name: 'Filaments' })
+    expect(screen.queryByRole('columnheader', { name: 'Type' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Make a type/ })).toBeNull()
+    first.unmount()
+    renderPage(<FilamentsEditor types={[]} />)
+    expect(await screen.findByRole('columnheader', { name: 'Type' })).toBeInTheDocument()
+  })
 })

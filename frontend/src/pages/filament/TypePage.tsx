@@ -235,7 +235,10 @@ interface Lists {
  */
 export function TypePage() {
   const { id = 'new' } = useParams()
-  const creating = id === 'new'
+  /** Set at once when a new type's POST lands: the page is then an edit of it, so a retry never POSTs again. */
+  const [madeId, setMadeId] = useState<string | null>(null)
+  const creating = id === 'new' && madeId === null
+  const [notice, setNotice] = useState<string | null>(null)
   const [saved, setSaved] = useState<SpoolTypeDetail | null>(null)
   const [draft, setDraft] = useState<Draft>(BLANK)
   const [lists, setLists] = useState<Lists | null>(null)
@@ -248,8 +251,9 @@ export function TypePage() {
     setLoadError(null)
     setSaved(null)
     setDraft(BLANK)
+    setMadeId(null)
     Promise.all([
-      creating ? Promise.resolve(null) : getType(id),
+      id === 'new' ? Promise.resolve(null) : getType(id),
       listCatalog('materials'),
       listCatalog('subtypes'),
       listCatalog('brands'),
@@ -273,12 +277,21 @@ export function TypePage() {
     return () => {
       live = false
     }
-  }, [id, creating])
+  }, [id])
 
   const base = useMemo(() => (saved ? draftOf(saved) : BLANK), [saved])
   const dirty = JSON.stringify(draft) !== JSON.stringify(base)
   const guard = useLeaveGuard(dirty)
-  const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setDraft((was) => ({ ...was, [key]: value }))
+  const set = <K extends keyof Draft>(key: K, value: Draft[K]) => {
+    setNotice(null)
+    setDraft((was) => ({ ...was, [key]: value }))
+  }
+  /** A subtype belongs to one material: a new material drops one of another's. */
+  const setMaterial = (materialId: string) =>
+    setDraft((was) => {
+      const kept = lists?.subtypes.find((one) => one.id === was.subtype_id)
+      return { ...was, material_id: materialId, subtype_id: kept?.material_id && kept.material_id !== materialId ? '' : was.subtype_id }
+    })
 
   async function save() {
     const body = bodyOf(draft)
@@ -290,16 +303,27 @@ export function TypePage() {
     if (typeof body === 'string') return
     setBusy(true)
     setError(null)
+    setNotice(null)
+    let typeId = madeId ?? id
     try {
-      let typeId = id
-      if (creating) typeId = (await upsertType(body)).id
-      else {
-        const patch = changed(body, bodyOf(base))
-        if (Object.keys(patch).length > 0) await upsertType(patch, id)
-      }
-      if (creating || JSON.stringify(draft.presets) !== JSON.stringify(base.presets)) await setTypePresets(typeId, draft.presets)
-      if (creating || JSON.stringify(draft.k_values) !== JSON.stringify(base.k_values)) await setTypeKValues(typeId, draft.k_values)
+      let presetsWere = base.presets
+      let kWere = base.k_values
       if (creating) {
+        const made = await upsertType(body)
+        typeId = made.id
+        // From here the page is an edit of this type: a later failure retries as one.
+        setMadeId(made.id)
+        setSaved({ ...made, presets: [], k_values: [] })
+        presetsWere = []
+        kWere = []
+      } else {
+        const patch = changed(body, bodyOf(base))
+        if (Object.keys(patch).length > 0) await upsertType(patch, typeId)
+      }
+      if (JSON.stringify(draft.presets) !== JSON.stringify(presetsWere)) await setTypePresets(typeId, draft.presets)
+      if (JSON.stringify(draft.k_values) !== JSON.stringify(kWere)) await setTypeKValues(typeId, draft.k_values)
+      setNotice('Saved')
+      if (id === 'new') {
         guard.leaveTo(`/filament/types/${typeId}`, { replace: true })
         return
       }
@@ -309,7 +333,7 @@ export function TypePage() {
     } catch (cause) {
       setError(message(cause))
       // A write that did land is shown as it now is, unsaved edits kept.
-      if (!creating) await getType(id).then(setSaved, () => {})
+      if (typeId !== 'new') await getType(typeId).then(setSaved, () => {})
     } finally {
       setBusy(false)
     }
@@ -319,8 +343,8 @@ export function TypePage() {
     setBusy(true)
     setError(null)
     try {
-      await upsertType({ archived }, id)
-      const fresh = await getType(id)
+      await upsertType({ archived }, madeId ?? id)
+      const fresh = await getType(madeId ?? id)
       setSaved(fresh)
     } catch (cause) {
       setError(message(cause))
@@ -348,7 +372,7 @@ export function TypePage() {
 
   const subtypes = lists.subtypes.filter((one) => !one.material_id || one.material_id === draft.material_id)
   const models = [...new Set(lists.printers.map((p) => p.model).filter((m): m is string => !!m))]
-  const mine = lists.spools.filter((spool) => spool.type_id === id)
+  const mine = lists.spools.filter((spool) => spool.type_id === (madeId ?? id))
   const text = (key: keyof Draft, label: string, extra: { hint?: string; width?: string; mode?: 'decimal' | 'numeric' } = {}) => (
     <Field label={label} htmlFor={`type-${key}`} hint={extra.hint}>
       <Input id={`type-${key}`} className={extra.width} inputMode={extra.mode} value={draft[key] as string} onChange={(e) => set(key, e.target.value as never)} />
@@ -378,6 +402,9 @@ export function TypePage() {
           Save type
         </Button>
       </header>
+      <p role="status" className="mb-2 min-h-5 text-[13px] text-muted-foreground">
+        {notice}
+      </p>
       {error && (
         <p role="alert" className="mb-4 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-[13px] text-warn">
           {error}
@@ -389,7 +416,7 @@ export function TypePage() {
           <h2 className="text-sm font-semibold tracking-tight">What it is</h2>
           {text('code', 'Code', { hint: 'One per type, in any case. Bambu Studio calls it the filament name.' })}
           <div className="grid grid-cols-2 gap-3">
-            <Pick label="Material" required value={draft.material_id} onChange={(next) => set('material_id', next)} options={lists.materials} />
+            <Pick label="Material" required value={draft.material_id} onChange={(next) => { setNotice(null); setMaterial(next) }} options={lists.materials} />
             <Pick label="Subtype" value={draft.subtype_id} onChange={(next) => set('subtype_id', next)} options={subtypes} />
             <Pick label="Brand" value={draft.brand_id} onChange={(next) => set('brand_id', next)} options={lists.brands} />
             <Pick label="Category" value={draft.category_id} onChange={(next) => set('category_id', next)} options={lists.categories} />
