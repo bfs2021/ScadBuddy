@@ -1,6 +1,6 @@
 import { ArchiveIcon, ArchiveRestoreIcon, ChevronLeftIcon } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Link, useParams } from 'react-router'
+import { Link, useLocation, useParams } from 'react-router'
 import { api, ApiError } from '../../api/client'
 import {
   getType,
@@ -29,6 +29,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import { listBack } from '../../components/filament/spoolsQuery'
 import { parseRgba } from '../../lib/rgba'
 import { useLeaveGuard } from '../../lib/useLeaveGuard'
 
@@ -135,6 +136,7 @@ function bodyOf(draft: Draft): SpoolTypeCreate | string {
     if (!one) return `"${part}" is not a colour. Enter extra colours as #RRGGBB or #RRGGBBAA, separated by commas.`
     extras.push(one)
   }
+  if (extras.length > 16) return 'Enter at most 16 extra colours.'
   const label = whole('label weight in grams', draft.label_weight_g, true)
   const fields = {
     label_weight_g: label,
@@ -235,6 +237,7 @@ interface Lists {
  */
 export function TypePage() {
   const { id = 'new' } = useParams()
+  const location = useLocation()
   /** Set at once when a new type's POST lands: the page is then an edit of it, so a retry never POSTs again. */
   const [madeId, setMadeId] = useState<string | null>(null)
   const creating = id === 'new' && madeId === null
@@ -326,7 +329,7 @@ export function TypePage() {
       if (JSON.stringify(draft.k_values) !== JSON.stringify(kWere)) await setTypeKValues(typeId, draft.k_values)
       setNotice('Saved')
       if (id === 'new') {
-        guard.leaveTo(`/filament/types/${typeId}`, { replace: true })
+        guard.leaveTo(`/filament/types/${typeId}`, { replace: true, state: location.state })
         return
       }
       const fresh = await getType(typeId)
@@ -532,10 +535,11 @@ export function TypePage() {
 }
 
 function Shell({ children }: { children: ReactNode }) {
+  const location = useLocation()
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-6xl px-4 py-6">
-        <Link to="/filament/types" className="mb-3 inline-flex items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground">
+        <Link to={`/filament/types${listBack(location.state)}`} className="mb-3 inline-flex items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground">
           <ChevronLeftIcon className="size-3.5" /> Types
         </Link>
         {children}

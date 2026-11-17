@@ -81,6 +81,23 @@ describe('the Tags tab', () => {
     expect(screen.getByRole('heading', { name: /History of A1B2C3D4/ })).toBeInTheDocument()
   })
 
+  it('does not reopen a history that answers after Close', async () => {
+    server.use(
+      http.get(`/api/v1/filament/tags/${TAG.MOVED}`, async () => {
+        await delay(200)
+        return HttpResponse.json({ id: TAG.MOVED, kind: 'ntag_openspool', tag_uid: 'SLOW', tray_uuid: null, raw_blob: null, note: null, created_at: '2026-11-01T10:00:00Z', binding: null, spool_number: null, history: [] })
+      }),
+    )
+    const { user } = renderPage(<TagsTab />)
+    await table()
+    await user.click(within(await rowOf(TAG.BLACK)).getByRole('button', { name: /History/ }))
+    await screen.findByRole('region', { name: 'Tag history' })
+    await user.click(within(await rowOf(TAG.MOVED)).getByRole('button', { name: /History/ }))
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+    await delay(400)
+    expect(screen.queryByRole('region', { name: 'Tag history' })).toBeNull()
+  })
+
   it('says why the tags could not be read', async () => {
     server.use(http.get('/api/v1/filament/tags', () => HttpResponse.json({ detail: 'down' }, { status: 500 })))
     renderPage(<TagsTab />)

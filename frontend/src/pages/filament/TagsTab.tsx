@@ -29,7 +29,7 @@ export function TagsTab() {
   const kind = params.get('kind') ?? ''
   const shown = SHOWN.find((one) => one === params.get('show')) ?? 'all'
   const [tags, setTags] = useState<TagRow[] | null>(null)
-  // Spool numbers by id: read when a history opens (a row already carries its spool's number).
+  // Spool numbers by id: read each time a history opens (a row already carries its spool's number).
   const [numbers, setNumbers] = useState<Map<string, number> | null>(null)
   const asked = useRef(0)
   const historyRef = useRef<HTMLElement>(null)
@@ -72,7 +72,8 @@ export function TagsTab() {
     try {
       const detail = await getTag(tag.id)
       // A history the numbers cannot name still lists its spools, as "Spool".
-      const known = numbers ?? (await listSpools({ includeArchived: true }).then((spools) => new Map(spools.map((spool) => [spool.id, spool.number])), () => null))
+      // Read at each opening: a spool made since is named too.
+      const known = await listSpools({ includeArchived: true }).then((spools) => new Map(spools.map((spool) => [spool.id, spool.number])), () => numbers)
       if (mine !== asked.current) return
       if (known) setNumbers(known)
       setOpen(detail)
@@ -182,7 +183,16 @@ export function TagsTab() {
         <section ref={historyRef} tabIndex={-1} aria-label="Tag history" className="flex flex-col gap-2 rounded-md border p-3 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold tracking-tight">History of {keyOf(open)}</h2>
-            <Button type="button" size="xs" variant="ghost" onClick={() => setOpen(null)}>
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              onClick={() => {
+                // An answer still on its way must not reopen what was just closed.
+                asked.current += 1
+                setOpen(null)
+              }}
+            >
               Close
             </Button>
           </div>

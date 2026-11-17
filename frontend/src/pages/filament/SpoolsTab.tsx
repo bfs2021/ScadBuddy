@@ -1,5 +1,5 @@
 import { Columns3Icon, DownloadIcon, ListFilterIcon, LayoutGridIcon, PlusIcon, Rows3Icon, UploadIcon, XIcon } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { ApiError } from '../../api/client'
 import { getSummary, listLocations, listSpools, listTypes, type InventorySummary, type LocationNode, type Spool, type SpoolType } from '../../api/filament'
@@ -100,8 +100,9 @@ function flatten(nodes: LocationNode[], trail: string[] = []): { places: Place[]
   const trays: string[] = []
   for (const node of nodes) {
     const path = [...trail, node.name]
-    places.push({ id: node.id, path: path.join(' / ') })
+    // A tray is not a place to move a spool to: loading one is the tray's job (the Locations tab says so too).
     if (node.printer_id) trays.push(node.id)
+    else places.push({ id: node.id, path: path.join(' / ') })
     const below = flatten(node.children ?? [], path)
     places.push(...below.places)
     trays.push(...below.trays)
@@ -126,14 +127,18 @@ export function SpoolsTab() {
   const [report, setReport] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
 
+  /** Each load takes a number; only the newest one's answer is used. */
+  const latest = useRef(0)
   const load = useCallback(async () => {
+    const mine = ++latest.current
     try {
       const [spools, summary, types, tree] = await Promise.all([listSpools({ includeArchived: true }), getSummary(), listTypes(), listLocations()])
+      if (mine !== latest.current) return
       const { places, trays } = flatten(tree)
       setData({ spools, summary, types, places, trays: new Set(trays) })
       setError(null)
     } catch (cause) {
-      setError(message(cause))
+      if (mine === latest.current) setError(message(cause))
     }
   }, [])
 
@@ -357,7 +362,7 @@ export function SpoolsTab() {
 
       {data && !shown.length && (
         <p className="rounded-md border px-3 py-6 text-center text-[13px] text-muted-foreground">
-          {data.spools.length ? 'No spool matches these filters.' : 'No spools yet. Import a CSV, or pull them from Bambuddy.'}
+          {data.spools.length ? 'No spool matches these filters.' : 'No spools yet. Add a spool, or import a CSV.'}
         </p>
       )}
       {data && shown.length > 0 && q.view === 'table' && (

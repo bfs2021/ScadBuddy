@@ -1,12 +1,12 @@
 import { ArrowDownIcon, ArrowUpIcon } from 'lucide-react'
 import { Fragment } from 'react'
-import { Link } from 'react-router'
+import { SpoolLink } from './SpoolLink'
 import type { Spool } from '../../api/filament'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { cn } from '@/lib/utils'
 import { RgbaSwatch } from './RgbaSwatch'
-import { COLUMN_TITLES, grams, hasUnknownMaterial, needsType, spoolPath, type ColumnId, type SpoolGroup } from './spoolsQuery'
+import { COLUMN_TITLES, grams, hasUnknownMaterial, needsType, type ColumnId, type SpoolGroup } from './spoolsQuery'
 
 const NUMERIC = new Set<ColumnId>(['grams_left', 'label_weight'])
 const UNSORTABLE = new Set<ColumnId>(['type', 'note'])
@@ -24,9 +24,9 @@ export function NeedsType({ spool }: { spool: Spool }) {
       <Badge variant="outline" className="font-normal text-muted-foreground">
         {needsType(spool) ? 'Needs type' : 'Unknown material'}
       </Badge>
-      <Link to={spoolPath(spool)} aria-label={`Set type for spool #${spool.number}`} className="text-[12px] font-medium underline-offset-4 hover:underline">
+      <SpoolLink spool={spool} aria-label={`Set type for spool #${spool.number}`} className="text-[12px] font-medium underline-offset-4 hover:underline">
         Set type
-      </Link>
+      </SpoolLink>
     </span>
   )
 }
@@ -36,9 +36,9 @@ function cell(spool: Spool, column: ColumnId, typeCodes: ReadonlyMap<string, str
     case 'number':
       return (
         <span className="inline-flex flex-wrap items-center gap-2">
-          <Link to={spoolPath(spool)} className="font-medium underline-offset-4 hover:underline">
+          <SpoolLink spool={spool} className="font-medium underline-offset-4 hover:underline">
             #{spool.number}
-          </Link>
+          </SpoolLink>
           <NeedsType spool={spool} />
         </span>
       )

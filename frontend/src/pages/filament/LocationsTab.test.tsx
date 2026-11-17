@@ -64,6 +64,21 @@ describe('the Locations tab', () => {
     await waitFor(async () => expect(((await listLocations())[0]!.children ?? []).map((child) => child.name)).toContain('Drawer 2'))
   })
 
+  it('does not add a copy when the place being changed has left the list', async () => {
+    const { user } = renderPage(<LocationsTab />)
+    await user.click(within(await place(L.DRY_BOX)).getByRole('button', { name: 'Archive Dry box 1' }))
+    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Locations' })).queryByText('Dry box 1')).toBeNull())
+    const toggle = screen.getByRole('checkbox', { name: 'Show archived places' })
+    await user.click(toggle)
+    await user.click(within(await place(L.DRY_BOX)).getByRole('button', { name: 'Edit Dry box 1' }))
+    await screen.findByLabelText('Name')
+    await user.click(toggle)
+    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Locations' })).queryByText('Dry box 1')).toBeNull())
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('That place is no longer in the list')
+    expect(JSON.stringify(await listLocations({ includeArchived: true })).split('"name":"Dry box 1"')).toHaveLength(2)
+  })
+
   it('archives a place, which leaves the tree', async () => {
     const { user } = renderPage(<LocationsTab />)
     await user.click(within(await place(L.DRY_BOX)).getByRole('button', { name: 'Archive Dry box 1' }))

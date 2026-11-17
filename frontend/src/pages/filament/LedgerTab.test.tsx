@@ -82,7 +82,7 @@ describe('the Ledger tab', () => {
       http.get('/api/v1/filament/events', ({ request }) => {
         const params = new URL(request.url).searchParams
         seen.push(params)
-        // The server holds only events after the To day on its newest pages, as a real ledger would.
+        // An empty page: the test reads only the request, and `until` is what the server filters by.
         return HttpResponse.json({ events: [], next_cursor: null })
       }),
     )

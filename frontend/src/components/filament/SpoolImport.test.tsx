@@ -85,4 +85,18 @@ describe('the spools CSV import', () => {
     await screen.findByRole('table', { name: 'Import preview' })
     expect(within(status).queryByText('Checking each line of the file')).toBeNull()
   })
+
+  it('drops a dry run that answers after Cancel', async () => {
+    server.use(
+      http.post(IMPORT, async () => {
+        await delay(150)
+      }),
+    )
+    const { user } = open()
+    await user.upload(screen.getByLabelText('CSV file'), csv('material\r\nPLA\r\n'))
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    expect(screen.queryByRole('table', { name: 'Import preview' })).toBeNull()
+    expect(screen.queryByText('spools.csv')).toBeNull()
+  })
 })

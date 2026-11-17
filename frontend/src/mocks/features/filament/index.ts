@@ -52,6 +52,7 @@ const FIELDS = {
   typeCreate: ['code', 'material_id', 'subtype_id', 'brand_id', 'category_id', 'effect_id', 'insert_type_id', 'rgba', 'colour_name', 'extra_colours', 'diameter_mm', 'density_g_cm3', 'cost_per_kg', 'label_weight_g', 'low_stock_pct', 'nozzle_temp_min', 'nozzle_temp_max', 'bed_temp_min', 'bed_temp_max', 'note'],
   spoolCreate: ['type_id', 'brand_id', 'material_id', 'subtype_id', 'category_id', 'effect_id', 'colour_name', 'rgba', 'extra_colours', 'diameter_mm', 'density_g_cm3', 'nozzle_temp_min', 'nozzle_temp_max', 'bed_temp_min', 'bed_temp_max', 'label_weight_g', 'insert_type_id', 'low_stock_pct', 'cost_per_kg', 'weight_locked', 'note', 'grams_left'],
   move: ['location_id'],
+  csvImport: ['rows', 'dry_run'],
   archive: ['archived'],
   tag: ['tag_uid', 'tray_uuid', 'kind', 'override'],
   event: ['kind', 'source', 'at', 'grams', 'temp_c', 'hours', 'note'],
@@ -893,6 +894,8 @@ export const handlers = [
   }),
   http.post(`${BASE}/spools/import`, async ({ request }) => {
     const body = (await request.json()) as { rows?: unknown; dry_run?: unknown }
+    const extra = extraKeys(body, FIELDS.csvImport)
+    if (extra) return extra
     if (typeof body.dry_run !== 'boolean') return problem(422, 'dry_run: Field required')
     const rows = csvRows(body)
     if (rows instanceof Response) return rows

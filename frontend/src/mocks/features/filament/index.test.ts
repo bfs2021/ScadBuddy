@@ -368,6 +368,11 @@ describe('extra keys in a write body (every body model of `filament/models.py` f
     ['POST a tag', 'POST', `/filament/spools/${spoolId(1)}/tags`, body({ bogus: 1 }, { tag_uid: '04AABB' })],
     ['POST an event', 'POST', `/filament/spools/${spoolId(1)}/events`, body({ bogus: 1 }, { kind: 'weighed', grams: 5 })],
     ['POST a location', 'POST', '/filament/locations', body({ bogus: 1 }, { name: 'X', kind_id: LK.SHELF })],
+    ['POST a catalog row', 'POST', '/filament/catalog/brands', body({ bogus: 1 }, { name: 'Nope' })],
+    ['PATCH a catalog row', 'PATCH', `/filament/catalog/materials/${M.PLA}`, body({ bogus: 1 })],
+    ['PATCH a type archive', 'PATCH', `/filament/types/${T.JADE}`, body({ bogus: 1 }, { archived: true })],
+    ['POST a CSV import', 'POST', '/filament/spools/import', body({ bogus: 1 }, { rows: [{ material: 'PLA' }], dry_run: true })],
+    ['POST a CSV import row', 'POST', '/filament/spools/import', body({ rows: [{ bogus: 'x' }], dry_run: true })],
     ['PATCH a location', 'PATCH', `/filament/locations/${L.SHELF_A}`, body({ bogus: 1 })],
   ]
   it.each(cases)('refuses it on %s', async (_name, method, path, payload) => {

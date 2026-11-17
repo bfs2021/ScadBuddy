@@ -136,6 +136,26 @@ describe('the Catalog tab', () => {
     expect((await listCatalog('colours')).find((row) => row.name === 'Hot Pink')?.extra_colours).toBeNull()
   })
 
+  it('clears the extra colours when only a comma is left, and refuses more than 16', async () => {
+    const { user } = renderPage(<CatalogTab />, { route: '/filament/catalog?kind=colours' })
+    await user.click(within(rowOf(await list('Colours'), 'Hot Pink')).getByRole('button', { name: 'Edit Hot Pink' }))
+    const extra = screen.getByLabelText('Extra colours')
+    await user.type(extra, Array.from({ length: 17 }, () => '#112233').join(','))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('at most 16')
+    expect((await listCatalog('colours')).find((row) => row.name === 'Hot Pink')?.extra_colours).toBeNull()
+    await user.clear(extra)
+    await user.type(extra, '#112233')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(async () => expect((await listCatalog('colours')).find((row) => row.name === 'Hot Pink')?.extra_colours).toEqual(['#112233FF']))
+    await user.click(within(rowOf(await list('Colours'), 'Hot Pink')).getByRole('button', { name: 'Edit Hot Pink' }))
+    const again = screen.getByLabelText('Extra colours')
+    await user.clear(again)
+    await user.type(again, ',')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(async () => expect((await listCatalog('colours')).find((row) => row.name === 'Hot Pink')?.extra_colours).toBeNull())
+  })
+
   it('edits a colour with the colour field', async () => {
     const { user } = renderPage(<CatalogTab />, { route: '/filament/catalog?kind=colours' })
     const table = await list('Colours')

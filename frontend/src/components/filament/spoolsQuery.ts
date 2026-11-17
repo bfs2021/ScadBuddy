@@ -127,6 +127,12 @@ export function writeQuery(q: SpoolsQuery): URLSearchParams {
   return params
 }
 
+/** The list's filters a spool or type page was opened from (`state.back`, a search string), or none. */
+export const listBack = (state: unknown): string => {
+  const back = (state as { back?: unknown } | null)?.back
+  return typeof back === 'string' && back.startsWith('?') ? back : ''
+}
+
 /** A spool's page (Task 17). */
 export const spoolPath = (spool: Pick<Spool, 'id'>) => `/filament/spools/${encodeURIComponent(spool.id)}`
 

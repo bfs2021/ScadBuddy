@@ -44,11 +44,14 @@ function sent(field: Field, value: Value): unknown {
   const textual = typeof value === 'string' ? value.trim() : ''
   if (textual === '') return null
   if (field.kind === 'rgbalist') {
-    return textual.split(/[\s,]+/).filter(Boolean).map((one) => {
+    const colours = textual.split(/[\s,]+/).filter(Boolean).map((one) => {
       const parsed = parseRgba(one)
       if (parsed === null) throw new Error(`${field.label}: "${one}" is not a colour. Use #RRGGBB or #RRGGBBAA, separated by commas.`)
       return parsed
     })
+    if (colours.length > 16) throw new Error(`${field.label}: at most 16 colours.`)
+    // Commas alone name no colour: the field is cleared.
+    return colours.length === 0 ? null : colours
   }
   return field.kind === 'int' ? Number(textual) : textual
 }
@@ -91,15 +94,17 @@ export function CatalogList({ kind }: { kind: CatalogKind }) {
   const refs = [...new Set(spec.fields.flatMap((field) => (field.ref ? [field.ref] : [])))]
   const needsMore = spec.fields.some((field) => field.required)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<boolean> => {
     try {
       const [mine, ...others] = await Promise.all([listCatalog(kind, { includeArchived: archived }), ...refs.map((to) => listCatalog(to, { includeArchived: true }))])
       setRows(mine as Row[])
       setOptions(Object.fromEntries(refs.map((to, at) => [to, others[at] as Row[]])))
       setNames(new Map(others.flat().map((row) => [row.id, row.archived_at ? `${row.name} (archived)` : row.name])))
       setError(null)
+      return true
     } catch (cause) {
       setError(message(cause))
+      return false
     }
     // `refs` is the kind's own constant list.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -193,7 +198,8 @@ export function CatalogList({ kind }: { kind: CatalogKind }) {
       }
     }
     // Whatever was written stays: show the order the server holds now.
-    await load()
+    // A failed reload shows no new order, so no row is waiting for the focus.
+    if (!(await load())) refocus.current = null
     if (failure) setError(failure)
   }
 

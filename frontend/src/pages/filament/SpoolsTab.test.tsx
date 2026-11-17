@@ -1,5 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react'
+import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
+import { server } from '../../mocks/server'
 import { renderPage } from '../../test/utils'
 import { SpoolsTab } from './SpoolsTab'
 
@@ -29,6 +31,23 @@ describe('the Spools tab', () => {
       expect(within(badge(number)).getByText('Needs type')).toBeInTheDocument()
     }
     expect(within(rows[0]!).queryByRole('link', { name: /Set type/ })).toBeNull()
+  })
+
+  it('offers no printer tray in Move to', async () => {
+    const { user } = render()
+    const rows = spoolRows(await table())
+    await user.click(within(rows[0]!).getByRole('checkbox'))
+    await user.click(await screen.findByRole('button', { name: /Move to/ }))
+    expect(await screen.findByRole('menuitem', { name: /Dry box 1/ })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: /AMS/ })).toBeNull()
+  })
+
+  it('names only actions the tab has when there are no spools', async () => {
+    server.use(http.get('/api/v1/filament/spools', () => HttpResponse.json([])))
+    render()
+    expect(await screen.findByText('No spools yet. Add a spool, or import a CSV.')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /New spool/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Import CSV/ })).toBeInTheDocument()
   })
 
   it('filters to low stock from its tile', async () => {

@@ -62,8 +62,14 @@ export function SpoolImport({ open, onOpenChange, onImported }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [working, setWorking] = useState<'preview' | 'write' | null>(null)
 
+  /** Bumped by each chosen file and by close: a dry run that answers after either is dropped. */
+  const latest = useRef(0)
+
   const close = (next: boolean) => {
     if (next) return onOpenChange(true)
+    latest.current += 1
+    setBusy(false)
+    setWorking(null)
     setOpened(null)
     setError(null)
     onOpenChange(false)
@@ -71,20 +77,25 @@ export function SpoolImport({ open, onOpenChange, onImported }: Props) {
 
   const choose = async (file: File | undefined) => {
     if (!file) return
+    const mine = ++latest.current
     setError(null)
     const read = readSpoolsCsv(await file.text())
+    if (mine !== latest.current) return
     const next: Opened = { name: file.name, ...read, preview: null, key: crypto.randomUUID() }
     setOpened(next)
     if (!read.rows.length || read.unknown.length) return
     setBusy(true)
     setWorking('preview')
     try {
-      setOpened({ ...next, preview: await importSpools(read.rows, { dryRun: true }) })
+      const preview = await importSpools(read.rows, { dryRun: true })
+      if (mine === latest.current) setOpened({ ...next, preview })
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.detail : 'The preview failed. Try again.')
+      if (mine === latest.current) setError(cause instanceof ApiError ? cause.detail : 'The preview failed. Try again.')
     } finally {
-      setBusy(false)
-      setWorking(null)
+      if (mine === latest.current) {
+        setBusy(false)
+        setWorking(null)
+      }
     }
   }
 

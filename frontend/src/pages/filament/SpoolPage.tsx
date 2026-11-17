@@ -1,6 +1,6 @@
 import { ArchiveIcon, ArchiveRestoreIcon, ChevronLeftIcon, Trash2Icon } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Link, useParams } from 'react-router'
+import { Link, useLocation, useParams } from 'react-router'
 import { api, ApiError } from '../../api/client'
 import {
   addSpoolEvent,
@@ -47,6 +47,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import { listBack } from '../../components/filament/spoolsQuery'
 import { parseRgba } from '../../lib/rgba'
 import { useLeaveGuard } from '../../lib/useLeaveGuard'
 
@@ -164,6 +165,7 @@ function bodyOf(draft: Draft): SpoolPatch | string {
     if (!one) return `"${part}" is not a colour. Enter extra colours as #RRGGBB or #RRGGBBAA, separated by commas.`
     extras.push(one)
   }
+  if (extras.length > 16) return 'Enter at most 16 extra colours.'
   const ints = {
     label_weight_g: whole('label weight in grams', draft.label_weight_g),
     low_stock_pct: whole('low stock percent', draft.low_stock_pct),
@@ -273,7 +275,8 @@ interface Lists {
 }
 
 function flatten(nodes: LocationNode[], path: string[] = []): { id: string; name: string }[] {
-  return nodes.flatMap((node) => [{ id: node.id, name: [...path, node.name].join(' / ') }, ...flatten(node.children ?? [], [...path, node.name])])
+  // A printer's tray is not a place to move a spool to: loading one is the tray's job.
+  return nodes.flatMap((node) => [...(node.printer_id == null ? [{ id: node.id, name: [...path, node.name].join(' / ') }] : []), ...flatten(node.children ?? [], [...path, node.name])])
 }
 
 const grams = (value: number) => `${Number(value.toFixed(1))} g`
@@ -290,6 +293,9 @@ const grams = (value: number) => `${Number(value.toFixed(1))} g`
  */
 export function SpoolPage() {
   const { id = 'new' } = useParams()
+  const location = useLocation()
+  /** The list's filters this page was opened from: back and a delete return to them. */
+  const listPath = `/filament/spools${listBack(location.state)}`
   /** Set at once when a new spool's POST lands: the page is then an edit of it. */
   const [madeId, setMadeId] = useState<string | null>(null)
   const creating = id === 'new' && madeId === null
@@ -433,7 +439,7 @@ export function SpoolPage() {
       if (JSON.stringify(draft.k_values) !== JSON.stringify(kWere)) await setSpoolKValues(spoolId, draft.k_values)
       setNotice('Saved')
       if (id === 'new') {
-        guard.leaveTo(`/filament/spools/${spoolId}`, { replace: true })
+        guard.leaveTo(`/filament/spools/${spoolId}`, { replace: true, state: location.state })
         return
       }
       const [fresh, ledger] = await Promise.all([getSpool(spoolId), listSpoolEvents(spoolId)])
@@ -628,7 +634,7 @@ export function SpoolPage() {
             </div>
             <div className="flex flex-col gap-2">
               <h3 className="text-[13px] font-medium">Tag</h3>
-              {saved && !creating ? <TagPanel spool={saved} onChanged={() => void reload(true)} /> : <p className="text-[13px] text-muted-foreground">Save the spool first, then bind its tag.</p>}
+              {saved && !creating ? <TagPanel spool={saved} onChanged={() => void reload(true).catch((cause) => setError(message(cause)))} /> : <p className="text-[13px] text-muted-foreground">Save the spool first, then bind its tag.</p>}
             </div>
             {!creating && saved && (
               <div className="flex flex-wrap items-center gap-2 border-t pt-3">
@@ -759,6 +765,11 @@ export function SpoolPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value={NONE}>Nowhere</SelectItem>
+                    {draft.location_id !== '' && !lists.places.some((place) => place.id === draft.location_id) && (
+                      <SelectItem value={draft.location_id} disabled>
+                        {saved?.names?.location ?? 'A printer tray'}
+                      </SelectItem>
+                    )}
                     {lists.places.map((place) => (
                       <SelectItem key={place.id} value={place.id}>
                         {place.name}
@@ -836,7 +847,7 @@ export function SpoolPage() {
                     throw cause
                   }
                   setConfirmDelete(false)
-                  guard.leaveTo('/filament/spools')
+                  guard.leaveTo(listPath)
                 })
               }
             >
@@ -865,10 +876,11 @@ export function SpoolPage() {
 }
 
 function Shell({ children }: { children: ReactNode }) {
+  const location = useLocation()
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-6xl px-4 py-6">
-        <Link to="/filament/spools" className="mb-3 inline-flex items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground">
+        <Link to={`/filament/spools${listBack(location.state)}`} className="mb-3 inline-flex items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground">
           <ChevronLeftIcon className="size-3.5" /> Spools
         </Link>
         {children}

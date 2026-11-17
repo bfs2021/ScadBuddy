@@ -1,9 +1,9 @@
-import { Link } from 'react-router'
+import { SpoolLink } from './SpoolLink'
 import { Checkbox } from '@/components/ui/checkbox'
 import { cn } from '@/lib/utils'
 import { RgbaSwatch } from './RgbaSwatch'
 import { NeedsType } from './SpoolsTable'
-import { grams, spoolPath, type SpoolGroup } from './spoolsQuery'
+import { grams, type SpoolGroup } from './spoolsQuery'
 
 interface Props {
   groups: SpoolGroup[]
@@ -37,9 +37,9 @@ export function SpoolCards({ groups, selected, onSelect }: Props) {
                   <RgbaSwatch rgba={spool.effective?.rgba ?? '#00000000'} size="lg" gramsLeft={spool.grams_left} labelWeight={label} />
                   <div className="min-w-0 flex-1 space-y-0.5">
                     <div className="flex items-center justify-between gap-2">
-                      <Link to={spoolPath(spool)} className="font-medium underline-offset-4 hover:underline">
+                      <SpoolLink spool={spool} className="font-medium underline-offset-4 hover:underline">
                         #{spool.number}
-                      </Link>
+                      </SpoolLink>
                       <Checkbox
                         aria-label={`Select spool #${spool.number}`}
                         checked={selected.has(spool.id)}

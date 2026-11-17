@@ -1,11 +1,12 @@
 import { expect, test } from '@playwright/test'
+import { spoolId } from '../src/mocks/features/filament/seed'
 
 // #6262 — the Filament section against the msw API (`src/mocks/features/filament/`): the
 // spools list and its filter, the CSV import, the spool page's colour presets and "Reset to
 // type", the restore of an archived spool with its tag, and the spool page at a phone's width.
 test.skip(!!process.env.E2E_BASE_URL, 'msw-backed; the real stack is covered by real-backend.spec.ts')
 
-const spoolUrl = (number: number) => `/filament/spools/62620000-0000-4000-8000-${String(number).padStart(12, '0')}`
+const spoolUrl = (number: number) => `/filament/spools/${spoolId(number)}`
 
 test('/filament opens the Spools tab, and the low stock tile filters it', async ({ page }) => {
   await page.goto('/filament')

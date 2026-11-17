@@ -2,12 +2,13 @@ import { screen, waitFor, within } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { Route, Routes } from 'react-router'
 import { describe, expect, it, vi } from 'vitest'
-import { getSpool, getType, listSpoolEvents, listSpools, patchSpool, setSpoolPresets } from '../../api/filament'
-import { L, spoolId, T, TAG } from '../../mocks/features/filament/seed'
+import { getSpool, getType, listSpoolEvents, listSpools, patchSpool, setSpoolKValues, setSpoolPresets } from '../../api/filament'
+import { H2C, L, spoolId, T, TAG } from '../../mocks/features/filament/seed'
 import { server } from '../../mocks/server'
 import { choose } from '../../test/select'
 import { renderPage } from '../../test/utils'
 import { SpoolPage } from './SpoolPage'
+import { SpoolsTab } from './SpoolsTab'
 
 function render(route: string) {
   return renderPage(
@@ -363,6 +364,42 @@ describe('the spool page', () => {
     // Only the four fields of a preset: the server refuses any other key (`extra="forbid"`).
     expect(puts).toEqual([[{ printer_model: 'H2C', nozzle_diameter: '0.4', slicer_filament: 'GFA00', slicer_filament_name: 'Bambu PLA Basic @BBL H2C' }]])
     expect(spool.overridden).toEqual([])
+  })
+
+  it('sends the eight fields of each own K value to the new type', async () => {
+    await setSpoolKValues(spoolId(6), [{ printer_id: H2C.printer_id, extruder: 0, nozzle_diameter: '0.4', nozzle_type: 'hardened_steel', k_value: '0.031', name: 'Teal K', cali_idx: 3, setting_id: 'S1' }])
+    const puts = recorded('PUT', /\/types\/.*\/k-values$/)
+    const { user } = open(6)
+    await heading(6)
+    await user.click(screen.getByRole('button', { name: 'Create type from this spool' }))
+    await waitFor(() => expect(puts).toHaveLength(1))
+    expect(puts[0]).toEqual([{ printer_id: H2C.printer_id, extruder: 0, nozzle_diameter: '0.4', nozzle_type: 'hardened_steel', k_value: '0.031', name: 'Teal K', cali_idx: 3, setting_id: 'S1' }])
+    await waitFor(async () => expect((await getSpool(spoolId(6))).k_values.filter((row) => row.overridden)).toEqual([]))
+  })
+
+  it('offers no printer tray as a place to move a spool to', async () => {
+    const { user } = open(1)
+    await heading(1)
+    await user.click(screen.getByRole('combobox', { name: 'Location' }))
+    expect(await screen.findByRole('option', { name: /Dry box 1/ })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /AMS/ })).toBeNull()
+  })
+
+  it('keeps the list filters in its back link, and says when a reload after a tag change fails', async () => {
+    const { user } = renderPage(
+      <Routes>
+        <Route path="/filament/spools/:id" element={<SpoolPage />} />
+        <Route path="/filament/spools" element={<SpoolsTab />} />
+      </Routes>,
+      { route: '/filament/spools?status=all' },
+    )
+    await user.click(await screen.findByRole('link', { name: '#2' }))
+    await heading(2)
+    expect(screen.getByRole('link', { name: /^Spools$/ })).toHaveAttribute('href', '/filament/spools?status=all')
+    server.use(http.get('*/api/v1/filament/spools/:id', () => HttpResponse.json({ type: 'about:blank', title: 'Service Unavailable', status: 503, detail: 'the spools are down' }, { status: 503, headers: { 'Content-Type': 'application/problem+json' } })))
+    await user.type(screen.getByLabelText('Tag UID'), '04 AA BB CC')
+    await user.click(screen.getByRole('button', { name: 'Bind tag' }))
+    expect(await screen.findByText(/the spools are down/)).toBeInTheDocument()
   })
 
   it('makes a new spool with one POST and opens it', async () => {

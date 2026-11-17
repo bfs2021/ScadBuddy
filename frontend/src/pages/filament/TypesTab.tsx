@@ -1,6 +1,6 @@
 import { PlusIcon } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
-import { Link, useSearchParams } from 'react-router'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link, useLocation, useSearchParams } from 'react-router'
 import { ApiError } from '../../api/client'
 import { listCatalog, listSpools, listTypes, type CatalogRows, type Spool, type SpoolType } from '../../api/filament'
 import { RgbaSwatch } from '../../components/filament/RgbaSwatch'
@@ -26,12 +26,16 @@ function product(type: SpoolType, names: Map<string, string>): string {
 /** #6262 — the Types tab: every type as a dense table, then the price book it prices from. */
 export function TypesTab() {
   const [params, setParams] = useSearchParams()
+  const location = useLocation()
   // In the URL, so a reload and a shared link keep it, as the Spools tab's filters are.
   const archived = params.get('archived') === 'true'
   const [data, setData] = useState<Loaded | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  /** Each load takes a number; only the newest one's answer is used. */
+  const latest = useRef(0)
   const load = useCallback(async () => {
+    const mine = ++latest.current
     try {
       const [types, spools, materials, subtypes, brands] = await Promise.all([
         listTypes({ includeArchived: true }),
@@ -40,13 +44,14 @@ export function TypesTab() {
         listCatalog('subtypes'),
         listCatalog('brands'),
       ])
+      if (mine !== latest.current) return
       const count = new Map<string, number>()
       for (const spool of spools as Spool[]) if (spool.type_id) count.set(spool.type_id, (count.get(spool.type_id) ?? 0) + 1)
       const names = nameMap([...(materials as CatalogRows['materials'][]), ...subtypes, ...brands])
       setData({ types, names, spoolsOf: count })
       setError(null)
     } catch (cause) {
-      setError(message(cause))
+      if (mine === latest.current) setError(message(cause))
     }
   }, [])
 
@@ -108,7 +113,7 @@ export function TypesTab() {
                       <RgbaSwatch rgba={type.rgba} size="md" />
                     </td>
                     <td className="px-2 py-1.5">
-                      <Link to={`/filament/types/${type.id}`} className="font-medium underline-offset-4 hover:underline">
+                      <Link to={`/filament/types/${type.id}`} state={{ back: location.search }} className="font-medium underline-offset-4 hover:underline">
                         {type.code}
                       </Link>
                       {type.archived_at && <span className="ml-2 text-[12px] text-muted-foreground">Archived</span>}

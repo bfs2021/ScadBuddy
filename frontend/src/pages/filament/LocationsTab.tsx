@@ -1,5 +1,5 @@
 import { PlusIcon } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router'
 import { ApiError } from '../../api/client'
 import {
@@ -75,17 +75,21 @@ export function LocationsTab() {
   const [notice, setNotice] = useState('')
   const [saving, setSaving] = useState(false)
 
+  /** Each load takes a number; only the newest one's answer is used. */
+  const latest = useRef(0)
   const load = useCallback(async () => {
+    const mine = ++latest.current
     try {
       const [nodes, kinds, spools] = await Promise.all([
         listLocations({ includeArchived: archived }),
         listCatalog('location-kinds'),
         listSpools({ includeArchived: false }),
       ])
+      if (mine !== latest.current) return
       setData({ nodes, kinds, spools })
       setError(null)
     } catch (cause) {
-      setError(message(cause, 'The places could not be loaded. Try again.'))
+      if (mine === latest.current) setError(message(cause, 'The places could not be loaded. Try again.'))
     }
   }, [archived])
 
@@ -113,6 +117,16 @@ export function LocationsTab() {
     event.preventDefault()
     if (!draft || !data) return
     const was = draft.id ? find(data.nodes, draft.id) : undefined
+    if (draft.id && !was) {
+      // The list was reloaded without this place (an archived one): a post would add a copy.
+      setDraft(null)
+      setError('That place is no longer in the list. Show archived places to change it.')
+      return
+    }
+    if (!draft.kind_id) {
+      setFormError('Choose a kind.')
+      return
+    }
     const capacity = draft.capacity.trim() === '' ? null : Number(draft.capacity)
     const values = {
       name: draft.name.trim(),
@@ -199,7 +213,7 @@ export function LocationsTab() {
           <label className="flex flex-col gap-1">
             Kind
             <Select value={draft.kind_id} onValueChange={(next) => setDraft({ ...draft, kind_id: next })}>
-              <SelectTrigger aria-label="Kind" className="w-full text-[13px]">
+              <SelectTrigger aria-label="Kind" aria-required className="w-full text-[13px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

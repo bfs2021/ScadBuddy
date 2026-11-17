@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { expect, test } from '@playwright/test'
+import { spoolId, T } from '../src/mocks/features/filament/seed'
 
 // #2454 review — every routed page names its tab from its <h1> (usePageTitle). A page
 // with no <h1> inside <main> would quietly get the bare "ScadBuddy" title: one per route
@@ -46,9 +47,9 @@ const PAGES = [
   // `/filament` redirects to the Spools tab.
   '/filament',
   '/filament/spools',
-  '/filament/spools/62620000-0000-4000-8000-000000000003',
+  `/filament/spools/${spoolId(3)}`,
   '/filament/types',
-  '/filament/types/62620001-0000-4000-8000-000000000001',
+  `/filament/types/${T.JADE}`,
   '/filament/tags',
   '/filament/locations',
   '/filament/catalog',
