@@ -1920,7 +1920,9 @@ the backend on `http://127.0.0.1:8080` (§4.3).
   the previous file from every container and restart again. A row the old key
   cannot open is left as it is and counted in that log line. Which tables each
   one re-wraps: `docs/ai/operating.md` §3.3.
-- `/healthz` reports `"ai": "enabled"` only when the database answers, its
+- `/healthz` reports `"ai": "enabled"` only when the database answers (and, once the API lists
+  every area the agent wants, the API answers them too: `database` reads `unreachable` when either
+  does not, and the agent logs which, #6501), its
   `ai_*` migrations have applied (`backend/scadbuddy/migrations_agent/`, which
   the API applies at its start; the agent waits for them, #5299), the key is loaded and a Claude credential is
   saved. Otherwise `ai` names the first missing piece; each database step is
