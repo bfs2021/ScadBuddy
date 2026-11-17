@@ -88,7 +88,7 @@ class PersonSession(BaseModel):
     kind: str
 
 
-class SessionAnswer(BaseModel):
+class AuthSessionAnswer(BaseModel):
     #: None for no live session.
     session: PersonSession | None
 
@@ -103,5 +103,5 @@ def _session(state: Any, id_hash: str) -> PersonSession | None:
 
 
 @router.post("/auth-sessions/lookup", name="crud_agent_auth_session_lookup", dependencies=[Bounded])
-async def lookup(body: SessionAsk, state: StateDep) -> SessionAnswer:
-    return SessionAnswer(session=await asyncio.to_thread(_session, state, body.id_hash))
+async def lookup(body: SessionAsk, state: StateDep) -> AuthSessionAnswer:
+    return AuthSessionAnswer(session=await asyncio.to_thread(_session, state, body.id_hash))

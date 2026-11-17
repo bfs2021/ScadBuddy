@@ -87,6 +87,22 @@ describe("a signed-in person's session through the API", () => {
     expect(await new BrowserSessions(new CrudSessionLookup(target(refused))).live(sessionIdHash(TOKEN), 'user:ada')).toBeUndefined()
   })
 
+  it('sends at most its cap of lookups at once, and the rest in turn', async () => {
+    let inFlight = 0
+    let most = 0
+    const fetch: typeof globalThis.fetch = async () => {
+      inFlight++
+      most = Math.max(most, inFlight)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      inFlight--
+      return new Response(JSON.stringify({ session: null }), { headers: { 'x-scadbuddy-crud': '1' } })
+    }
+    const lookup = new CrudSessionLookup({ baseUrl: BASE, fetch }, 3)
+    const hashes = Array.from({ length: 10 }, (_, i) => sessionIdHash(`cookie-${i}`))
+    expect(await Promise.all(hashes.map((h) => lookup.byHash(h)))).toEqual(hashes.map(() => undefined))
+    expect(most).toBe(3)
+  })
+
   it('sends nothing for a hash the API would refuse', async () => {
     const api = new FakeApi()
     expect(await new CrudSessionLookup(target(api)).byHash('../areas')).toBeUndefined()
@@ -95,7 +111,7 @@ describe("a signed-in person's session through the API", () => {
 })
 
 describe("health's probe of the agent's data", () => {
-  it('is whether the API answers its areas, never Postgres', async () => {
+  it('answers whether the API answers its areas', async () => {
     const api = new FakeApi().answer('GET /areas', { areas: ['migrations'] })
     const areas = new CrudAreas(BASE, { fetch: api.fetch, wanted: ['migrations'], log: () => undefined })
     expect(await areas.answers()).toBe(true)

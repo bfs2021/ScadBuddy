@@ -135,9 +135,9 @@ export class CrudAreas {
   }
 
   /**
-   * Whether the API answers the agent's areas within `timeoutMs`: health's probe of the agent's
-   * data once every area is listed, in place of a Postgres ping (#6501). One read at a time,
-   * shared by every caller; never throws.
+   * Whether the API answers the agent's areas within `timeoutMs`: what health requires besides
+   * the Postgres ping once every area is listed (#6501). One read at a time, shared by every
+   * caller; never throws.
    */
   answers(timeoutMs = 2_000): Promise<boolean> {
     this.#answering ??= crudRead<unknown>(this.#fetch, this.#base, 'its areas', '/areas', { timeoutMs })

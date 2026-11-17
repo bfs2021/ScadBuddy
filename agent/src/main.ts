@@ -275,13 +275,24 @@ const crudTarget = { baseUrl: config.backendUrl, fetch: crudFetch }
 // Wait for the schema in the background: an API that has not migrated yet, or a database that is
 // down at start-up, is retried by the next /healthz or API call instead of stopping the pod.
 void database?.ready()
-// Health's probe of the agent's data (#6501): the API's answer once it lists every area, so
-// /healthz asks Postgres nothing; the SQL ping only while an older API pod lists fewer.
+// Health's probe of the agent's data (#6501): the Postgres ping, since the agent still runs SQL
+// (the LISTEN bus, a turn's claim and end, the MCP relay) until #5299 step 12, and, once the API
+// lists every area, its answer to them too. A change in the API's answer is logged, as /healthz
+// reports both under `database`.
+let apiAnswered = true
 const dataHealth = database
-  ? { ...database, ping: async (timeoutMs?: number) =>
-        // The agent still runs SQL (the LISTEN bus, a turn's claim and end, the MCP relay), so
-        // Postgres counts too until #5299 step 12; the API's answer counts once it lists every area.
-        (await database.ping(timeoutMs)) && (!crudAreas.complete || (await crudAreas.answers(timeoutMs))),
+  ? {
+      ...database,
+      ping: async (timeoutMs?: number) => {
+        if (!(await database.ping(timeoutMs))) return false
+        if (!crudAreas.complete) return true
+        const answered = await crudAreas.answers(timeoutMs)
+        if (answered !== apiAnswered) {
+          apiAnswered = answered
+          console.warn(answered ? "health: the API answers the agent's CRUD areas again" : "health: the API does not answer the agent's CRUD areas; /healthz reports database unreachable")
+        }
+        return answered
+      },
     }
   : undefined
 const storeArea = (area: StoreArea) => () => crudAreas.has(area)

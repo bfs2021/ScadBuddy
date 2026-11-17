@@ -64,21 +64,41 @@ export class PgSessionLookup implements SessionLookup {
 /** The same lookup through the API's route (area `auth-sessions`, backend api/crud_agent_start.py, #6501): only the hash travels. */
 export class CrudSessionLookup implements SessionLookup {
   readonly #call: ReturnType<typeof crudOf>
+  readonly #max: number
+  #running = 0
+  readonly #waiting: (() => void)[] = []
 
-  constructor(target: CrudTarget) {
+  /**
+   * `max`: the lookups in flight at once; the rest wait their turn, so a burst of unknown cookies
+   * (each a cache miss) costs the API at most that many requests at a time and is never refused.
+   */
+  constructor(target: CrudTarget, max = LOOKUPS_IN_FLIGHT) {
     this.#call = crudOf(target)
+    this.#max = max
   }
 
   async byHash(id: string): Promise<PersonSession | undefined> {
     // A hash the API would refuse is no session's (`sessionIdHash` always makes a good one).
     if (!/^[0-9a-f]{64}$/.test(id)) return undefined
-    const { session } = await this.#call<{ session: PersonSession | null }>('a signed-in session', '/auth-sessions/lookup', {
-      method: 'POST',
-      body: { id_hash: id },
-    })
-    return session ?? undefined
+    // A slot is taken here, or handed over by the lookup that ends (`finally`), never both.
+    if (this.#running >= this.#max) await new Promise<void>((resolve) => this.#waiting.push(resolve))
+    else this.#running++
+    try {
+      const { session } = await this.#call<{ session: PersonSession | null }>('a signed-in session', '/auth-sessions/lookup', {
+        method: 'POST',
+        body: { id_hash: id },
+      })
+      return session ?? undefined
+    } finally {
+      const next = this.#waiting.shift()
+      if (next) next()
+      else this.#running--
+    }
   }
 }
+
+/** The session lookups `CrudSessionLookup` sends at once. */
+export const LOOKUPS_IN_FLIGHT = 8
 
 export class BrowserSessions {
   private readonly cache = new Map<string, Cached>()

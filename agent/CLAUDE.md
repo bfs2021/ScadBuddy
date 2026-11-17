@@ -37,7 +37,7 @@ is tried again at the next call and logged once as "waiting for the backend". Wi
 `service_credentials_agent` over SQL, as before (#5494), until #5299 step 12 makes a proof
 required. A signed-in person's session (`src/auth/browserSession.ts`) is looked up through the
 API's `…/agent/auth-sessions/lookup` once it lists area `auth-sessions` (`CrudSessionLookup`,
-only the cookie's hash travels), the view `auth_sessions_agent` over SQL until then. The ledger
+only the cookie's hash travels, at most `LOOKUPS_IN_FLIGHT` requests at once, the rest waiting their turn), the view `auth_sessions_agent` over SQL until then. The ledger
 `ready()` waits for is read through `…/agent/migrations/ledger` once the API lists area
 `migrations` (`src/db/schema.ts` `crudLedger`), and `/healthz`'s `database` is the Postgres
 ping and, once the API lists every area, whether it answers them (`CrudAreas.answers`); the ping
