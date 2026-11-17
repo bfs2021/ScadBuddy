@@ -391,9 +391,10 @@ describe('filament location tools', () => {
     expect(calls).toBe(1)
   })
 
-  it('previews a CSV import without writing when asked for a preview only', async () => {
+  it('previews a CSV import without writing, as a read tool', async () => {
     expect(tool('filament_spool_import').risk).toBe('write')
     expect(tool('filament_spool_import').gated).toBe(false)
+    expect(tool('filament_spool_import_preview').risk).toBe('read')
     const preview = { rows: [{ line: 2, action: 'create', number: null, changes: {}, error: null }] }
     const sent: { body: unknown; key: string | null }[] = []
     server.use(
@@ -403,7 +404,7 @@ describe('filament location tools', () => {
       }),
     )
     const rows = [{ material: 'PLA', brand: 'Sunlu' }]
-    const result = await runTool(tool('filament_spool_import'), { rows, preview_only: true }, ctx())
+    const result = await runTool(tool('filament_spool_import_preview'), { rows }, ctx())
     expect(firstText(result)).toEqual(preview)
     expect(sent).toEqual([{ body: { rows, dry_run: true }, key: null }])
   })

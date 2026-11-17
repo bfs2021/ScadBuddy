@@ -74,6 +74,12 @@ const EVENT_KINDS = [
   'synced_from_bb',
 ] as const
 
+const csvRows = z
+  .array(z.record(z.string(), z.string().nullable()))
+  .min(1)
+  .max(5000)
+  .describe('One object per CSV row, column name to cell text')
+
 export const filamentTools: Tool[] = [
   defineTool({
     name: 'filament_catalog_list',
@@ -747,6 +753,26 @@ export const filamentTools: Tool[] = [
   }),
 
   defineTool({
+    name: 'filament_spool_import_preview',
+    label: 'Preview a spools CSV import',
+    description:
+      'What filament_spool_import would do with these CSV rows, and nothing written: create, update or error ' +
+      'per line, with `[before, after]` changes. Same rows and cell rules as filament_spool_import.',
+    input: z.object({ rows: csvRows }),
+    risk: 'read',
+    source: SOURCE,
+    routes: ['POST /api/v1/filament/spools/import'],
+    summarize: ({ rows }) => `Preview a spools import of ${rows.length} rows`,
+    handler: async ({ rows }, ctx) =>
+      json(
+        await ok(
+          ctx.backend.POST('/api/v1/filament/spools/import', { body: { rows: rows as never, dry_run: true } }),
+          'preview the spools import',
+        ),
+      ),
+  }),
+
+  defineTool({
     name: 'filament_spool_import',
     label: 'Import spools from CSV rows',
     description:
@@ -755,28 +781,18 @@ export const filamentTools: Tool[] = [
       'changes nothing. A row with no `number` makes a spool (it needs a `type` code or a `material`). Material, ' +
       'subtype, brand, category and effect names are added to their catalog when missing; `insert_type`, `type` ' +
       'and `location` must exist (a location is a move). Derived columns (grams_left, last_used_at, ...) are ' +
-      'ignored. It previews first: with `preview_only` it returns that preview (create, update or error per line, ' +
-      'with `[before, after]` changes) and writes nothing. Otherwise it writes only when no line is an error, all ' +
-      'rows at once. Only what the user says. Writes ScadBuddy only.',
-    input: z.object({
-      rows: z
-        .array(z.record(z.string(), z.string().nullable()))
-        .min(1)
-        .max(5000)
-        .describe('One object per CSV row, column name to cell text'),
-      preview_only: z.boolean().default(false).describe('Return the preview and write nothing'),
-    }),
+      'ignored. It previews first and writes only when no line is an error, all rows at once; to see the ' +
+      'preview alone, use filament_spool_import_preview. Only what the user says. Writes ScadBuddy only.',
+    input: z.object({ rows: csvRows }),
     risk: 'write',
     source: SOURCE,
     routes: ['POST /api/v1/filament/spools/import'],
-    summarize: ({ rows, preview_only }) =>
-      preview_only ? `Preview a spools import of ${rows.length} rows` : `Import ${rows.length} spool rows`,
-    handler: async ({ rows, preview_only }, ctx) => {
+    summarize: ({ rows }) => `Import ${rows.length} spool rows`,
+    handler: async ({ rows }, ctx) => {
       const preview = await ok(
         ctx.backend.POST('/api/v1/filament/spools/import', { body: { rows: rows as never, dry_run: true } }),
         'preview the spools import',
       )
-      if (preview_only) return json(preview)
       const errors = preview.rows.filter((r) => r.action === 'error')
       if (errors.length > 0) {
         throw new ToolError(
