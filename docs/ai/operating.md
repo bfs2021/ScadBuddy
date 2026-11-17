@@ -978,14 +978,11 @@ API, under the grant row's share lock, in the grant route's transaction
 holds no backend table: the API takes back `flow_grants` and `flow_grant_uses` at every
 start too, and `agent/test/retiredTables.test.ts` names them.
 
-Rollout order when the API and the agent connect as different roles: the API's role gets
-its `ai_*` grants from the agent (`agent/src/db/grants.ts` `API_AI_GRANTS`, granted by
-`grantBackendRoles` at each agent start), so a new API whose CRUD routes need a privilege the
-old agent never granted fails those writes until a new agent has started. Since #6413 every
-image write on `…/crud/agent/session-blobs` sets `created_at` on an image already there
-(`ON CONFLICT … DO UPDATE`), and `…/session-blobs/deletes` deletes: both need `UPDATE` and
-`DELETE` on `ai_session_blobs`. Roll the agent sidecar first, or with the API in one rollout.
-Production connects both as one role, so it needs no order.
+When the API and the agent connect as different roles, the API's role must own the `ai_*`
+tables: the agent grants nothing since #6501 (it granted `API_AI_GRANTS` at each start
+before), and the API's CRUD routes read and write those tables. The files the API applies
+(#5299 D6) are its role's already; transfer the older ones with `ALTER TABLE … OWNER TO`.
+Production connects both as one role, so it needs nothing.
 
 ## 8. Per-query limits
 

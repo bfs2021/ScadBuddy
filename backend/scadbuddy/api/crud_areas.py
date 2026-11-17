@@ -136,6 +136,10 @@ from scadbuddy.crud.guard import CrudCaller, crud_router
 #: 11, `api/crud_agent_mcp.py`). Its ``changes`` area is ``…/agent/changes``: the server-sent
 #: event stream of the agent's six NOTIFY channels, with ``Last-Event-ID`` replay of the event log
 #: (#5299 D4, step 11, `api/crud_agent_changes.py`).
+#: Its ``migrations`` area is ``…/agent/migrations/ledger``, the ledger rows of the files the
+#: agent expects, which it waits for at its start; its ``auth-sessions`` area is
+#: ``…/agent/auth-sessions/lookup``, a signed-in person's live session by its cookie's hash
+#: (#6501, `api/crud_agent_start.py`).
 CRUD_AREAS: dict[CrudCaller, list[str]] = {
     "projects": ["flows", "operations", "payload-keys"],
     "render": ["settings", "jobs", "refs", "blob-index", "store-folders", "assets", "libraries"],
@@ -209,6 +213,8 @@ CRUD_AREAS: dict[CrudCaller, list[str]] = {
         "session-reads",
         "session-turns",
         "changes",
+        "migrations",
+        "auth-sessions",
     ],
     "intake": ["sources"],
 }
