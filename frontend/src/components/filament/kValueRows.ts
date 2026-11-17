@@ -10,7 +10,7 @@ const DECIMAL = /^\d+(\.\d+)?$/
 /** The K value as typed, for the field: the API sends and takes it as a decimal string. */
 const text = (value: TypeKValueInput['k_value']) => String(value)
 
-const keyOf = (row: TypeKValueInput) => `${row.printer_id}|${row.extruder}|${row.nozzle_diameter.trim()}`
+export const keyOf = (row: Pick<TypeKValueInput, 'printer_id' | 'extruder' | 'nozzle_diameter'>) => `${row.printer_id}|${row.extruder}|${row.nozzle_diameter.trim()}`
 
 /** Why `rows` cannot be saved, or `null`. A K value is keyed by printer, extruder and nozzle. */
 export function kValueRowsError(rows: readonly TypeKValueInput[]): string | null {

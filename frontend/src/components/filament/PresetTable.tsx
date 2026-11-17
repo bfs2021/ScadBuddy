@@ -20,6 +20,12 @@ interface Props {
    * dimmed, with "From type" and an Override button; an overridden row has "Reset to type".
    */
   inherited?: EffectivePreset[]
+  /**
+   * The keys the spool's type itself holds a preset for (`presetRows` `keyOf`), from the
+   * type's own rows: `inherited` cannot say, because a row the spool overrides is shown
+   * there as the spool's. An own row with a key in it has "Reset to type"; any other has Remove.
+   */
+  typeKeys?: ReadonlySet<string>
 }
 
 /**
@@ -27,11 +33,10 @@ interface Props {
  * filament preset to the printers and nozzles it is compatible with. Shared by the type
  * page and the spool page (`inherited`).
  */
-export function PresetTable({ rows, onChange, models = [], inherited }: Props) {
+export function PresetTable({ rows, onChange, models = [], inherited, typeKeys }: Props) {
   const listId = useId()
   const set = (at: number, patch: Partial<PresetInput>) => onChange(rows.map((row, i) => (i === at ? { ...row, ...patch } : row)))
   const own = new Set(rows.map(keyOf))
-  const typeKeys = new Set((inherited ?? []).map(keyOf))
   const fromType = (inherited ?? []).filter((row) => !row.overridden && !own.has(keyOf(row)))
 
   return (
@@ -85,8 +90,8 @@ export function PresetTable({ rows, onChange, models = [], inherited }: Props) {
                     />
                   </td>
                   <td className="px-2 py-1 whitespace-nowrap">
-                    {inherited && typeKeys.has(keyOf(row)) ? (
-                      <Button type="button" size="xs" variant="ghost" onClick={() => onChange(rows.filter((_, i) => i !== at))}>
+                    {inherited && typeKeys?.has(keyOf(row)) ? (
+                      <Button type="button" size="xs" variant="ghost" aria-label={`Reset preset ${at + 1} to type`} onClick={() => onChange(rows.filter((_, i) => i !== at))}>
                         <Undo2Icon /> Reset to type
                       </Button>
                     ) : (

@@ -78,6 +78,14 @@ def effective_presets(conn: Conn, spool_id: UUID) -> list[m.EffectivePreset]:
             rows[row["printer_model"], row["nozzle_diameter"]] = (row, False)
     for row in own_presets(conn, spool_id):
         rows[row["printer_model"], row["nozzle_diameter"]] = (row, True)
+    migrated = {
+        (r["printer_model"], r["nozzle_diameter"])
+        for r in conn.execute(
+            "SELECT printer_model, nozzle_diameter FROM filament_spool_presets"
+            " WHERE spool_id = %s AND migrated",
+            (spool_id,),
+        ).fetchall()
+    }
     return [
         m.EffectivePreset(
             printer_model=row["printer_model"],
@@ -85,8 +93,9 @@ def effective_presets(conn: Conn, spool_id: UUID) -> list[m.EffectivePreset]:
             slicer_filament=row["slicer_filament"],
             slicer_filament_name=row["slicer_filament_name"],
             overridden=own,
+            migrated=own and key in migrated,
         )
-        for _, (row, own) in sorted(rows.items())
+        for key, (row, own) in sorted(rows.items())
     ]
 
 

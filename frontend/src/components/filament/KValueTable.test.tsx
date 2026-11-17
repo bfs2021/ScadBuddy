@@ -9,13 +9,14 @@ import { kValueRowsError } from './kValueRows'
 const PRINTERS = [{ id: 'p1', name: 'Garage H2C' }]
 const ROW: TypeKValueInput = { printer_id: 'p1', extruder: 0, nozzle_diameter: '0.4', nozzle_type: null, k_value: '0.020', name: null, cali_idx: 3 }
 
-function Harness({ start, inherited, spy }: { start: TypeKValueInput[]; inherited?: EffectiveKValue[]; spy?: (rows: TypeKValueInput[]) => void }) {
+function Harness({ start, inherited, typeKeys, spy }: { start: TypeKValueInput[]; inherited?: EffectiveKValue[]; typeKeys?: ReadonlySet<string>; spy?: (rows: TypeKValueInput[]) => void }) {
   const [rows, setRows] = useState(start)
   return (
     <KValueTable
       rows={rows}
       printers={PRINTERS}
       inherited={inherited}
+      typeKeys={typeKeys}
       onChange={(next) => {
         setRows(next)
         spy?.(next)
@@ -67,7 +68,7 @@ describe('KValueTable', () => {
     it('shows an overridden row with Reset to type, which drops it', async () => {
       const user = userEvent.setup()
       const spy = vi.fn()
-      render(<Harness start={[ROW]} inherited={[{ ...FROM_TYPE, overridden: true }]} spy={spy} />)
+      render(<Harness start={[ROW]} inherited={[{ ...FROM_TYPE, overridden: true }]} typeKeys={new Set(['p1|0|0.4'])} spy={spy} />)
       expect(screen.queryByText('From type')).toBeNull()
       await user.click(screen.getByRole('button', { name: 'Reset K value 1 to type' }))
       expect(spy).toHaveBeenLastCalledWith([])
@@ -76,7 +77,8 @@ describe('KValueTable', () => {
     it('offers Remove, not Reset to type, for an own row the type has no value for', async () => {
       const user = userEvent.setup()
       const spy = vi.fn()
-      render(<Harness start={[{ ...ROW, extruder: 1 }]} inherited={[FROM_TYPE]} spy={spy} />)
+      // As the server answers: the type's row, and the spool's own row (overridden: true) for a key the type lacks.
+      render(<Harness start={[{ ...ROW, extruder: 1 }]} inherited={[FROM_TYPE, { ...FROM_TYPE, extruder: 1, overridden: true }]} typeKeys={new Set(['p1|0|0.4'])} spy={spy} />)
       expect(screen.queryByRole('button', { name: /to type/ })).toBeNull()
       await user.click(screen.getByRole('button', { name: 'Remove K value 1' }))
       expect(spy).toHaveBeenLastCalledWith([])

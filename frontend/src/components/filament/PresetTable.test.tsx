@@ -8,13 +8,14 @@ import { presetRowsError } from './presetRows'
 
 const ROW: PresetInput = { printer_model: 'H2C', nozzle_diameter: '0.4', slicer_filament: 'GFA00', slicer_filament_name: 'Bambu PLA Basic @BBL H2C' }
 
-function Harness({ start, inherited, spy }: { start: PresetInput[]; inherited?: EffectivePreset[]; spy?: (rows: PresetInput[]) => void }) {
+function Harness({ start, inherited, typeKeys, spy }: { start: PresetInput[]; inherited?: EffectivePreset[]; typeKeys?: ReadonlySet<string>; spy?: (rows: PresetInput[]) => void }) {
   const [rows, setRows] = useState(start)
   return (
     <PresetTable
       rows={rows}
       models={['H2C', 'X1C']}
       inherited={inherited}
+      typeKeys={typeKeys}
       onChange={(next) => {
         setRows(next)
         spy?.(next)
@@ -61,7 +62,7 @@ describe('PresetTable', () => {
   })
 
   describe('inherited', () => {
-    const FROM_TYPE: EffectivePreset = { printer_model: 'H2C', nozzle_diameter: '0.4', slicer_filament: 'GFA00', slicer_filament_name: 'Bambu PLA Basic @BBL H2C', overridden: false }
+    const FROM_TYPE: EffectivePreset = { printer_model: 'H2C', nozzle_diameter: '0.4', slicer_filament: 'GFA00', slicer_filament_name: 'Bambu PLA Basic @BBL H2C', overridden: false, migrated: false }
 
     it('shows the type row dimmed with From type, and overrides it on click', async () => {
       const user = userEvent.setup()
@@ -77,9 +78,19 @@ describe('PresetTable', () => {
     it('shows an overridden row with Reset to type, which drops it', async () => {
       const user = userEvent.setup()
       const spy = vi.fn()
-      render(<Harness start={[{ ...ROW, slicer_filament: 'GFA01' }]} inherited={[{ ...FROM_TYPE, slicer_filament: 'GFA01', overridden: true }]} spy={spy} />)
+      render(<Harness start={[{ ...ROW, slicer_filament: 'GFA01' }]} inherited={[{ ...FROM_TYPE, slicer_filament: 'GFA01', overridden: true }]} typeKeys={new Set(['H2C|0.4'])} spy={spy} />)
       expect(screen.queryByText('From type')).toBeNull()
-      await user.click(screen.getByRole('button', { name: 'Reset to type' }))
+      await user.click(screen.getByRole('button', { name: 'Reset preset 1 to type' }))
+      expect(spy).toHaveBeenLastCalledWith([])
+    })
+
+    it('offers Remove, not Reset to type, for an own row the type has no preset for', async () => {
+      const user = userEvent.setup()
+      const spy = vi.fn()
+      // As the server answers: the type's 0.4 row and the spool's own 0.6 row (overridden: true).
+      render(<Harness start={[{ ...ROW, nozzle_diameter: '0.6' }]} inherited={[FROM_TYPE, { ...FROM_TYPE, nozzle_diameter: '0.6', overridden: true }]} typeKeys={new Set(['H2C|0.4'])} spy={spy} />)
+      expect(screen.queryByRole('button', { name: /to type/ })).toBeNull()
+      await user.click(screen.getByRole('button', { name: 'Remove preset H2C 0.6' }))
       expect(spy).toHaveBeenLastCalledWith([])
     })
   })

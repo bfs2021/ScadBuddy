@@ -3,7 +3,7 @@ import { useId } from 'react'
 import type { EffectiveKValue, TypeKValueInput } from '../../api/filament'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import type { KPrinter } from './kValueRows'
+import { keyOf, type KPrinter } from './kValueRows'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 /** The nozzle types Bambu Studio's printers report (`nozzle_type`). */
@@ -20,9 +20,14 @@ interface Props {
    * dimmed, with "From type" and an Override button; an own row has "Reset to type".
    */
   inherited?: EffectiveKValue[]
+  /**
+   * The keys the spool's type itself holds a K value for (`kValueRows` `keyOf`), from the
+   * type's own rows: `inherited` cannot say, because a row the spool overrides is shown
+   * there as the spool's. An own row with a key in it has "Reset to type"; any other has Remove.
+   */
+  typeKeys?: ReadonlySet<string>
 }
 
-const keyOf = (row: Pick<TypeKValueInput, 'printer_id' | 'extruder' | 'nozzle_diameter'>) => `${row.printer_id}|${row.extruder}|${row.nozzle_diameter.trim()}`
 
 /**
  * #6262 — pressure advance (K) values by printer, extruder and nozzle, as Bambu Studio's
@@ -30,12 +35,11 @@ const keyOf = (row: Pick<TypeKValueInput, 'printer_id' | 'extruder' | 'nozzle_di
  * index and slicer setting id the printer reported stay on the row; a person edits the
  * rest.
  */
-export function KValueTable({ rows, onChange, printers, inherited }: Props) {
+export function KValueTable({ rows, onChange, printers, inherited, typeKeys }: Props) {
   const listId = useId()
   const set = (at: number, patch: Partial<TypeKValueInput>) => onChange(rows.map((row, i) => (i === at ? { ...row, ...patch } : row)))
   const known = new Set(printers.map((printer) => printer.id))
   const own = new Set(rows.map(keyOf))
-  const typeKeys = new Set((inherited ?? []).map(keyOf))
   const fromType = (inherited ?? []).filter((row) => !row.overridden && !own.has(keyOf(row)))
   const printerName = (id: string) => printers.find((printer) => printer.id === id)?.name ?? `Printer ${id.slice(0, 8)}`
   return (
@@ -93,7 +97,7 @@ export function KValueTable({ rows, onChange, printers, inherited }: Props) {
                   <Input aria-label="K value name" className="h-7 min-w-36" value={row.name ?? ''} onChange={(e) => set(at, { name: e.target.value === '' ? null : e.target.value })} />
                 </td>
                 <td className="px-2 py-1 whitespace-nowrap">
-                  {inherited && typeKeys.has(keyOf(row)) ? (
+                  {inherited && typeKeys?.has(keyOf(row)) ? (
                     <Button type="button" size="xs" variant="ghost" aria-label={`Reset K value ${at + 1} to type`} onClick={() => onChange(rows.filter((_, i) => i !== at))}>
                       <Undo2Icon /> Reset to type
                     </Button>

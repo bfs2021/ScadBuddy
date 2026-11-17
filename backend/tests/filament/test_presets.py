@@ -233,6 +233,24 @@ def test_a_first_type_drops_the_migrated_presets(pg_pool: PgPool) -> None:
     assert [r["slicer_filament"] for r in after] == ["MINE"]
 
 
+def test_the_effective_presets_say_which_own_rows_are_migrated(pg_pool: PgPool) -> None:
+    types, spools, type_id, _ = _type_with_spool(pg_pool)
+    types.set_presets(type_id, [_type_preset(type_id, "0.6", "T6")])
+    kind = types.get(type_id)
+    assert kind is not None
+    needs = spools.create(SpoolCreate(material_id=kind.material_id), actor="ann")
+    _migrated(pg_pool, needs.id, "P1")
+    spools.set_presets(needs.id, [_own("0.4", "P1"), _own("0.2", "MINE")], actor="ann")
+    with pg_pool.connection() as conn:
+        rows = effective_presets(conn, needs.id)
+    # The unchanged row stays migrated, the person's own is not; the 0.6 one is the type's
+    # (none here: the spool has no type yet), and a migrated row is always an own one.
+    assert [(p.nozzle_diameter, p.overridden, p.migrated) for p in rows] == [
+        ("0.2", True, False),
+        ("0.4", True, True),
+    ]
+
+
 def test_a_whole_list_save_keeps_the_migrated_rows(pg_pool: PgPool) -> None:
     types, spools, type_id, _ = _type_with_spool(pg_pool)
     types.set_presets(type_id, [_type_preset(type_id, "0.6", "T6")])

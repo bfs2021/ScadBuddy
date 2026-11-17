@@ -8,6 +8,7 @@ import {
   createSpool,
   deleteSpool,
   getSpool,
+  getType,
   listCatalog,
   listLocations,
   listSpoolEvents,
@@ -25,14 +26,15 @@ import {
   type SpoolEvent,
   type SpoolPatch,
   type SpoolType,
+  type SpoolTypeDetail,
 } from '../../api/filament'
 import { GramsBasis } from '../../components/filament/GramsBasis'
 import { KValueTable } from '../../components/filament/KValueTable'
-import { kValueRowsError, type KPrinter } from '../../components/filament/kValueRows'
+import { kValueRowsError, keyOf as kValueKey, type KPrinter } from '../../components/filament/kValueRows'
 import { makeTypeFromSpool } from '../../components/filament/makeType'
 import { OverrideField } from '../../components/filament/OverrideField'
 import { PresetTable } from '../../components/filament/PresetTable'
-import { presetRowsError } from '../../components/filament/presetRows'
+import { keyOf as presetKey, presetRowsError } from '../../components/filament/presetRows'
 import { RgbaColourField } from '../../components/filament/RgbaColourField'
 import { RgbaSwatch } from '../../components/filament/RgbaSwatch'
 import { HistoryList, Section, SectionIndex } from '../../components/filament/SpoolSections'
@@ -303,6 +305,8 @@ export function SpoolPage() {
   const [reading, setReading] = useState('')
   const [dryTemp, setDryTemp] = useState('')
   const [dryHours, setDryHours] = useState('')
+  /** The type the form holds: its own presets and K values say which keys "Reset to type" can reset. */
+  const [typeDetail, setTypeDetail] = useState<SpoolTypeDetail | null>(null)
 
   useEffect(() => {
     let live = true
@@ -342,6 +346,16 @@ export function SpoolPage() {
 
   const base = useMemo(() => (saved ? draftOf(saved) : BLANK), [saved])
   const dirty = JSON.stringify(draft) !== JSON.stringify(base)
+  const presetsDirty = JSON.stringify(draft.presets) !== JSON.stringify(base.presets)
+  const typeId = draft.type_id
+  useEffect(() => {
+    let live = true
+    setTypeDetail(null)
+    if (typeId !== '') getType(typeId).then((type) => live && setTypeDetail(type), () => {})
+    return () => {
+      live = false
+    }
+  }, [typeId])
   const guard = useLeaveGuard(dirty)
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => {
     setNotice(null)
@@ -475,6 +489,17 @@ export function SpoolPage() {
   const effective = saved?.effective
   /** A spool with no type has chosen its first one in the form, not saved it yet. */
   const firstTypeChosen = !creating && saved !== null && !saved.type_id && hasType
+  /** A spool with no type, whose presets the first type would drop: the type cannot be chosen over unsaved preset edits. */
+  const typeLocked = !creating && saved !== null && !saved.type_id && presetsDirty
+  const typePresets = typeDetail?.presets ?? []
+  const typeKValues = typeDetail?.k_values ?? []
+  const presetTypeKeys = new Set(typePresets.map(presetKey))
+  const kValueTypeKeys = new Set(typeKValues.map(kValueKey))
+  /** The type's rows as a spool shows them while it holds none of its own: "From type". */
+  const typeAsPresets = typePresets.map(({ type_id: _t, ...row }) => ({ ...row, overridden: false, migrated: false }))
+  const typeAsKValues = typeKValues.map(({ type_id: _t, ...row }) => ({ ...row, overridden: false }))
+  const savedPresets = saved?.presets ?? []
+  const droppedKeys = firstTypeChosen ? savedPresets.filter((row) => row.migrated).map((row) => `${row.printer_model} ${row.nozzle_diameter}`) : []
 
   const field = (key: 'colour_name' | 'diameter_mm' | 'density_g_cm3' | 'cost_per_kg' | 'label_weight_g' | 'low_stock_pct' | 'nozzle_temp_min' | 'nozzle_temp_max' | 'bed_temp_min' | 'bed_temp_max' | 'extra_colours', label: string, extra: { hint?: string; mode?: 'decimal' | 'numeric' } = {}) => (
     <OverrideField name={key} label={label} value={draft[key]} effective={eff(key)} overridden={own(key)} hasType={hasType} inputMode={extra.mode} hint={extra.hint} onChange={(next) => set(key, next)} onReset={() => void reset(key)} />
@@ -548,8 +573,8 @@ export function SpoolPage() {
                 <Label htmlFor="spool-type" className="text-[13px]">
                   Type
                 </Label>
-                <Select value={draft.type_id === '' ? NONE : draft.type_id} onValueChange={(next) => set('type_id', next === NONE ? '' : next)}>
-                  <SelectTrigger id="spool-type" aria-label="Type" className="w-full">
+                <Select value={draft.type_id === '' ? NONE : draft.type_id} disabled={typeLocked} onValueChange={(next) => set('type_id', next === NONE ? '' : next)}>
+                  <SelectTrigger id="spool-type" aria-label="Type" aria-describedby={typeLocked ? 'spool-type-locked' : undefined} className="w-full">
                     <SelectValue placeholder="Choose a type…" />
                   </SelectTrigger>
                   <SelectContent>
@@ -561,6 +586,11 @@ export function SpoolPage() {
                     ))}
                   </SelectContent>
                 </Select>
+                {typeLocked && (
+                  <p id="spool-type-locked" className="text-[12px] text-muted-foreground">
+                    Save or discard your preset changes before choosing a type
+                  </p>
+                )}
                 {!hasType && saved && (
                   <div className="flex flex-wrap items-center gap-2">
                     <Button
@@ -698,17 +728,43 @@ export function SpoolPage() {
               <h3 className="text-[13px] font-medium">Slicer presets</h3>
               <p className="text-[12px] text-muted-foreground">The Bambu Studio filament preset to slice with, for each printer model and nozzle. A row you do not set takes the type&apos;s.</p>
               {firstTypeChosen ? (
-                <p className="rounded-md border border-dashed px-3 py-2 text-[13px] text-muted-foreground">
-                  The presets this spool carried over are dropped when the type is saved. The type&apos;s presets show here after that; override any of them then.
-                </p>
+                <div className="flex flex-col gap-2">
+                  <p className="text-[13px] text-muted-foreground">
+                    {droppedKeys.length > 0
+                      ? `Saving the type drops ${droppedKeys.join(', ')}, which this spool carried over from before it had a type. Presets you saved yourself stay.`
+                      : 'Presets you saved yourself stay when the type is saved.'}
+                  </p>
+                  <div className="overflow-x-auto rounded-md border">
+                    <table aria-label="Slicer presets" className="w-full text-left text-[13px]">
+                      <thead className="bg-muted/50 text-muted-foreground">
+                        <tr>
+                          <th scope="col" className="px-2 py-1.5 font-medium">Printer model</th>
+                          <th scope="col" className="px-2 py-1.5 font-medium">Nozzle (mm)</th>
+                          <th scope="col" className="px-2 py-1.5 font-medium">Slicer filament</th>
+                          <th scope="col" className="px-2 py-1.5 font-medium">After saving</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[...savedPresets.map((row) => ({ row, state: row.migrated ? 'Dropped when the type is saved' : 'Kept' })), ...typeAsPresets.filter((row) => !savedPresets.some((own) => presetKey(own) === presetKey(row) && !own.migrated)).map((row) => ({ row, state: 'From type' }))].map(({ row, state }) => (
+                          <tr key={`${state}-${presetKey(row)}`} aria-label={`${row.printer_model} ${row.nozzle_diameter} ${state}`} className={state === 'Dropped when the type is saved' ? 'border-t text-muted-foreground [&>td:not(:last-child)]:line-through' : 'border-t'}>
+                            <td className="px-2 py-1.5">{row.printer_model}</td>
+                            <td className="px-2 py-1.5 tabular-nums">{row.nozzle_diameter}</td>
+                            <td className="px-2 py-1.5 font-mono">{row.slicer_filament}</td>
+                            <td className="px-2 py-1.5">{state}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               ) : (
-                <PresetTable rows={draft.presets} onChange={(rows) => set('presets', rows)} models={models} inherited={hasType ? (sameType ? saved.presets : []) : undefined} />
+                <PresetTable rows={draft.presets} onChange={(rows) => set('presets', rows)} models={models} inherited={hasType ? (sameType ? saved.presets : typeAsPresets) : undefined} typeKeys={presetTypeKeys} />
               )}
             </div>
             <div className="flex flex-col gap-2">
               <h3 className="text-[13px] font-medium">K values</h3>
               <p className="text-[12px] text-muted-foreground">Pressure advance, by printer, extruder and nozzle.</p>
-              <KValueTable rows={draft.k_values} onChange={(rows) => set('k_values', rows)} printers={lists.printers} inherited={hasType ? (sameType ? saved.k_values : []) : undefined} />
+              <KValueTable rows={draft.k_values} onChange={(rows) => set('k_values', rows)} printers={lists.printers} inherited={hasType ? (sameType ? saved.k_values : typeAsKValues) : undefined} typeKeys={kValueTypeKeys} />
             </div>
           </Section>
 

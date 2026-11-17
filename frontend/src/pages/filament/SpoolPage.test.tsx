@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { Route, Routes } from 'react-router'
 import { describe, expect, it, vi } from 'vitest'
-import { getSpool, getType, listSpoolEvents, listSpools, patchSpool } from '../../api/filament'
+import { getSpool, getType, listSpoolEvents, listSpools, patchSpool, setSpoolPresets } from '../../api/filament'
 import { L, spoolId, T, TAG } from '../../mocks/features/filament/seed'
 import { server } from '../../mocks/server'
 import { choose } from '../../test/select'
@@ -269,18 +269,62 @@ describe('the spool page', () => {
     expect(basis).toHaveTextContent('148')
   })
 
-  it('takes the first type of a spool that needs one, and shows the migrated presets as From type', async () => {
+  it('locks the type picker while the presets of a spool that needs a type are edited', async () => {
     const { user } = open(6)
     await heading(6)
-    expect(within(screen.getByRole('table', { name: 'Slicer presets' })).getByLabelText('Slicer filament')).toHaveValue('GFA00')
+    expect(screen.getByRole('combobox', { name: 'Type' })).toBeEnabled()
+    const filament = within(screen.getByRole('table', { name: 'Slicer presets' })).getByLabelText('Slicer filament')
+    await user.type(filament, 'X')
+    expect(screen.getByRole('combobox', { name: 'Type' })).toBeDisabled()
+    expect(screen.getByText('Save or discard your preset changes before choosing a type')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Discard changes' }))
+    expect(screen.getByRole('combobox', { name: 'Type' })).toBeEnabled()
+  })
+
+  it('takes the first type of a spool that needs one: the migrated rows are marked dropped, and the save writes no presets', async () => {
+    const puts = recorded('PUT', /\/spools\/.*\/presets$/)
+    const { user } = open(6)
+    await heading(6)
     await choose(user, screen.getByRole('combobox', { name: 'Type' }), /BL-PLA-BASIC-JADE-WHITE/)
-    expect(screen.queryByRole('table', { name: 'Slicer presets' })).toBeNull()
-    expect(screen.getByText(/dropped when the type is saved/)).toBeInTheDocument()
+    const table = screen.getByRole('table', { name: 'Slicer presets' })
+    expect(within(table).getByRole('row', { name: 'H2C 0.4 Dropped when the type is saved' })).toBeInTheDocument()
+    expect(screen.getByText(/Saving the type drops H2C 0\.4,/)).toBeInTheDocument()
+    expect(within(table).queryByLabelText('Slicer filament')).toBeNull()
     await user.click(screen.getByRole('button', { name: 'Save spool' }))
     const presets = screen.getByRole('table', { name: 'Slicer presets' })
     expect(await within(presets).findByRole('row', { name: /H2C 0\.4 from type/i })).toBeInTheDocument()
     expect(within(presets).queryByLabelText('Slicer filament')).toBeNull()
+    expect(puts).toEqual([])
     expect((await getSpool(spoolId(6))).type_id).toBe(T.JADE)
+    expect((await getSpool(spoolId(6))).presets.every((row) => !row.overridden)).toBe(true)
+  })
+
+  it('keeps a preset the person saved when the first type drops the migrated ones', async () => {
+    // The migrated 0.4 row goes back unchanged (it stays migrated); the 0.6 row is the person's.
+    const own = (await getSpool(spoolId(6))).presets.map(({ overridden: _o, migrated: _m, ...row }) => row)
+    await setSpoolPresets(spoolId(6), [...own, { printer_model: 'H2C', nozzle_diameter: '0.6', slicer_filament: 'GFX01', slicer_filament_name: null }])
+    const { user } = open(6)
+    await heading(6)
+    await choose(user, screen.getByRole('combobox', { name: 'Type' }), /BL-PLA-BASIC-JADE-WHITE/)
+    const table = screen.getByRole('table', { name: 'Slicer presets' })
+    expect(within(table).getByRole('row', { name: 'H2C 0.6 Kept' })).toBeInTheDocument()
+    expect(within(table).getByRole('row', { name: 'H2C 0.4 Dropped when the type is saved' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Save spool' }))
+    await waitFor(async () => expect((await getSpool(spoolId(6))).type_id).toBe(T.JADE))
+    const presets = (await getSpool(spoolId(6))).presets
+    expect(presets).toContainEqual(expect.objectContaining({ nozzle_diameter: '0.6', slicer_filament: 'GFX01', overridden: true }))
+    expect(presets).toContainEqual(expect.objectContaining({ nozzle_diameter: '0.4', slicer_filament: 'GFA00', overridden: false }))
+  })
+
+  it('offers Reset to type only for a row the type has, and Remove for one it lacks', async () => {
+    const { user } = open(1)
+    await heading(1)
+    const table = screen.getByRole('table', { name: 'Slicer presets' })
+    await user.click(within(table).getByRole('button', { name: 'Override' }))
+    await user.click(screen.getByRole('button', { name: 'Add preset' }))
+    expect(within(table).getByRole('button', { name: 'Reset preset 1 to type' })).toBeInTheDocument()
+    expect(within(table).queryByRole('button', { name: /Reset preset 2/ })).toBeNull()
+    expect(within(table).getByRole('button', { name: /^Remove preset/ })).toBeInTheDocument()
   })
 
   it('makes a type from a spool that needs one, and attaches it', async () => {

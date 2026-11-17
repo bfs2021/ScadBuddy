@@ -553,13 +553,16 @@ class SpoolKValue(BaseModel):
 
 class EffectivePreset(BaseModel):
     """A slicer preset a spool is printed with: its own row for the key, else its type's.
-    ``overridden`` is true for a row of the spool's own."""
+    ``overridden`` is true for a row of the spool's own. ``migrated`` is true for an own
+    row the presets-per-nozzle migration made and no person has changed: the spool's
+    first type drops it (`presets.drop_migrated`)."""
 
     printer_model: str
     nozzle_diameter: str
     slicer_filament: str
     slicer_filament_name: str | None
     overridden: bool
+    migrated: bool = False
 
 
 class EffectiveKValue(BaseModel):

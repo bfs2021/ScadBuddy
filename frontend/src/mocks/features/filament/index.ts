@@ -117,8 +117,8 @@ function effectivePresets(spoolId: string): S['EffectivePreset'][] {
   const owned = new Set(own.map(key))
   const inherited = state.typePresets.filter((one) => one.type_id === row?.type_id && !owned.has(key(one)))
   return [
-    ...own.map(({ spool_id: _, migrated: __, ...rest }) => ({ ...rest, overridden: true })),
-    ...inherited.map(({ type_id: _, ...rest }) => ({ ...rest, overridden: false })),
+    ...own.map(({ spool_id: _, migrated, ...rest }) => ({ ...rest, overridden: true, migrated: migrated === true })),
+    ...inherited.map(({ type_id: _, ...rest }) => ({ ...rest, overridden: false, migrated: false })),
   ]
 }
 
@@ -952,7 +952,13 @@ export const handlers = [
   http.put(`${BASE}/spools/:id/presets`, async ({ params, request }) => {
     const spoolId = String(params.id)
     if (!findSpool(spoolId)) return problem(404, `no spool ${spoolId}`)
-    const rows = ((await request.json()) as S['SpoolPresetCreate'][]).map((one) => ({ slicer_filament_name: null, ...one, spool_id: spoolId }))
+    // `set_presets`: a row sent back unchanged (same key and values) stays migrated; a new or changed one is the person's.
+    const was = state.spoolPresets.filter((one) => one.spool_id === spoolId && one.migrated)
+    const rows = ((await request.json()) as S['SpoolPresetCreate'][]).map((one) => {
+      const row = { slicer_filament_name: null, ...one, spool_id: spoolId }
+      const same = was.some((old) => old.printer_model === row.printer_model && old.nozzle_diameter === row.nozzle_diameter && old.slicer_filament === row.slicer_filament && old.slicer_filament_name === row.slicer_filament_name)
+      return same ? { ...row, migrated: true } : row
+    })
     if (duplicated(rows, (row) => `${row.printer_model}|${row.nozzle_diameter}`)) return problem(422, REFUSED.rowsDuplicate)
     state.spoolPresets = [...state.spoolPresets.filter((one) => one.spool_id !== spoolId), ...rows]
     return HttpResponse.json(effectivePresets(spoolId))
