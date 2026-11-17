@@ -126,6 +126,11 @@ from scadbuddy.crud.guard import CrudCaller, crud_router
 #: ``scadbuddy_warm_evict``; its ``session-reads`` area is ``…/agent/sessions/{id}/open-calls``
 #: and ``…/reasoning``, a session's calls with no result and a child's text before a call
 #: (#6501, `api/crud_agent_publish.py`).
+#: Its ``session-turns`` area is ``…/agent/sessions/{id}/turn`` with every route under it and
+#: ``…/agent/turns/stale``: a durable turn's writes of its session's row, each with its events
+#: in one transaction and its fence checked there (a send's claim and give-back, a Stop's flag, a
+#: placement's claim, its spend, the turn's end with the queue's head, the queue's event, and the
+#: running sweep's end of a lost turn; #6449, `api/crud_agent_turns.py`).
 #: Its ``migrations`` area is ``…/agent/migrations/ledger``, the ledger rows of the files the
 #: agent expects, which it waits for at its start; its ``auth-sessions`` area is
 #: ``…/agent/auth-sessions/lookup``, a signed-in person's live session by its cookie's hash
@@ -200,6 +205,7 @@ CRUD_AREAS: dict[CrudCaller, list[str]] = {
         "escalations",
         "publish",
         "session-reads",
+        "session-turns",
         "migrations",
         "auth-sessions",
     ],

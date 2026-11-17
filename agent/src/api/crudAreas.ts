@@ -69,6 +69,13 @@ export const SESSION_AREAS = ['sessions', 'session-resources', 'transcripts', 's
 export const REST_AREAS = ['publish', 'session-reads'] as const
 
 /**
+ * The area of a durable turn's writes of its session's row, each with its events in one
+ * transaction and its fence checked there (#6449; backend api/crud_agent_turns.py;
+ * sessions/turnRows.ts).
+ */
+export const TURN_AREAS = ['session-turns'] as const
+
+/**
  * What the agent read at its start and per request (#6501; backend api/crud_agent_start.py):
  * the ledger of its migrations (db/schema.ts `crudLedger`) and a signed-in person's session
  * (auth/browserSession.ts `CrudSessionLookup`).
