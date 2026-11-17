@@ -69,11 +69,12 @@ export const SESSION_AREAS = ['sessions', 'session-resources', 'transcripts', 's
 export const REST_AREAS = ['publish', 'session-reads'] as const
 
 /**
- * The area of a durable turn's writes of its session's row, each with its events in one
- * transaction and its fence checked there (#6449; backend api/crud_agent_turns.py;
- * sessions/turnRows.ts).
+ * The areas of a durable turn's writes of its session's row, each with its events in one
+ * transaction and its fence checked there (`session-turns`), and of an edit of a session with its
+ * events (`session-edits`) (#6449; backend api/crud_agent_turns.py, api/crud_agent_edits.py;
+ * sessions/turnRows.ts, sessions/edits.ts).
  */
-export const TURN_AREAS = ['session-turns'] as const
+export const TURN_AREAS = ['session-turns', 'session-edits'] as const
 
 export type CrudAreasOptions = {
   fetch?: typeof fetch

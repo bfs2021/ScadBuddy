@@ -77,7 +77,7 @@ export interface TurnRows {
   /** The row's turn, or undefined for a session that is gone. */
   state(id: string, graceMs?: number): Promise<TurnState | undefined>
   /** A refused send's claim given back to `prior`, with its `session.status`; undefined when the row no longer runs. */
-  giveBack(id: string, prior: SessionStatus): Promise<Logged | undefined>
+  giveBack(id: string, prior: SessionStatus, turnId: string): Promise<Logged | undefined>
   /** A Stop's flag, while a turn holds the row. */
   interrupt(id: string): Promise<boolean>
   /** The placement takes the turn while the row runs it, and the transcript's mark (once per `markKey`); undefined otherwise. */
@@ -202,10 +202,11 @@ export class PgTurnRows implements TurnRows {
     return row
   }
 
-  giveBack(id: string, prior: SessionStatus): Promise<Logged | undefined> {
+  giveBack(id: string, prior: SessionStatus, turnId: string): Promise<Logged | undefined> {
     return this.#sql.begin(async (tx) => {
       const released = await tx`
-        UPDATE ai_sessions SET status = ${prior}, durable_turn_id = NULL, updated_at = now() WHERE id = ${id} AND status = 'running'`
+        UPDATE ai_sessions SET status = ${prior}, durable_turn_id = NULL, updated_at = now()
+        WHERE id = ${id} AND status = 'running' AND durable_turn_id = ${turnId}`
       if (released.count === 0) return undefined
       return logged(tx, id, [event({ type: 'session.status', sessionId: id, status: prior })])
     })
@@ -382,8 +383,9 @@ export class CrudTurnRows implements TurnRows {
     return turn ?? undefined
   }
 
-  async giveBack(id: string, prior: SessionStatus): Promise<Logged | undefined> {
-    const answer = await this.#call<{ logged: WireLogged | null }>(`a claim of session ${id} given back`, this.#path(id, '/give-back'), { prior })
+  async giveBack(id: string, prior: SessionStatus, turnId: string): Promise<Logged | undefined> {
+    const body = { prior, turn_id: turnIdOf(turnId) }
+    const answer = await this.#call<{ logged: WireLogged | null }>(`a claim of session ${id} given back`, this.#path(id, '/give-back'), body)
     return parsed(answer.logged)
   }
 

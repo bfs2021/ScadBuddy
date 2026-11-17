@@ -451,7 +451,7 @@ export class TurnHost {
       const why = cutBy()
       return why !== undefined && why !== 'shutdown'
     }
-    const spend = new Spend(this.#turns, id)
+    const spend = new Spend(this.#turns, id, `${attempt}:${turnId}:end`)
     /** The session's working directory as placed for this turn (set just before it runs). */
     let placed: Placement | undefined
     /**
@@ -1100,7 +1100,7 @@ export class TurnHost {
  * Each write has a key of its own (`#token` and a sequence number). A write whose answer never
  * came is sent again under its key before any new one, so one that committed while its answer was
  * lost is added once (`SpendDelta.key`). The token is this object's, never the attempt id, which
- * the next turn's first placement in a run shares.
+ * the next turn's first placement in a run shares; the end's key names the turn too.
  */
 class Spend {
   readonly turns: Pick<TurnRows, 'spend'>
@@ -1114,14 +1114,16 @@ class Spend {
   /** Set by `settled`: the end's write takes over, so a flush from a fence tick still in flight writes nothing. */
   #closed = false
 
-  constructor(turns: Pick<TurnRows, 'spend'>, id: string) {
+  /**
+   * The end's write's key (`TurnHost#write`): the placement's attempt and turn, not the token, so
+   * a retry of the activity whose end lost its answer sends the end under the same key.
+   */
+  readonly endKey: string
+
+  constructor(turns: Pick<TurnRows, 'spend'>, id: string, endKey: string) {
     this.turns = turns
     this.id = id
-  }
-
-  /** The end's write's key (`TurnHost#write`). */
-  get endKey(): string {
-    return `${this.#token}:end`
+    this.endKey = endKey
   }
 
   flush(runningUsd: number): void {

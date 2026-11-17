@@ -150,7 +150,7 @@ describe('a turn\'s row writes over the CRUD routes', () => {
     }
     // No answer: the claim may have committed. The row runs this turn, so it is given back.
     const lost = await run(new CrudReadError('the claim: fetch failed'), TURN)
-    expect(lost.giveBack.mock.calls).toEqual([[SESSION, 'idle']])
+    expect(lost.giveBack.mock.calls).toEqual([[SESSION, 'idle', TURN.toUpperCase()]])
     // The row runs another turn: nothing is given back.
     expect((await run(new CrudReadError('the claim: fetch failed'), randomUUID())).giveBack).not.toHaveBeenCalled()
     // The route answered (its transaction rolled back): the row is not read.
@@ -167,8 +167,8 @@ describe('a turn\'s row writes over the CRUD routes', () => {
     await expect(new CrudTurnRows(BASE, { fetch: old }).finish(SESSION, TURN, [status('idle')])).rejects.toThrow()
   })
 
-  it('waits for area session-turns', async () => {
-    expect(TURN_AREAS).toEqual(['session-turns'])
+  it('waits for areas session-turns and session-edits', async () => {
+    expect(TURN_AREAS).toEqual(['session-turns', 'session-edits'])
     const api = new FakeApi().answer('GET /areas', { areas: ['sessions'] })
     const areas = new CrudAreas(BASE, { fetch: api.fetch, wanted: TURN_AREAS, log: () => {} })
     expect(await areas.refresh()).toBe(false)

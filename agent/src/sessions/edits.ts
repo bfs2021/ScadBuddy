@@ -1,10 +1,12 @@
 import type { Sql } from 'postgres'
+import { CrudReadError, crudRead, wellFormed } from '../api/crudRead.js'
 import { type AuditContext, type AuditSink, safeDetail, SYSTEM_ACTOR } from '../audit/log.js'
 import { inputResolved } from '../gate/projection.js'
 import { isDoneSummary } from '../gate/waiting.js'
-import type { EventLog } from './eventLog.js'
+import { appendEventsIn, type EventLog } from './eventLog.js'
 import { SessionError, type SessionRecord } from './manager.js'
-import { event, type Owner, type ServerEvent, sameOwner } from './protocol.js'
+import { event, type Owner, type ServerEvent, type SessionStatus, sameOwner } from './protocol.js'
+import { sessionPath, type Who } from './rows.js'
 import type { WarmSessions } from './warm.js'
 import { notifyWarmEvict } from './warmEvict.js'
 
@@ -24,12 +26,23 @@ import { notifyWarmEvict } from './warmEvict.js'
 // attention request, a durable session's entry), so an archived chat never holds
 // something the badge counts. An undismissed `done` summary does not block it: it
 // is dismissed in the same transaction, so it leaves the badge with the chat.
+//
+// The edit's transaction is `EditRows.edit` (#6449): `PgEditRows`, the agent's own SQL, or
+// `CrudEditRows`, the API's route (backend api/crud_agent_edits.py, area `session-edits`), which
+// runs it as one transaction there (#5299 D2), chosen per call in main.ts once the API lists the
+// area. Over SQL the workflow is told it is done inside the transaction; over the route it is
+// told before it, and only when the row read at the start was neither done nor running a turn, so
+// the route (which refuses a newly done session not `told`) writes nothing the workflow was not
+// told of. A turn claimed between the two makes the route refuse `busy` with the workflow told:
+// a later send then reads it `closed`, as one did after a commit that failed past the signal.
 
 export type SessionEdit = { title?: string; done?: true; archived?: boolean }
 
 export type SessionEditsDeps = {
   sql: Sql
-  events: Pick<EventLog, 'append' | 'committed'>
+  /** The edit's transaction (`PgEditRows` on `sql` when omitted; gated to the API's route in main.ts, #6449). */
+  rows?: EditRows
+  events: Pick<EventLog, 'committed'>
   get: (id: string, principal: Owner) => Promise<SessionRecord>
   audit?: AuditSink
   /** Ends a durable session's workflow (#1056); refuses when it cannot be told. */
@@ -50,7 +63,157 @@ type Before = {
   archived: boolean
 }
 
-type Dismissed = { id: string; turn_id: string; tool: string; tool_use_id: string; created_at: Date }
+/** A `done` summary an archive dismissed, which the edit audits. */
+export type Dismissed = { id: string; turn_id: string; tool: string; tool_use_id: string; created_at: Date }
+
+/** What an edit asks: who asks, and the changes. */
+export type EditWrite = { principal: Who; title?: string | undefined; done: boolean; archived?: boolean | undefined }
+
+/** What an edit wrote: its events and their seqs, and the summaries it dismissed. */
+export type Edited = { logged?: { events: ServerEvent[]; seqs: number[] } | undefined; dismissed: Dismissed[] }
+
+export interface EditRows {
+  /**
+   * The edit in one transaction, or a SessionError (not_found, busy) and nothing written. `before`
+   * is the row as the edit read it first; `endDurable` tells the workflow it is done.
+   */
+  edit(id: string, write: EditWrite, before: { status: SessionStatus }, endDurable: (id: string) => Promise<void>): Promise<Edited>
+}
+
+const RUNNING: readonly SessionStatus[] = ['running', 'waiting_approval', 'waiting_input']
+
+const busyDone = (id: string) => new SessionError('busy', `session ${id} is running a turn; Stop it first, then mark it done`)
+const busyArchive = (id: string) => new SessionError('busy', `session ${id} is running a turn; Stop it first, then archive it`)
+const parkedArchive = (id: string) =>
+  new SessionError('busy', `session ${id} has an approval, a question or a request waiting for you; answer it, or Stop the turn, then archive it`)
+const changedOwner = (id: string) => new SessionError('busy', `session ${id} changed owner meanwhile; try again`)
+
+/** The agent's own SQL (until the API lists area `session-edits`). */
+export class PgEditRows implements EditRows {
+  readonly #sql: Sql
+
+  constructor(sql: Sql) {
+    this.#sql = sql
+  }
+
+  async edit(id: string, write: EditWrite, _before: { status: SessionStatus }, endDurable: (id: string) => Promise<void>): Promise<Edited> {
+    const { principal, title, done } = write
+    const archive = write.archived === true
+    const unarchive = write.archived === false
+    let logged: Edited['logged']
+    const dismissed = await this.#sql.begin(async (tx) => {
+      const [before] = await tx<Before[]>`
+        SELECT status AS was, archived_at IS NOT NULL AS archived,
+               -- A turn holds it: running, or parked on one of its calls.
+               status IN ('running', 'waiting_approval', 'waiting_input') AS busy,
+               (EXISTS (SELECT 1 FROM ai_approvals WHERE session_id = ${id} AND decision IS NULL)
+                OR EXISTS (SELECT 1 FROM ai_questions q WHERE q.session_id = ${id} AND q.outcome IS NULL
+                           AND NOT ${isDoneSummary(tx, 'q')})
+                OR EXISTS (SELECT 1 FROM ai_pending_input WHERE session_id = ${id})) AS parked
+          FROM ai_sessions
+         -- Any browser-kind principal is the browser user's (#4975 phase 5, D8; protocol.ts sameOwner).
+         WHERE id = ${id} AND owner_kind = ${principal.kind} AND (owner_id = ${principal.id} OR owner_kind = 'browser')
+         FOR UPDATE`
+      if (!before) throw await this.#changedOwner(id)
+      if (done && before.busy) throw busyDone(id)
+      if (archive && !before.archived) {
+        if (before.busy) throw busyArchive(id)
+        if (before.parked) throw parkedArchive(id)
+      }
+      await tx`
+        UPDATE ai_sessions
+           SET title = coalesce(${title ?? null}::text, title),
+               status = CASE WHEN ${done} THEN 'done' ELSE status END,
+               archived_at = CASE WHEN ${archive} THEN coalesce(archived_at, now())
+                                  WHEN ${unarchive} THEN NULL
+                                  ELSE archived_at END,
+               updated_at = now()
+         WHERE id = ${id}`
+      // Told inside the transaction: a workflow that cannot be told leaves the row as it was.
+      if (done && before.was !== 'done') await endDurable(id)
+      // Its warm process on every replica goes with it (spec 2026-10-13 §5.3, warmEvict.ts): sent on commit.
+      if ((done && before.was !== 'done') || (archive && !before.archived)) await notifyWarmEvict(tx, id)
+      const events: ServerEvent[] = []
+      if (done && before.was !== 'done') events.push(event({ type: 'session.status', sessionId: id, status: 'done' }))
+      let gone: Dismissed[] = []
+      if (archive) {
+        gone = await tx<Dismissed[]>`
+          UPDATE ai_questions q SET outcome = 'cancelled', reason = ${ARCHIVED_REASON}, resolved_at = now()
+           WHERE q.session_id = ${id} AND q.outcome IS NULL AND ${isDoneSummary(tx, 'q')}
+          RETURNING q.id, q.turn_id, q.tool, q.tool_use_id, q.created_at`
+        for (const r of gone) {
+          events.push(event({ type: 'question.resolved', sessionId: id, id: r.id, answered: false, reason: ARCHIVED_REASON }))
+          events.push(inputResolved(id, `question:${r.id}`, 'answer', 'cancelled', ARCHIVED_REASON))
+        }
+      }
+      if (events.length) logged = { events, seqs: await appendEventsIn(tx, id, events) }
+      return gone
+    })
+    return { logged, dismissed }
+  }
+
+  /** The row was not the principal's when locked: it is gone, or it changed owner meanwhile. */
+  async #changedOwner(id: string): Promise<SessionError> {
+    const [now] = await this.#sql<{ id: string }[]>`SELECT id FROM ai_sessions WHERE id = ${id}`
+    if (!now) return new SessionError('not_found', `no session ${id}`)
+    return changedOwner(id)
+  }
+}
+
+type WireDismissed = Omit<Dismissed, 'created_at'> & { created_at: string }
+
+/** The API's route (area `session-edits`). */
+export class CrudEditRows implements EditRows {
+  readonly #base: string
+  readonly #fetch: typeof fetch
+
+  constructor(baseUrl: string, options: { fetch?: typeof fetch } = {}) {
+    this.#base = baseUrl
+    this.#fetch = options.fetch ?? globalThis.fetch
+  }
+
+  async edit(id: string, write: EditWrite, before: { status: SessionStatus }, endDurable: (id: string) => Promise<void>): Promise<Edited> {
+    const path = sessionPath(id)
+    // Not a UUID: no session, as the SQL's cast refused it.
+    if (path === undefined) throw new SessionError('not_found', `no session ${id}`)
+    // Told before the route only when this edit would newly mark it done and no turn held it as
+    // read: never a workflow ended under a running turn the route then refuses.
+    const tell = write.done && before.status !== 'done' && !RUNNING.includes(before.status)
+    if (tell) await endDurable(id)
+    let answer: { logged: { session_id: string; events: ServerEvent[]; seqs: number[] }[]; dismissed: WireDismissed[] }
+    try {
+      answer = await crudRead(this.#fetch, this.#base, `an edit of session ${id}`, `${path}/edit`, {
+        method: 'POST',
+        // Well-formed: the API refuses a lone surrogate in a title (crudRead.ts).
+        body: wellFormed({
+          principal: { kind: write.principal.kind, id: write.principal.id },
+          title: write.title ?? null,
+          done: write.done,
+          archived: write.archived ?? null,
+          told: tell,
+        }),
+      })
+    } catch (error) {
+      if (error instanceof CrudReadError && error.fromRoute) {
+        if (error.status === 404 && error.reason === 'gone') throw new SessionError('not_found', `no session ${id}`)
+        if (error.status === 409) {
+          if (error.reason === 'busy_done') throw busyDone(id)
+          if (error.reason === 'busy_archive') throw busyArchive(id)
+          if (error.reason === 'parked') throw parkedArchive(id)
+          if (error.reason === 'changed_owner') throw changedOwner(id)
+          if (error.reason === 'untold') throw new SessionError('busy', `session ${id} changed meanwhile; try again`)
+        }
+      }
+      throw error
+    }
+    const events = answer.logged.flatMap((b) => b.events)
+    const seqs = answer.logged.flatMap((b) => b.seqs)
+    return {
+      logged: events.length ? { events, seqs } : undefined,
+      dismissed: answer.dismissed.map((r) => ({ ...r, created_at: new Date(r.created_at) })),
+    }
+  }
+}
 
 export class SessionEdits {
   private readonly deps: SessionEditsDeps
@@ -75,62 +238,13 @@ export class SessionEdits {
     const done = edit.done === true
     const archive = edit.archived === true
     const unarchive = edit.archived === false
-    let logged: { events: ServerEvent[]; seqs: number[] } | undefined
-    const dismissed = await this.deps.sql.begin(async (tx) => {
-      const [before] = await tx<Before[]>`
-        SELECT status AS was, archived_at IS NOT NULL AS archived,
-               -- A turn holds it: running, or parked on one of its calls.
-               status IN ('running', 'waiting_approval', 'waiting_input') AS busy,
-               (EXISTS (SELECT 1 FROM ai_approvals WHERE session_id = ${id} AND decision IS NULL)
-                OR EXISTS (SELECT 1 FROM ai_questions q WHERE q.session_id = ${id} AND q.outcome IS NULL
-                           AND NOT ${isDoneSummary(tx, 'q')})
-                OR EXISTS (SELECT 1 FROM ai_pending_input WHERE session_id = ${id})) AS parked
-          FROM ai_sessions
-         -- Any browser-kind principal is the browser user's (#4975 phase 5, D8; protocol.ts sameOwner).
-         WHERE id = ${id} AND owner_kind = ${principal.kind} AND (owner_id = ${principal.id} OR owner_kind = 'browser')
-         FOR UPDATE`
-      if (!before) throw await this.changedOwner(id)
-      if (done && before.busy) {
-        throw new SessionError('busy', `session ${id} is running a turn; Stop it first, then mark it done`)
-      }
-      if (archive && !before.archived) {
-        if (before.busy) throw new SessionError('busy', `session ${id} is running a turn; Stop it first, then archive it`)
-        if (before.parked) {
-          throw new SessionError(
-            'busy',
-            `session ${id} has an approval, a question or a request waiting for you; answer it, or Stop the turn, then archive it`,
-          )
-        }
-      }
-      await tx`
-        UPDATE ai_sessions
-           SET title = coalesce(${title ?? null}::text, title),
-               status = CASE WHEN ${done} THEN 'done' ELSE status END,
-               archived_at = CASE WHEN ${archive} THEN coalesce(archived_at, now())
-                                  WHEN ${unarchive} THEN NULL
-                                  ELSE archived_at END,
-               updated_at = now()
-         WHERE id = ${id}`
-      // Told inside the transaction: a workflow that cannot be told leaves the row as it was.
-      if (done && before.was !== 'done') await this.deps.endDurable(id)
-      // Its warm process on every replica goes with it (spec 2026-10-13 §5.3, warmEvict.ts): sent on commit.
-      if ((done && before.was !== 'done') || (archive && !before.archived)) await notifyWarmEvict(tx, id)
-      const events: ServerEvent[] = []
-      if (done && before.was !== 'done') events.push(event({ type: 'session.status', sessionId: id, status: 'done' }))
-      let gone: Dismissed[] = []
-      if (archive) {
-        gone = await tx<Dismissed[]>`
-          UPDATE ai_questions q SET outcome = 'cancelled', reason = ${ARCHIVED_REASON}, resolved_at = now()
-           WHERE q.session_id = ${id} AND q.outcome IS NULL AND ${isDoneSummary(tx, 'q')}
-          RETURNING q.id, q.turn_id, q.tool, q.tool_use_id, q.created_at`
-        for (const r of gone) {
-          events.push(event({ type: 'question.resolved', sessionId: id, id: r.id, answered: false, reason: ARCHIVED_REASON }))
-          events.push(inputResolved(id, `question:${r.id}`, 'answer', 'cancelled', ARCHIVED_REASON))
-        }
-      }
-      if (events.length) logged = { events, seqs: await this.deps.events.append(id, events, tx) }
-      return gone
-    })
+    const rows = this.deps.rows ?? new PgEditRows(this.deps.sql)
+    const { logged, dismissed } = await rows.edit(
+      id,
+      { principal, title, done, archived: archive ? true : unarchive ? false : undefined },
+      { status: session.status },
+      (sid) => this.deps.endDurable(sid),
+    )
     if (logged) this.deps.events.committed(id, logged.events, logged.seqs)
     // Its cron jobs, wakeups and monitors end with it: nothing fires into an archived or done chat.
     if (archive || done) await this.deps.endBackground?.(id, archive ? 'the chat was archived' : 'the chat was marked done')
@@ -179,10 +293,4 @@ export class SessionEdits {
     return this.deps.get(id, principal)
   }
 
-  /** The row was not the principal's when locked: it is gone, or it changed owner meanwhile. */
-  private async changedOwner(id: string): Promise<SessionError> {
-    const [now] = await this.deps.sql<{ id: string }[]>`SELECT id FROM ai_sessions WHERE id = ${id}`
-    if (!now) return new SessionError('not_found', `no session ${id}`)
-    return new SessionError('busy', `session ${id} changed owner meanwhile; try again`)
-  }
 }
