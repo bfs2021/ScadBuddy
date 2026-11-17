@@ -26,7 +26,9 @@ agent would not have sent. A body row is bounded by the API's JSON gate (`api/li
 SDK's 4 MiB body (``DEFAULT_MAX_REQUEST_BODY_SIZE``), but the row escapes it once more, so one
 heavy in quotes, backslashes or control characters can pass 8 MiB. The agent measures the
 encoded body first and answers such a request 413 itself (``relayRows.ts``
-``RelayBodyTooLargeError``), so it never reaches this gate.
+``RelayBodyTooLargeError``), so it never reaches this gate. An answer's chunk too large for the
+NOTIFY goes as several rows of at most 2^20 UTF-16 units each (``sessionRelay.ts``
+``ROW_TEXT_MAX``), under 6 MiB once escaped, so an answer of any size is relayed whole.
 """
 
 from __future__ import annotations

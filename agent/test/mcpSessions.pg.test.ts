@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
@@ -9,7 +10,7 @@ import type { AgentApp } from '../src/app.js'
 import type { Database } from '../src/db.js'
 import { MemoryEventSource } from '../src/events/bus.js'
 import { PgEventListener } from '../src/events/pgListener.js'
-import { CrudRelayRows, PgRelayRows, type RelayRows } from '../src/mcp/relayRows.js'
+import { CrudRelayRows, PgRelayRows, RELAY_SEND_MAX_BYTES, type RelayRows } from '../src/mcp/relayRows.js'
 import { SharedMcpSessionRelay, type SessionOwner, sessionHash } from '../src/mcp/sessionRelay.js'
 import { ResourceHub } from '../src/resources/hub.js'
 import { BACKEND, LOOPBACK, MCP_URL, testApp } from './helpers/mcp.js'
@@ -72,10 +73,25 @@ const ACK_TIMEOUT_MS = 1_000
  * fetch that answers each route with the agent's own SQL: the relay over `CrudRelayRows` sends
  * every call through the wire shape, ids and all in the body.
  */
+/** Every body `CrudRelayRows` sent, for the check against the API's own routes. */
+const sentToApi: { path: string; body: Record<string, unknown> }[] = []
+
+const hasUv = (): boolean => {
+  try {
+    execFileSync('uv', ['--version'], { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+}
+
 function crudRoutes(rows: RelayRows): typeof fetch {
   return async (input, init) => {
+    // The API's JSON gate (api/limits.py MAX_TEXT_BODY_BYTES), refused before the route runs.
+    if (Buffer.byteLength(String(init?.body ?? '')) > RELAY_SEND_MAX_BYTES) return new Response(null, { status: 413 })
     const path = new URL(String(input)).pathname.replace(/^.*\/crud\/agent\/mcp-relay/, '')
     const b = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+    sentToApi.push({ path: `/mcp-relay${path}`, body: b })
     const s = (k: string) => b[k] as string
     const n = (k: string) => b[k] as number
     const answers: Record<string, () => Promise<unknown>> = {
@@ -454,6 +470,48 @@ describe.skipIf(!TEST_DATABASE_URL).each(['sql', 'crud'] as const)(`/mcp session
       expect(relayed.content, `${n} models`).toEqual(direct.content)
     }
   })
+
+  // The fake routes above answer with the agent's own SQL, so this checks the wire itself: every
+  // body CrudRelayRows sent is one the API's routes take (backend api/crud_agent_mcp.py, run with
+  // uv), and each NOTIFY the API would send is the header the agent sent.
+  it.skipIf(over === 'sql' || !hasUv())("sends only bodies the API's routes take, and they NOTIFY what was sent", { timeout: 120_000 }, async () => {
+    // Only this test's own calls: others write made-up hashes straight through the rows.
+    sentToApi.length = 0
+    const { token } = await tokens.mint({ name: 't', tier: 'read' })
+    let initialized = false
+    const client = await connect(token, () => (initialized ? b : a))
+    initialized = true
+    await client.listTools()
+    await (client.transport as StreamableHTTPClientTransport).terminateSession()
+    const sent = sentToApi.splice(0)
+    const paths = new Set(sent.map((s) => s.path))
+    for (const path of ['/mcp-relay/sessions', '/mcp-relay/counts', '/mcp-relay/send', '/mcp-relay/rows/take']) expect(paths).toContain(path)
+    const script = new URL('./support/relay_backend_parity.py', import.meta.url).pathname
+    const cwd = new URL('../../backend/', import.meta.url).pathname
+    const out = execFileSync('uv', ['run', '--frozen', 'python', script], { cwd, input: JSON.stringify(sent), maxBuffer: 1 << 28 })
+    const results = JSON.parse(out.toString()) as { ok: boolean; error?: string; payload?: string }[]
+    expect(results).toHaveLength(sent.length)
+    results.forEach((result, i) => {
+      expect(result, `${sent[i]!.path}: ${result.error ?? ''}`).toMatchObject({ ok: true })
+      if (sent[i]!.path === '/mcp-relay/send') expect(JSON.parse(result.payload!)).toEqual(sent[i]!.body.header)
+    })
+  })
+
+  it('relays an answer past the API gate whole, in rows under it', async () => {
+    // One SSE event of about 12 MiB once escaped: a single row would be refused at the gate.
+    const big = Array.from({ length: 6 }, (_, i) => ({ ...MODELS[0], slug: `big${i}`, name: '"'.repeat(1 << 20) }))
+    backend.use(http.get(`${BACKEND}/api/v1/models`, () => HttpResponse.json(big)))
+    const { token } = await tokens.mint({ name: 't', tier: 'read' })
+    let via: Replica = a
+    const client = await connect(token, () => via)
+    const call = () => client.callTool({ name: 'list_models', arguments: { limit: 100 } }, undefined, { timeout: 15_000 })
+    const direct = await call()
+    via = b
+    const relayed = await call()
+    expect(relayed.isError).toBeFalsy()
+    expect(JSON.stringify(relayed.content).length).toBeGreaterThan(RELAY_SEND_MAX_BYTES)
+    expect(relayed.content).toEqual(direct.content)
+  }, 60_000)
 
   it('answers 413 over the CRUD routes for a request whose relay message is past the API gate, sending nothing', async () => {
     // A 4 MiB body (the MCP SDK's limit) of backslashes doubles when the row escapes it: past
