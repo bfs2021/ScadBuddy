@@ -509,7 +509,11 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   steps back), `locations.py` (a spool moves only through `move()`; AMS trays are keyed by
   printer, AMS and tray, never by name), `bambuddy_pull.py` (import and the scheduled pull,
   read-only toward Bambuddy; `scheduled_pull` skips when the setting `filament_sync.spools` is
-  `off`, read per run, #6262 Task 13). Colour is `#RRGGBBAA` (`colour.py`). Routes: `api/filament.py`.
+  `off`, read per run, #6262 Task 13), `csv_import.py` (the spools CSV import, #6262 Task 15:
+  rows the caller parsed, as text cells; a dry run reads only, so it adds no catalog row and
+  takes no spool number; a write is one transaction, refused whole when a line is an error,
+  and its `Idempotency-Key` reply is kept in `crud_requests` under caller `filament`; a
+  `location` cell is a `move_on`). Colour is `#RRGGBBAA` (`colour.py`). Routes: `api/filament.py`.
 - `backend/scadbuddy/store/` — the blob store. Phase 1: the directory-shaped `BlobStore`
   Protocol and `LocalBlobStore` (`local.py`, a piece in `data/blobs/<piece_key>/`),
   `BlobRefs` (`refs.py`, the `blob_refs` table that keeps a blob alive) and `sweep_blobs`

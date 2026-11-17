@@ -609,3 +609,37 @@ def test_a_spool_summary_prices_it_and_counts_its_filament(client: TestClient) -
         None,
     )
     assert client.get(f"{SPOOLS}/{MISSING}/summary").status_code == 404
+
+
+# -- the CSV import (#6262 Task 15, F24) ------------------------------------------------
+
+IMPORT = "/api/v1/filament/spools/import"
+
+
+def test_an_unknown_number_is_an_error_and_blocks_the_import(client: TestClient) -> None:
+    rows = [{"material": "PLA"}, {"number": "999", "note": "x"}]
+    preview = client.post(IMPORT, json={"rows": rows, "dry_run": True})
+    assert preview.status_code == 200, preview.text
+    assert [r["action"] for r in preview.json()["rows"]] == ["create", "error"]
+    refused = client.post(
+        IMPORT, json={"rows": rows, "dry_run": False}, headers={"Idempotency-Key": "k-1"}
+    )
+    assert refused.status_code == 422, refused.text
+    assert "line 3: no spool #999" in refused.json()["detail"]
+    assert client.get(SPOOLS).json() == []
+
+
+def test_a_retried_import_writes_once(client: TestClient) -> None:
+    body = {"rows": [{"material": "PLA", "brand": "Sunlu"}], "dry_run": False}
+    unkeyed = client.post(IMPORT, json=body)
+    assert unkeyed.status_code == 428, unkeyed.text
+    first = client.post(IMPORT, json=body, headers={"Idempotency-Key": "k-2"})
+    assert first.status_code == 200, first.text
+    again = client.post(IMPORT, json=body, headers={"Idempotency-Key": "k-2"})
+    assert again.status_code == 200, again.text
+    assert again.json() == first.json()
+    assert len(client.get(SPOOLS).json()) == 1
+    other = client.post(
+        IMPORT, json=body | {"rows": [{"material": "PETG"}]}, headers={"Idempotency-Key": "k-2"}
+    )
+    assert other.status_code == 422, other.text

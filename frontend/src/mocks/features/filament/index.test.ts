@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ApiError, api } from '../../../api/client'
+import { ApiError, api, request } from '../../../api/client'
 import {
   archiveSpool,
   bindTag,
@@ -10,6 +10,7 @@ import {
   getSummary,
   getTag,
   getType,
+  importSpools,
   listEvents,
   listLocations,
   listSpools,
@@ -297,5 +298,53 @@ describe('the filament mocks', () => {
     expect(await refusal(upsertLocation({ ...tray(1, 0), name: 'Other' }))).toMatchObject({ status: 409 })
     // A plain place of that name at the top is still free: the name index skips trays.
     expect(await upsertLocation({ name: 'Tray 1', kind_id: LK.SHELF, sort_order: 0 })).toMatchObject({ printer_id: null })
+  })
+})
+
+describe('the spools CSV import (Task 15)', () => {
+  it('previews without writing: a new name is marked, a number updates only what differs', async () => {
+    const preview = await importSpools(
+      [
+        { material: 'pla', brand: 'Acme', colour_name: 'Red' },
+        { number: '3', material: 'PLA', note: 'Top shelf', location: 'shelf a' },
+      ],
+      { dryRun: true },
+    )
+    expect(preview.rows).toEqual([
+      {
+        line: 2,
+        action: 'create',
+        number: null,
+        changes: { material: [null, 'PLA'], brand: [null, 'Acme', { new: true }], colour_name: [null, 'Red'] },
+        error: null,
+      },
+      { line: 3, action: 'update', number: 3, changes: { note: [null, 'Top shelf'] }, error: null },
+    ])
+    expect(await listSpools()).toHaveLength(11)
+  })
+
+  it('writes once per key, answers a retry with the first result, and refuses the key for another body', async () => {
+    const rows = [{ material: 'PLA', brand: 'Acme' }]
+    const first = await importSpools(rows, { dryRun: false, key: 'k-1' })
+    expect(first.rows[0]).toMatchObject({ action: 'create', number: 20 })
+    expect(await importSpools(rows, { dryRun: false, key: 'k-1' })).toEqual(first)
+    expect(await listSpools()).toHaveLength(12)
+    expect(await refusal(importSpools([{ material: 'PETG' }], { dryRun: false, key: 'k-1' }))).toMatchObject({ status: 422 })
+  })
+
+  it('refuses a write with an error line, and writes none of its rows', async () => {
+    const rows = [{ material: 'PLA', brand: 'Acme' }, { number: '999' }, { number: '1', location: 'Nowhere' }]
+    expect(await refusal(importSpools(rows, { dryRun: false, key: 'k-2' }))).toEqual({
+      status: 422,
+      title: 'Unprocessable Content',
+      detail: "line 3: no spool #999; line 4: no location named 'Nowhere'",
+    })
+    expect(await listSpools()).toHaveLength(11)
+    expect((await upsertCatalog('brands', { name: 'Acme', sort_order: 0 })).name).toBe('Acme')
+  })
+
+  it('needs a key to write', async () => {
+    const body = JSON.stringify({ rows: [{ material: 'PLA' }], dry_run: false })
+    expect(await refusal(request('/filament/spools/import', { method: 'POST', body }))).toMatchObject({ status: 428 })
   })
 })

@@ -19,6 +19,12 @@ from scadbuddy.auth.component import CallerDep
 from scadbuddy.auth.models import Caller, Person, PersonalToken, Service
 from scadbuddy.bambuddy.models import SpoolAssignment
 from scadbuddy.core.problems import DATABASE_ERRORS, ApiError
+from scadbuddy.crud.idempotency import (
+    MaybeIdempotencyKey,
+    Replay,
+    idempotent_write,
+    required_key,
+)
 from scadbuddy.filament import models as m
 from scadbuddy.filament.bambuddy_pull import PullReport, read_and_pull, read_assignments
 from scadbuddy.filament.catalog import (
@@ -28,6 +34,13 @@ from scadbuddy.filament.catalog import (
     CatalogSpec,
 )
 from scadbuddy.filament.component import FilamentDep
+from scadbuddy.filament.csv_import import (
+    ImportPreview,
+    ImportRefusedError,
+    SpoolCsvImport,
+    import_on,
+    import_rows,
+)
 from scadbuddy.filament.ledger import BadCursorError
 from scadbuddy.filament.locations import (
     LocationCycleError,
@@ -368,6 +381,58 @@ async def create_spool(filament: FilamentDep, caller: CallerDep, body: m.SpoolCr
         return await asyncio.to_thread(filament.spools.create, body, actor=actor(caller))
     except _SPOOL_REFUSED as exc:
         raise _refused(exc) from None
+
+
+IMPORT_ROUTE = "POST /filament/spools/import"
+
+
+@router.post(
+    "/spools/import",
+    response_model=ImportPreview,
+    summary="Import spools from CSV rows",
+    description=(
+        "Rows of a spools CSV, parsed by the caller (cells as text, under the export's "
+        "column names). A row with a `number` changes that spool, only where a cell differs "
+        "from what it shows now; an empty cell changes nothing. A row with no `number` makes "
+        "a spool. Material, subtype, brand, category and effect names resolve in any case "
+        "and are added to their catalog when missing; `insert_type` and `type` (a spool "
+        "type's code) must exist; `location` must name exactly one unarchived place and is "
+        "a move. Derived columns (`grams_left`, `last_used_at`, ...) are ignored; any other "
+        "unknown column is a 422. `dry_run: true` answers what each row would do (`create`, "
+        "`update` or `error`, with its changes as `[before, after]`) and writes nothing. "
+        "`dry_run: false` writes every row in one transaction, and needs an "
+        "`Idempotency-Key` (428 without one): a retry with the same key answers the first "
+        "result and writes nothing, and the key with another body is a 422. A write with "
+        "any row in error is a 422 naming each line, and writes nothing."
+    ),
+)
+async def import_spools(
+    filament: FilamentDep,
+    caller: CallerDep,
+    body: SpoolCsvImport,
+    idempotency_key: MaybeIdempotencyKey = None,
+) -> ImportPreview:
+    who = actor(caller)
+    if body.dry_run:
+        return await asyncio.to_thread(import_rows, filament, body.rows, dry_run=True, actor=who)
+    # A person's key, under their own name: one person's key never replays another's.
+    key = f"{who}\x1f{required_key(idempotency_key)}"
+    asked = body.model_dump(mode="json")
+
+    def write() -> Replay:
+        with filament.spools.transaction() as conn:
+
+            def run() -> Replay:
+                done = import_on(conn, filament, body.rows, dry_run=False, actor=who)
+                return Replay(status.HTTP_200_OK, done.model_dump(mode="json"))
+
+            return idempotent_write(conn, "filament", key, IMPORT_ROUTE, asked, run)
+
+    try:
+        done = await asyncio.to_thread(write)
+    except ImportRefusedError as exc:
+        raise ApiError(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from None
+    return ImportPreview.model_validate(done.body)
 
 
 @router.get(

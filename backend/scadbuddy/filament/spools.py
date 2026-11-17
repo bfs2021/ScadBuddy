@@ -395,32 +395,39 @@ class FilamentSpoolStore:
     def create(self, body: m.SpoolCreate, *, actor: str) -> m.Spool:
         """A new spool and its ``created`` event; ``grams_left``, when sent, is that
         event's reading. The temperature ranges are checked on the effective values."""
-        data = body.model_dump(exclude={"grams_left"})
-        names = list(data)
         defaults = self._defaults()
         try:
             with self._pool.connection() as conn, conn.transaction():
-                row = conn.execute(
-                    f"INSERT INTO filament_spools ({', '.join(names)})"
-                    f" VALUES ({', '.join('%s' for _ in names)}) RETURNING id",
-                    [data[name] for name in names],
-                ).fetchone()
-                assert row is not None
-                spool_id: UUID = row["id"]
-                self._check(conn, spool_id)
-                ledger.record(
-                    conn,
-                    spool_id,
-                    "created",
-                    source="person" if body.grams_left is not None else None,
-                    absolute_g=body.grams_left,
-                    actor=actor,
-                )
+                spool_id = self.create_on(conn, body, actor=actor)
                 made = self._spool(conn, spool_id, defaults)
         except errors.ForeignKeyViolation:
             raise CatalogRefError() from None
         assert made is not None
         return made
+
+    def create_on(self, conn: Conn, body: m.SpoolCreate, *, actor: str) -> UUID:
+        """`create` on ``conn``, in the caller's transaction (`filament/csv_import.py`):
+        the new spool's id. A row it names that does not exist is the driver's
+        `ForeignKeyViolation`."""
+        data = body.model_dump(exclude={"grams_left"})
+        names = list(data)
+        row = conn.execute(
+            f"INSERT INTO filament_spools ({', '.join(names)})"
+            f" VALUES ({', '.join('%s' for _ in names)}) RETURNING id",
+            [data[name] for name in names],
+        ).fetchone()
+        assert row is not None
+        spool_id: UUID = row["id"]
+        self._check(conn, spool_id)
+        ledger.record(
+            conn,
+            spool_id,
+            "created",
+            source="person" if body.grams_left is not None else None,
+            absolute_g=body.grams_left,
+            actor=actor,
+        )
+        return spool_id
 
     def update(self, spool_id: UUID, patch: m.SpoolPatch, *, actor: str) -> m.Spool | None:
         """The fields ``patch`` sends; ``None`` for no such spool. One ``edited`` event
@@ -432,51 +439,59 @@ class FilamentSpoolStore:
         checked on the effective values after it. A spool's first type drops its
         ``migrated`` presets (`presets.drop_migrated`), in the same event as
         ``changes.presets``."""
-        sent = [n for n in _WRITABLE if n in patch.model_fields_set]
         defaults = self._defaults()
         try:
             with self._pool.connection() as conn, conn.transaction():
-                if patch.archived:
-                    # The tag before the spool, as every writer of bindings takes them.
-                    conn.execute(
-                        "SELECT t.id FROM filament_tags t JOIN filament_tag_bindings b"
-                        " ON b.tag_id = t.id WHERE b.spool_id = %s AND b.unbound_at IS NULL"
-                        " ORDER BY t.id FOR UPDATE OF t",
-                        (spool_id,),
-                    )
-                current = conn.execute(
-                    f"SELECT {_SPOOL_COLUMNS} FROM filament_spools WHERE id = %s FOR UPDATE",
-                    (spool_id,),
-                ).fetchone()
-                if current is None:
+                if not self.update_on(conn, spool_id, patch, actor=actor):
                     return None
-                after = {n: getattr(patch, n) for n in sent}
-                merged = current | after
-                if merged["type_id"] is None and merged["material_id"] is None:
-                    raise SpoolTypelessError()
-                changes = {
-                    n: [current[n], after[n]]
-                    for n in m.SpoolPatch.model_fields
-                    if n in after and current[n] != after[n]
-                }
-                if changes:
-                    columns = list(changes)
-                    conn.execute(
-                        f"UPDATE filament_spools SET {', '.join(f'{c} = %s' for c in columns)},"
-                        " updated_at = now() WHERE id = %s",
-                        [*(after[c] for c in columns), spool_id],
-                    )
-                    self._check(conn, spool_id)
-                    if current["type_id"] is None and merged["type_id"] is not None:
-                        dropped = p.drop_migrated(conn, spool_id)
-                        if dropped is not None:
-                            changes["presets"] = dropped
-                    ledger.record(conn, spool_id, "edited", actor=actor, data={"changes": changes})
-                if patch.archived is not None:
-                    self._archive(conn, current, patch.archived, actor)
                 return self._spool(conn, spool_id, defaults)
         except errors.ForeignKeyViolation:
             raise CatalogRefError() from None
+
+    def update_on(self, conn: Conn, spool_id: UUID, patch: m.SpoolPatch, *, actor: str) -> bool:
+        """`update` on ``conn``, in the caller's transaction (`filament/csv_import.py`);
+        false for no such spool. A row it names that does not exist is the driver's
+        `ForeignKeyViolation`."""
+        sent = [n for n in _WRITABLE if n in patch.model_fields_set]
+        if patch.archived:
+            # The tag before the spool, as every writer of bindings takes them.
+            conn.execute(
+                "SELECT t.id FROM filament_tags t JOIN filament_tag_bindings b"
+                " ON b.tag_id = t.id WHERE b.spool_id = %s AND b.unbound_at IS NULL"
+                " ORDER BY t.id FOR UPDATE OF t",
+                (spool_id,),
+            )
+        current = conn.execute(
+            f"SELECT {_SPOOL_COLUMNS} FROM filament_spools WHERE id = %s FOR UPDATE",
+            (spool_id,),
+        ).fetchone()
+        if current is None:
+            return False
+        after = {n: getattr(patch, n) for n in sent}
+        merged = current | after
+        if merged["type_id"] is None and merged["material_id"] is None:
+            raise SpoolTypelessError()
+        changes = {
+            n: [current[n], after[n]]
+            for n in m.SpoolPatch.model_fields
+            if n in after and current[n] != after[n]
+        }
+        if changes:
+            columns = list(changes)
+            conn.execute(
+                f"UPDATE filament_spools SET {', '.join(f'{c} = %s' for c in columns)},"
+                " updated_at = now() WHERE id = %s",
+                [*(after[c] for c in columns), spool_id],
+            )
+            self._check(conn, spool_id)
+            if current["type_id"] is None and merged["type_id"] is not None:
+                dropped = p.drop_migrated(conn, spool_id)
+                if dropped is not None:
+                    changes["presets"] = dropped
+            ledger.record(conn, spool_id, "edited", actor=actor, data={"changes": changes})
+        if patch.archived is not None:
+            self._archive(conn, current, patch.archived, actor)
+        return True
 
     def presets(self, spool_id: UUID) -> _Presets | None:
         """The spool's slicer presets, its own over its type's; ``None`` for no such

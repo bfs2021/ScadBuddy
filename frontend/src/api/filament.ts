@@ -37,6 +37,9 @@ export type LedgerRow = Schemas['LedgerRow']
 export type EventQuery = Query<'list_events_api_v1_filament_events_get'>
 export type InventorySummary = Schemas['InventorySummary']
 export type FilamentInventoryView = Schemas['FilamentInventoryView']
+export type CsvRow = Schemas['CsvRow']
+export type ImportPreview = Schemas['ImportPreview']
+export type ImportRowResult = Schemas['ImportRowResult']
 
 /** Each catalog kind (`filament/catalog.py` `CATALOGS`) and the row it holds. */
 export interface CatalogRows {
@@ -78,6 +81,17 @@ export const listSpools = (options: { includeArchived?: boolean; needsType?: boo
   request<Spool[]>(`${BASE}/spools${query({ include_archived: options.includeArchived || undefined, needs_type: options.needsType })}`)
 
 export const getSpool = (id: string) => request<SpoolDetail>(`${BASE}/spools/${seg(id)}`)
+
+/**
+ * Spools from CSV rows the browser parsed (no file bytes are sent). `dry_run` answers what
+ * each row would do; a write needs `key`, one `Idempotency-Key` per opened preview, so a
+ * retry answers the first result and writes nothing.
+ */
+export const importSpools = (rows: CsvRow[], options: { dryRun: true } | { dryRun: false; key: string }) =>
+  request<ImportPreview>(`${BASE}/spools/import`, {
+    ...json('POST', { rows, dry_run: options.dryRun }),
+    ...(options.dryRun ? {} : { headers: { 'Idempotency-Key': options.key } }),
+  })
 
 export const createSpool = (body: SpoolCreate) => request<Spool>(`${BASE}/spools`, json('POST', body))
 

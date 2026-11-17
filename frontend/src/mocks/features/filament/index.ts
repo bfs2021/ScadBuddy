@@ -25,6 +25,7 @@ let state: Seed = seed()
 
 export function reset() {
   state = seed()
+  imports.clear()
 }
 
 /** The default low-stock percentage (`filament/settings.py`, F3). */
@@ -32,7 +33,7 @@ const LOW_STOCK_PCT = 20
 
 const now = () => new Date().toISOString()
 
-const TITLES = { 404: 'Not Found', 409: 'Conflict', 422: 'Unprocessable Content' } as const
+const TITLES = { 404: 'Not Found', 409: 'Conflict', 422: 'Unprocessable Content', 428: 'Precondition Required' } as const
 
 /** A refusal as `core/problems.py` `problem_response` writes it: every error here. */
 const problem = (status: keyof typeof TITLES, detail: string) =>
@@ -502,6 +503,216 @@ function newSpool(body: Record<string, unknown>): SpoolRow {
   return { ...blank, ...(body as Partial<SpoolRow>) }
 }
 
+// -- the CSV import (`filament/csv_import.py`, #6262 Task 15) ------------------------
+
+/** `crud/idempotency.py`: each write's key and the body and answer it had. */
+const imports = new Map<string, { body: string; answer: S['ImportPreview'] }>()
+
+/** `csv_import.DERIVED_COLUMNS`: dropped from a row. */
+const DERIVED_CSV = new Set(['grams_left', 'last_weighed_g', 'last_weighed_at', 'last_dried_at', 'last_used_at', 'low_stock', 'archived_at'])
+const CSV_CATALOGS = { material: 'materials', subtype: 'subtypes', brand: 'brands', category: 'categories', effect: 'effects' } as const
+type CsvCatalog = keyof typeof CSV_CATALOGS
+const CSV_INTS = new Set(['nozzle_temp_min', 'nozzle_temp_max', 'bed_temp_min', 'bed_temp_max', 'label_weight_g', 'low_stock_pct'])
+const CSV_DECIMALS = new Set(['diameter_mm', 'density_g_cm3', 'cost_per_kg'])
+const CSV_PLAIN = [
+  'colour_name',
+  'rgba',
+  'extra_colours',
+  'diameter_mm',
+  'density_g_cm3',
+  'nozzle_temp_min',
+  'nozzle_temp_max',
+  'bed_temp_min',
+  'bed_temp_max',
+  'label_weight_g',
+  'low_stock_pct',
+  'cost_per_kg',
+  'weight_locked',
+  'note',
+] as const
+const CSV_COLUMNS = new Set<string>(['number', 'type', ...Object.keys(CSV_CATALOGS), 'insert_type', 'location', ...CSV_PLAIN])
+const TRUE = new Set(['true', '1', 'yes', 'y', 'on', 't'])
+const FALSE = new Set(['false', '0', 'no', 'n', 'off', 'f'])
+const BAD_COLOUR = 'Value error, a colour is RRGGBB or RRGGBBAA hex digits, with or without #'
+
+class RowError extends Error {}
+
+function fail(message: string): never {
+  throw new RowError(message)
+}
+
+/** A plain cell typed as `SpoolPatch` types it; a bad one is the row's error. */
+function csvValue(field: (typeof CSV_PLAIN)[number], text: string): unknown {
+  if (field === 'rgba') return parseRgba(text) ?? fail(`rgba: ${BAD_COLOUR}`)
+  if (field === 'extra_colours')
+    return text
+      .split(/[\s,;]+/)
+      .filter(Boolean)
+      .map((one) => parseRgba(one) ?? fail(`extra_colours: ${BAD_COLOUR}`))
+  if (field === 'weight_locked') {
+    const lower = text.toLowerCase()
+    return TRUE.has(lower) ? true : FALSE.has(lower) ? false : fail('weight_locked: Input should be a valid boolean')
+  }
+  if (CSV_INTS.has(field)) {
+    const value = Number(text)
+    return Number.isInteger(value) ? value : fail(`${field}: Input should be a valid integer`)
+  }
+  if (CSV_DECIMALS.has(field)) return Number.isFinite(Number(text)) ? text : fail(`${field}: Input should be a valid decimal`)
+  return text
+}
+
+type Named = { id: string; name: string; archived_at: string | null; material_id?: string | null }
+const liveNamed = <T extends { name: string; archived_at: string | null }>(rows: T[], name: string) =>
+  rows.filter((row) => !row.archived_at && sameName(row.name, name))
+
+/** One row's plan, as `_plan` makes it; with `write`, done on `state`. */
+function importRow(row: Record<string, string | null>, line: number, write: boolean): S['ImportRowResult'] {
+  const cell = (name: string) => {
+    const value = row[name]
+    return typeof value === 'string' && value.trim() ? value.trim() : null
+  }
+  const plain: Record<string, unknown> = {}
+  for (const field of CSV_PLAIN) {
+    const text = cell(field)
+    if (text !== null) plain[field] = csvValue(field, text)
+  }
+  let current: SpoolRow | undefined
+  const number = cell('number')
+  if (number !== null) {
+    const match = /^#?(\d{1,9})$/.exec(number)
+    if (!match) fail(`number: '${number}' is not a spool number`)
+    current = state.spools.find((one) => one.number === Number(match[1]))
+    if (!current) fail(`no spool #${Number(match[1])}`)
+  } else if (cell('type') === null && cell('material') === null) fail('a new spool needs a type or a material')
+  const shown = current ? view(current) : null
+  const effective = (shown?.effective ?? {}) as Record<string, unknown>
+  const changes: Record<string, unknown[]> = {}
+  const values: Record<string, unknown> = {}
+  const typeCode = cell('type')
+  if (typeCode !== null) {
+    const kind = state.types.find((one) => !one.archived_at && sameName(one.code, typeCode))
+    if (!kind) fail(`no spool type with the code '${typeCode}'`)
+    if (!current || current.type_id !== kind.id) {
+      const was = current ? (state.types.find((one) => one.id === current.type_id)?.code ?? null) : null
+      changes.type = [was, kind.code]
+      values.type_id = kind.id
+    }
+  }
+  const fresh: [CsvCatalog, string][] = []
+  let material = (effective.material_id as string | null | undefined) ?? null
+  for (const column of Object.keys(CSV_CATALOGS) as CsvCatalog[]) {
+    const kind = CSV_CATALOGS[column]
+    const name = cell(column)
+    if (name === null) continue
+    const before = shown?.names?.[column] ?? null
+    if (before !== null && sameName(before, name)) continue
+    const found = liveNamed(state.catalogs[kind] as Named[], name)
+      .filter((one) => kind !== 'subtypes' || one.material_id === material || one.material_id == null)
+      .sort((a, b) => Number(a.material_id == null) - Number(b.material_id == null))[0]
+    if (column === 'material') material = found?.id ?? null
+    if (found) {
+      changes[column] = [before, found.name]
+      values[`${column}_id`] = found.id
+    } else {
+      changes[column] = [before, name, { new: true }]
+      fresh.push([column, name])
+    }
+  }
+  const insert = cell('insert_type')
+  const insertBefore = shown?.names?.insert_type ?? null
+  if (insert !== null && !(insertBefore !== null && sameName(insertBefore, insert))) {
+    const found = liveNamed(state.catalogs['insert-types'], insert)[0]
+    if (!found) fail(`no insert type named '${insert}'; add it on the Catalog tab with its empty weight`)
+    changes.insert_type = [insertBefore, found.name]
+    values.insert_type_id = found.id
+  }
+  for (const [field, value] of Object.entries(plain)) {
+    const own = field === 'weight_locked' || field === 'note'
+    const before = !current ? null : own ? current[field as 'note'] : (effective[field] ?? null)
+    if (current && JSON.stringify(before) === JSON.stringify(value)) continue
+    if (current && CSV_DECIMALS.has(field) && before != null && Number(before) === Number(value)) continue
+    changes[field] = [before, value]
+    values[field] = value
+  }
+  const temps = badTemps({ ...effective, ...plain })
+  if (temps) fail(temps)
+  let place: string | null = null
+  const location = cell('location')
+  if (location !== null) {
+    const found = liveNamed(state.locations, location)
+    if (!found.length) fail(`no location named '${location}'`)
+    if (found.length > 1) fail(`${found.length} locations are named '${location}'; rename one`)
+    if (!current || current.location_id !== found[0]!.id) {
+      place = found[0]!.id
+      changes.location = [shown?.names?.location ?? null, found[0]!.name]
+    }
+  }
+  const action = current ? 'update' : 'create'
+  if (!write) return { line, action, number: current?.number ?? null, changes, error: null }
+  for (const [column, name] of fresh) {
+    const kind = CSV_CATALOGS[column]
+    const blank = Object.fromEntries([...CATALOG_FIELDS[kind]].map((field) => [field, null]))
+    const made = { ...blank, name, sort_order: 1000, id: crypto.randomUUID(), archived_at: null, created_at: now(), updated_at: now() }
+    if (kind === 'subtypes') Object.assign(made, { material_id: (values.material_id as string | undefined) ?? material })
+    ;(state.catalogs[kind] as unknown[]).push(made)
+    values[`${column}_id`] = made.id
+  }
+  let target: SpoolRow
+  if (!current) {
+    target = newSpool(values)
+    state.spools.push(target)
+    addEvent(target.id, 'created', { source: null })
+  } else {
+    const was = current
+    const edited = Object.fromEntries(
+      Object.entries(values)
+        .filter(([field, value]) => was[field as keyof SpoolRow] !== value)
+        .map(([field, value]) => [field, [was[field as keyof SpoolRow], value]]),
+    )
+    target = { ...was, ...(values as Partial<SpoolRow>), updated_at: now() }
+    state.spools[state.spools.indexOf(was)] = target
+    if (Object.keys(edited).length) addEvent(target.id, 'edited', { data: { changes: edited } })
+  }
+  if (place !== null) {
+    const at = state.spools.findIndex((one) => one.id === target.id)
+    addEvent(target.id, 'moved', { data: { from: target.location_id, to: place } })
+    state.spools[at] = { ...state.spools[at]!, location_id: place, updated_at: now() }
+  }
+  return { line, action, number: target.number, changes, error: null }
+}
+
+/** `import_on`: every row's plan; a write with any error leaves the state as it was. */
+function importRows(rows: Record<string, string | null>[], write: boolean): S['ImportPreview'] | Response {
+  const before = structuredClone(state)
+  const results = rows.map((row, at): S['ImportRowResult'] => {
+    try {
+      return importRow(row, at + 2, write)
+    } catch (error) {
+      if (!(error instanceof RowError)) throw error
+      return { line: at + 2, action: 'error', number: null, changes: {}, error: error.message }
+    }
+  })
+  const errors = results.filter((one) => one.action === 'error')
+  if (write && errors.length) {
+    state = before
+    return problem(422, errors.map((one) => `line ${one.line}: ${one.error}`).join('; '))
+  }
+  return { rows: results }
+}
+
+/** `CsvRow`'s before-validator: derived columns dropped; any other unknown column refused. */
+function csvRows(body: { rows?: unknown }): Record<string, string | null>[] | Response {
+  if (!Array.isArray(body.rows)) return problem(422, 'rows: Field required')
+  const rows: Record<string, string | null>[] = []
+  for (const [at, row] of (body.rows as Record<string, string | null>[]).entries()) {
+    const kept = Object.fromEntries(Object.entries(row).filter(([name]) => !DERIVED_CSV.has(name)))
+    const extra = Object.keys(kept).find((name) => !CSV_COLUMNS.has(name))
+    if (extra) return problem(422, `rows.${at}.${extra}: Extra inputs are not permitted`)
+    rows.push(kept)
+  }
+  return rows
+}
+
 export const handlers = [
   // -- catalogs --
   http.get(`${BASE}/catalog/:kind`, ({ params, request }) => {
@@ -638,6 +849,22 @@ export const handlers = [
     state.spools.push(made)
     addEvent(made.id, 'created', { source: made.grams_left != null ? 'person' : null, grams_after: made.grams_left })
     return HttpResponse.json(view(made), { status: 201 })
+  }),
+  http.post(`${BASE}/spools/import`, async ({ request }) => {
+    const body = (await request.json()) as { rows?: unknown; dry_run?: unknown }
+    if (typeof body.dry_run !== 'boolean') return problem(422, 'dry_run: Field required')
+    const rows = csvRows(body)
+    if (rows instanceof Response) return rows
+    if (body.dry_run) return HttpResponse.json(importRows(rows, false) as S['ImportPreview'])
+    const key = request.headers.get('Idempotency-Key')
+    if (!key) return problem(428, 'This write needs an Idempotency-Key header. Nothing was done.')
+    const asked = JSON.stringify(body)
+    const seen = imports.get(key)
+    if (seen) return seen.body === asked ? HttpResponse.json(seen.answer) : problem(422, 'This Idempotency-Key was used for another request.')
+    const done = importRows(rows, true)
+    if (done instanceof Response) return done
+    imports.set(key, { body: asked, answer: done })
+    return HttpResponse.json(done)
   }),
   http.get(`${BASE}/spools/:id`, ({ params }) => {
     const row = findSpool(String(params.id))

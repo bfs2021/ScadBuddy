@@ -1,6 +1,7 @@
 import { z } from 'zod'
+import type { components } from '../api/schema.js'
 import { ok } from './call.js'
-import { defineTool, json, ToolError, type Tool } from './registry.js'
+import { defineTool, idempotencyKey, json, ToolError, type Tool } from './registry.js'
 
 // ScadBuddy's own filament inventory (#6261, epic #6260): the catalogs a spool type or a
 // spool picks from, the spool types, and the spools with their tags and ledger. Write
@@ -8,6 +9,38 @@ import { defineTool, json, ToolError, type Tool } from './registry.js'
 // Routes: backend/scadbuddy/api/filament.py.
 
 const SOURCE = "ScadBuddy's own filament inventory"
+
+type CsvRow = components['schemas']['CsvRow']
+
+/** The spools CSV's own columns (`filament/csv_import.py` `COLUMNS`, the `CsvRow` schema's keys). */
+const CSV_COLUMNS = [
+  'number',
+  'type',
+  'material',
+  'subtype',
+  'brand',
+  'category',
+  'effect',
+  'colour_name',
+  'rgba',
+  'extra_colours',
+  'diameter_mm',
+  'density_g_cm3',
+  'nozzle_temp_min',
+  'nozzle_temp_max',
+  'bed_temp_min',
+  'bed_temp_max',
+  'label_weight_g',
+  'insert_type',
+  'low_stock_pct',
+  'cost_per_kg',
+  'weight_locked',
+  'location',
+  'note',
+] as const satisfies readonly (keyof CsvRow)[]
+// Every column of the schema is named above: a new `CsvRow` field fails the typecheck here.
+const CSV_COLUMNS_COMPLETE: Exclude<keyof CsvRow, (typeof CSV_COLUMNS)[number]> extends never ? true : never = true
+void CSV_COLUMNS_COMPLETE
 
 const kind = z
   .enum([
@@ -710,6 +743,57 @@ export const filamentTools: Tool[] = [
           `move spool ${spool_id}`,
         ),
       ),
+  }),
+
+  defineTool({
+    name: 'filament_spool_import',
+    label: 'Import spools from CSV rows',
+    description:
+      'Make or change spools from rows of a spools CSV (cells as text, under the export\'s column names: ' +
+      `${CSV_COLUMNS.join(', ')}). A row with a \`number\` changes that spool where a cell differs; an empty cell ` +
+      'changes nothing. A row with no `number` makes a spool (it needs a `type` code or a `material`). Material, ' +
+      'subtype, brand, category and effect names are added to their catalog when missing; `insert_type`, `type` ' +
+      'and `location` must exist (a location is a move). Derived columns (grams_left, last_used_at, ...) are ' +
+      'ignored. It previews first: with `preview_only` it returns that preview (create, update or error per line, ' +
+      'with `[before, after]` changes) and writes nothing. Otherwise it writes only when no line is an error, all ' +
+      'rows at once. Only what the user says. Writes ScadBuddy only.',
+    input: z.object({
+      rows: z
+        .array(z.record(z.string(), z.string().nullable()))
+        .min(1)
+        .max(5000)
+        .describe('One object per CSV row, column name to cell text'),
+      preview_only: z.boolean().default(false).describe('Return the preview and write nothing'),
+    }),
+    risk: 'write',
+    source: SOURCE,
+    routes: ['POST /api/v1/filament/spools/import'],
+    summarize: ({ rows, preview_only }) =>
+      preview_only ? `Preview a spools import of ${rows.length} rows` : `Import ${rows.length} spool rows`,
+    handler: async ({ rows, preview_only }, ctx) => {
+      const preview = await ok(
+        ctx.backend.POST('/api/v1/filament/spools/import', { body: { rows: rows as never, dry_run: true } }),
+        'preview the spools import',
+      )
+      if (preview_only) return json(preview)
+      const errors = preview.rows.filter((r) => r.action === 'error')
+      if (errors.length > 0) {
+        throw new ToolError(
+          `Nothing was imported: ${errors.map((r) => `line ${r.line}: ${r.error ?? ''}`).join('; ')}`,
+        )
+      }
+      // One key per call: a re-send after a lost answer gets the first result and writes nothing.
+      const headers = { 'Idempotency-Key': idempotencyKey(ctx) }
+      return json(
+        await ok(
+          ctx.backend.POST('/api/v1/filament/spools/import', {
+            body: { rows: rows as never, dry_run: false },
+            headers,
+          }),
+          'import the spools',
+        ),
+      )
+    },
   }),
 
   defineTool({

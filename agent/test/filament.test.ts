@@ -379,6 +379,56 @@ describe('filament location tools', () => {
     expect(calls).toBe(1)
   })
 
+  it('previews a CSV import without writing when asked for a preview only', async () => {
+    expect(tool('filament_spool_import').risk).toBe('write')
+    expect(tool('filament_spool_import').gated).toBe(false)
+    const preview = { rows: [{ line: 2, action: 'create', number: null, changes: {}, error: null }] }
+    const sent: { body: unknown; key: string | null }[] = []
+    server.use(
+      http.post(`${BACKEND}/api/v1/filament/spools/import`, async ({ request }) => {
+        sent.push({ body: await request.json(), key: request.headers.get('Idempotency-Key') })
+        return HttpResponse.json(preview)
+      }),
+    )
+    const rows = [{ material: 'PLA', brand: 'Sunlu' }]
+    const result = await runTool(tool('filament_spool_import'), { rows, preview_only: true }, ctx())
+    expect(firstText(result)).toEqual(preview)
+    expect(sent).toEqual([{ body: { rows, dry_run: true }, key: null }])
+  })
+
+  it('imports after a clean preview, with one Idempotency-Key', async () => {
+    const preview = { rows: [{ line: 2, action: 'create', number: null, changes: {}, error: null }] }
+    const done = { rows: [{ line: 2, action: 'create', number: 7, changes: {}, error: null }] }
+    const sent: { body: { dry_run: boolean }; key: string | null }[] = []
+    server.use(
+      http.post(`${BACKEND}/api/v1/filament/spools/import`, async ({ request }) => {
+        const body = (await request.json()) as { dry_run: boolean }
+        sent.push({ body, key: request.headers.get('Idempotency-Key') })
+        return HttpResponse.json(body.dry_run ? preview : done)
+      }),
+    )
+    const result = await runTool(tool('filament_spool_import'), { rows: [{ material: 'PLA' }] }, ctx())
+    expect(firstText(result)).toEqual(done)
+    expect(sent.map((s) => s.body.dry_run)).toEqual([true, false])
+    expect(sent[1]?.key).toMatch(/^[0-9a-f]{32,64}$/)
+  })
+
+  it('writes nothing when the preview holds an error', async () => {
+    const preview = { rows: [{ line: 2, action: 'error', number: null, changes: {}, error: 'no spool #9' }] }
+    let writes = 0
+    server.use(
+      http.post(`${BACKEND}/api/v1/filament/spools/import`, async ({ request }) => {
+        const body = (await request.json()) as { dry_run: boolean }
+        if (!body.dry_run) writes += 1
+        return HttpResponse.json(preview)
+      }),
+    )
+    const result = await runTool(tool('filament_spool_import'), { rows: [{ number: '9' }] }, ctx())
+    expect(result.isError).toBe(true)
+    expect(JSON.stringify(result.content)).toContain('line 2: no spool #9')
+    expect(writes).toBe(0)
+  })
+
   it('says when no Bambuddy is configured', async () => {
     server.use(
       http.post(`${BACKEND}/api/v1/filament/bambuddy/import`, () =>

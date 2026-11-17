@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router'
 import { tabsListVariants } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
+import { SpoolsTab } from './SpoolsTab'
 import { FILAMENT_TABS, type TabId } from './tabs'
 
 /** shadcn's tabs, as links: each tab is a page of its own, as on the Workflows page. */
@@ -45,6 +46,7 @@ export function FilamentPage({ tab }: { tab: TabId }) {
             </NavLink>
           ))}
         </nav>
+        {tab === 'spools' && <SpoolsTab />}
       </div>
     </div>
   )
