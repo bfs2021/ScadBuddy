@@ -1,6 +1,6 @@
-import { Columns3Icon, DownloadIcon, ListFilterIcon, LayoutGridIcon, Rows3Icon, UploadIcon, XIcon } from 'lucide-react'
+import { Columns3Icon, DownloadIcon, ListFilterIcon, LayoutGridIcon, PlusIcon, Rows3Icon, UploadIcon, XIcon } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 import { ApiError } from '../../api/client'
 import { getSummary, listLocations, listSpools, listTypes, type InventorySummary, type LocationNode, type Spool, type SpoolType } from '../../api/filament'
 import { BulkBar, type Place } from '../../components/filament/BulkBar'
@@ -300,6 +300,11 @@ export function SpoolsTab() {
           </DropdownMenu>
         )}
         <div className="ml-auto flex gap-2">
+          <Button size="sm" asChild>
+            <Link to="/filament/spools/new">
+              <PlusIcon /> New spool
+            </Link>
+          </Button>
           <Button size="sm" variant="outline" disabled={!shown.length} onClick={() => void exportCsv()}>
             <DownloadIcon /> Export CSV
           </Button>

@@ -1,4 +1,18 @@
-import { listCatalog, upsertCatalog, upsertType, type CatalogKind, type CatalogRows, type SpoolType } from '../../api/filament'
+import {
+  listCatalog,
+  patchSpool,
+  setSpoolKValues,
+  setSpoolPresets,
+  setTypeKValues,
+  setTypePresets,
+  upsertCatalog,
+  upsertType,
+  type CatalogKind,
+  type CatalogRows,
+  type SpoolDetail,
+  type SpoolPatch,
+  type SpoolType,
+} from '../../api/filament'
 import type { Filament } from '../../api/types'
 
 const same = (a: string, b: string) => a.trim().toUpperCase() === b.trim().toUpperCase()
@@ -68,4 +82,77 @@ export async function makeTypeFromBook(row: Filament): Promise<SpoolType> {
   }).catch((cause: unknown) => {
     throw new MakeTypeError(cause, added)
   })
+}
+
+/** The spool fields a type holds: once a spool has the type they are the type's, so the spool's own are cleared. */
+const TYPE_FIELDS = [
+  'brand_id',
+  'material_id',
+  'subtype_id',
+  'category_id',
+  'effect_id',
+  'colour_name',
+  'rgba',
+  'extra_colours',
+  'diameter_mm',
+  'density_g_cm3',
+  'nozzle_temp_min',
+  'nozzle_temp_max',
+  'bed_temp_min',
+  'bed_temp_max',
+  'label_weight_g',
+  'insert_type_id',
+  'low_stock_pct',
+  'cost_per_kg',
+] as const satisfies readonly (keyof SpoolPatch)[]
+
+/**
+ * #6262 — "Create type from this spool": a spool that has no type becomes the first of
+ * one. The type takes the spool's effective values, its own presets and K values; the
+ * spool then takes the type (`type_id`), drops what the type now holds, and keeps no
+ * preset or K value of its own. A material and a colour are the least a type needs. The
+ * type's code is `BRAND-MATERIAL-SUBTYPE-COLOUR`; a code another type has is the server's
+ * refusal (it names it), which the caller shows.
+ */
+export async function makeTypeFromSpool(spool: SpoolDetail): Promise<SpoolType> {
+  const e = spool.effective
+  if (!e.material_id) throw new Error('Choose the material first.')
+  if (!e.rgba) throw new Error('Choose the colour first.')
+  const code = typeCodeOf({
+    brand: spool.names.brand ?? null,
+    material: spool.names.material ?? '',
+    subtype: spool.names.subtype ?? null,
+    colour_name: e.colour_name ?? null,
+    colour: e.rgba.slice(0, 7),
+  })
+  const type = await upsertType({
+    code,
+    material_id: e.material_id,
+    subtype_id: e.subtype_id ?? null,
+    brand_id: e.brand_id ?? null,
+    category_id: e.category_id ?? null,
+    effect_id: e.effect_id ?? null,
+    insert_type_id: e.insert_type_id ?? null,
+    rgba: e.rgba,
+    colour_name: e.colour_name ?? null,
+    extra_colours: e.extra_colours ?? null,
+    diameter_mm: e.diameter_mm ?? '1.75',
+    density_g_cm3: e.density_g_cm3 ?? null,
+    cost_per_kg: e.cost_per_kg ?? null,
+    label_weight_g: e.label_weight_g ?? 1000,
+    low_stock_pct: e.low_stock_pct ?? null,
+    nozzle_temp_min: e.nozzle_temp_min ?? null,
+    nozzle_temp_max: e.nozzle_temp_max ?? null,
+    bed_temp_min: e.bed_temp_min ?? null,
+    bed_temp_max: e.bed_temp_max ?? null,
+  })
+  const presets = spool.presets.filter((row) => row.overridden).map(({ overridden: _o, ...row }) => row)
+  const kValues = spool.k_values.filter((row) => row.overridden).map(({ overridden: _o, ...row }) => row)
+  if (presets.length > 0) await setTypePresets(type.id, presets)
+  if (kValues.length > 0) await setTypeKValues(type.id, kValues)
+  await patchSpool(spool.id, { type_id: type.id, ...Object.fromEntries(TYPE_FIELDS.map((field) => [field, null])) })
+  // The type holds them now; the first type may already have dropped migrated ones.
+  if (presets.length > 0) await setSpoolPresets(spool.id, [])
+  if (kValues.length > 0) await setSpoolKValues(spool.id, [])
+  return type
 }

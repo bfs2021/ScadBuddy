@@ -9,7 +9,8 @@ type Schemas = components['schemas']
 type Query<Op extends keyof operations> = NonNullable<operations[Op]['parameters']['query']>
 
 export type Spool = Schemas['Spool']
-export type SpoolDetail = Schemas['SpoolDetail']
+/** The spec lists a field the server always sends (it has a default) as optional; here it is required. */
+export type SpoolDetail = Schemas['SpoolDetail'] & Required<Pick<Schemas['SpoolDetail'], 'effective' | 'overridden' | 'names' | 'presets' | 'k_values' | 'low_stock' | 'in_use'>>
 export type SpoolCreate = Schemas['SpoolCreate']
 export type SpoolPatch = Schemas['SpoolPatch']
 export type TagBind = Schemas['TagBind']
@@ -33,6 +34,8 @@ export type LocationPatch = Schemas['LocationPatch']
 export type TagRow = Schemas['TagRow']
 export type TagDetail = Schemas['TagDetail']
 export type EventPage = Schemas['EventPage']
+export type SpoolEvent = Schemas['SpoolEvent']
+export type SpoolEventAdd = Omit<Schemas['SpoolEventAdd'], 'source'> & Partial<Pick<Schemas['SpoolEventAdd'], 'source'>>
 export type LedgerRow = Schemas['LedgerRow']
 export type EventQuery = Query<'list_events_api_v1_filament_events_get'>
 export type InventorySummary = Schemas['InventorySummary']
@@ -117,6 +120,12 @@ export const setSpoolPresets = (id: string, rows: PresetInput[]) =>
 /** Replaces the spool's own K values; the answer is its effective set. */
 export const setSpoolKValues = (id: string, rows: KValueInput[]) =>
   request<EffectiveKValue[]>(`${BASE}/spools/${seg(id)}/k-values`, json('PUT', rows))
+
+/** One spool's ledger, oldest first. */
+export const listSpoolEvents = (id: string) => request<SpoolEvent[]>(`${BASE}/spools/${seg(id)}/events`)
+
+/** A weighing (`grams`: the filament left, without the empty spool) or a drying (`temp_c`, `hours`). */
+export const addSpoolEvent = (id: string, body: SpoolEventAdd) => request<SpoolEvent>(`${BASE}/spools/${seg(id)}/events`, json('POST', body))
 
 /** `null` takes it out of every place. */
 export const moveSpool = (id: string, locationId: string | null) =>

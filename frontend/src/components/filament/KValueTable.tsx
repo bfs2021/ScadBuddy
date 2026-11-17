@@ -1,6 +1,6 @@
-import { PlusIcon, XIcon } from 'lucide-react'
+import { PlusIcon, Undo2Icon, XIcon } from 'lucide-react'
 import { useId } from 'react'
-import type { TypeKValueInput } from '../../api/filament'
+import type { EffectiveKValue, TypeKValueInput } from '../../api/filament'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import type { KPrinter } from './kValueRows'
@@ -15,7 +15,14 @@ interface Props {
   rows: TypeKValueInput[]
   onChange: (rows: TypeKValueInput[]) => void
   printers: KPrinter[]
+  /**
+   * A spool's effective K values. A value the spool does not override shows the type's,
+   * dimmed, with "From type" and an Override button; an own row has "Reset to type".
+   */
+  inherited?: EffectiveKValue[]
 }
+
+const keyOf = (row: Pick<TypeKValueInput, 'printer_id' | 'extruder' | 'nozzle_diameter'>) => `${row.printer_id}|${row.extruder}|${row.nozzle_diameter.trim()}`
 
 /**
  * #6262 — pressure advance (K) values by printer, extruder and nozzle, as Bambu Studio's
@@ -23,10 +30,13 @@ interface Props {
  * index and slicer setting id the printer reported stay on the row; a person edits the
  * rest.
  */
-export function KValueTable({ rows, onChange, printers }: Props) {
+export function KValueTable({ rows, onChange, printers, inherited }: Props) {
   const listId = useId()
   const set = (at: number, patch: Partial<TypeKValueInput>) => onChange(rows.map((row, i) => (i === at ? { ...row, ...patch } : row)))
   const known = new Set(printers.map((printer) => printer.id))
+  const own = new Set(rows.map(keyOf))
+  const fromType = (inherited ?? []).filter((row) => !row.overridden && !own.has(keyOf(row)))
+  const printerName = (id: string) => printers.find((printer) => printer.id === id)?.name ?? `Printer ${id.slice(0, 8)}`
   return (
     <div className="flex flex-col gap-2">
       <div className="overflow-x-auto rounded-md border">
@@ -82,13 +92,55 @@ export function KValueTable({ rows, onChange, printers }: Props) {
                   <Input aria-label="K value name" className="h-7 min-w-36" value={row.name ?? ''} onChange={(e) => set(at, { name: e.target.value === '' ? null : e.target.value })} />
                 </td>
                 <td className="px-2 py-1 whitespace-nowrap">
-                  <Button type="button" size="icon-xs" variant="ghost" aria-label={`Remove K value ${at + 1}`} onClick={() => onChange(rows.filter((_, i) => i !== at))}>
-                    <XIcon />
+                  {inherited ? (
+                    <Button type="button" size="xs" variant="ghost" onClick={() => onChange(rows.filter((_, i) => i !== at))}>
+                      <Undo2Icon /> Reset to type
+                    </Button>
+                  ) : (
+                    <Button type="button" size="icon-xs" variant="ghost" aria-label={`Remove K value ${at + 1}`} onClick={() => onChange(rows.filter((_, i) => i !== at))}>
+                      <XIcon />
+                    </Button>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {fromType.map((row) => (
+              <tr key={keyOf(row)} aria-label={`${printerName(row.printer_id)} ${row.nozzle_diameter} from type`} className="border-t opacity-60">
+                <td className="px-2 py-1.5">{printerName(row.printer_id)}</td>
+                <td className="px-2 py-1.5 tabular-nums">{row.extruder}</td>
+                <td className="px-2 py-1.5 tabular-nums">{row.nozzle_diameter}</td>
+                <td className="px-2 py-1.5">{row.nozzle_type}</td>
+                <td className="px-2 py-1.5 text-right tabular-nums">{text(row.k_value)}</td>
+                <td className="px-2 py-1.5">
+                  {row.name} <span className="ml-1 text-[12px] text-muted-foreground">From type</span>
+                </td>
+                <td className="px-2 py-1 whitespace-nowrap">
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="ghost"
+                    onClick={() =>
+                      onChange([
+                        ...rows,
+                        {
+                          printer_id: row.printer_id,
+                          extruder: row.extruder,
+                          nozzle_diameter: row.nozzle_diameter,
+                          nozzle_type: row.nozzle_type,
+                          k_value: text(row.k_value),
+                          name: row.name,
+                          cali_idx: row.cali_idx,
+                          setting_id: row.setting_id,
+                        },
+                      ])
+                    }
+                  >
+                    Override
                   </Button>
                 </td>
               </tr>
             ))}
-            {rows.length === 0 && (
+            {rows.length === 0 && fromType.length === 0 && (
               <tr className="border-t">
                 <td colSpan={7} className="px-2 py-3 text-muted-foreground">
                   No K values. Add one for each printer, extruder and nozzle you calibrated this type on.

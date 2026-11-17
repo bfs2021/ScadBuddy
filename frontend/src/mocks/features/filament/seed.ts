@@ -462,7 +462,8 @@ function events(): S['SpoolEvent'][] {
 }
 
 /** A spool's own preset row (`filament_spool_presets`); the spec carries only the effective one. */
-export type SpoolPreset = Omit<S['TypePreset'], 'type_id'> & { spool_id: string }
+/** `migrated` marks a row the #6262 migration made from a spool's old preset: its first type drops it (`presets.drop_migrated`). */
+export type SpoolPreset = Omit<S['TypePreset'], 'type_id'> & { spool_id: string; migrated?: boolean }
 /** A spool's own K value row (`filament_spool_k_values`). */
 export type SpoolKValue = Omit<S['TypeKValue'], 'type_id'> & { spool_id: string }
 
@@ -474,7 +475,9 @@ export function seed() {
     types: types(),
     typePresets: typePresets(),
     typeKValues: typeKValues(),
-    spoolPresets: [] as SpoolPreset[],
+    spoolPresets: [
+      { spool_id: spoolId(6), printer_model: 'H2C', nozzle_diameter: '0.4', slicer_filament: 'GFA00', slicer_filament_name: 'Bambu PLA Basic @BBL H2C', migrated: true },
+    ] as SpoolPreset[],
     spoolKValues: [] as SpoolKValue[],
     spools: spools(),
     tags: tags(),

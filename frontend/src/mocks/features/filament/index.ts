@@ -117,7 +117,7 @@ function effectivePresets(spoolId: string): S['EffectivePreset'][] {
   const owned = new Set(own.map(key))
   const inherited = state.typePresets.filter((one) => one.type_id === row?.type_id && !owned.has(key(one)))
   return [
-    ...own.map(({ spool_id: _, ...rest }) => ({ ...rest, overridden: true })),
+    ...own.map(({ spool_id: _, migrated: __, ...rest }) => ({ ...rest, overridden: true })),
     ...inherited.map(({ type_id: _, ...rest }) => ({ ...rest, overridden: false })),
   ]
 }
@@ -888,6 +888,8 @@ export const handlers = [
     )
     if (Object.keys(changes).length) {
       state.spools[at] = { ...next, updated_at: now() }
+      // `presets.drop_migrated`: a spool's first type drops the presets its migration made.
+      if (!current.type_id && next.type_id) state.spoolPresets = state.spoolPresets.filter((one) => !(one.spool_id === current.id && one.migrated))
       addEvent(current.id, 'edited', { data: { changes } })
     }
     if (typeof archived === 'boolean') setArchived(at, archived)
