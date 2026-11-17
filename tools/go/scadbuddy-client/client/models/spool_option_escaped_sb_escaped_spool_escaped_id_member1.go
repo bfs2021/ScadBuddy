@@ -7,39 +7,39 @@ import (
 	i878a80d2330e89d26896388a3f487eef27b0a0e6c010c493bf80be1452208f91 "github.com/microsoft/kiota-abstractions-go/serialization"
 )
 
-type FilamentOptions_provider_labels struct {
+type SpoolOption_sb_spool_idMember1 struct {
 	// Stores additional data not described in the OpenAPI description found when deserializing. Can be used for serialization as well.
 	additionalData map[string]any
 }
 
-// NewFilamentOptions_provider_labels instantiates a new FilamentOptions_provider_labels and sets the default values.
-func NewFilamentOptions_provider_labels() *FilamentOptions_provider_labels {
-	m := &FilamentOptions_provider_labels{}
+// NewSpoolOption_sb_spool_idMember1 instantiates a new SpoolOption_sb_spool_idMember1 and sets the default values.
+func NewSpoolOption_sb_spool_idMember1() *SpoolOption_sb_spool_idMember1 {
+	m := &SpoolOption_sb_spool_idMember1{}
 	m.SetAdditionalData(make(map[string]any))
 	return m
 }
 
-// CreateFilamentOptions_provider_labelsFromDiscriminatorValue creates a new instance of the appropriate class based on discriminator value
+// CreateSpoolOption_sb_spool_idMember1FromDiscriminatorValue creates a new instance of the appropriate class based on discriminator value
 // returns a Parsable when successful
-func CreateFilamentOptions_provider_labelsFromDiscriminatorValue(parseNode i878a80d2330e89d26896388a3f487eef27b0a0e6c010c493bf80be1452208f91.ParseNode) (i878a80d2330e89d26896388a3f487eef27b0a0e6c010c493bf80be1452208f91.Parsable, error) {
-	return NewFilamentOptions_provider_labels(), nil
+func CreateSpoolOption_sb_spool_idMember1FromDiscriminatorValue(parseNode i878a80d2330e89d26896388a3f487eef27b0a0e6c010c493bf80be1452208f91.ParseNode) (i878a80d2330e89d26896388a3f487eef27b0a0e6c010c493bf80be1452208f91.Parsable, error) {
+	return NewSpoolOption_sb_spool_idMember1(), nil
 }
 
 // GetAdditionalData gets the AdditionalData property value. Stores additional data not described in the OpenAPI description found when deserializing. Can be used for serialization as well.
 // returns a map[string]any when successful
-func (m *FilamentOptions_provider_labels) GetAdditionalData() map[string]any {
+func (m *SpoolOption_sb_spool_idMember1) GetAdditionalData() map[string]any {
 	return m.additionalData
 }
 
 // GetFieldDeserializers the deserialization information for the current model
 // returns a map[string]func(i878a80d2330e89d26896388a3f487eef27b0a0e6c010c493bf80be1452208f91.ParseNode) error when successful
-func (m *FilamentOptions_provider_labels) GetFieldDeserializers() map[string]func(i878a80d2330e89d26896388a3f487eef27b0a0e6c010c493bf80be1452208f91.ParseNode) error {
+func (m *SpoolOption_sb_spool_idMember1) GetFieldDeserializers() map[string]func(i878a80d2330e89d26896388a3f487eef27b0a0e6c010c493bf80be1452208f91.ParseNode) error {
 	res := make(map[string]func(i878a80d2330e89d26896388a3f487eef27b0a0e6c010c493bf80be1452208f91.ParseNode) error)
 	return res
 }
 
 // Serialize serializes information the current object
-func (m *FilamentOptions_provider_labels) Serialize(writer i878a80d2330e89d26896388a3f487eef27b0a0e6c010c493bf80be1452208f91.SerializationWriter) error {
+func (m *SpoolOption_sb_spool_idMember1) Serialize(writer i878a80d2330e89d26896388a3f487eef27b0a0e6c010c493bf80be1452208f91.SerializationWriter) error {
 	{
 		err := writer.WriteAdditionalData(m.GetAdditionalData())
 		if err != nil {
@@ -50,11 +50,11 @@ func (m *FilamentOptions_provider_labels) Serialize(writer i878a80d2330e89d26896
 }
 
 // SetAdditionalData sets the AdditionalData property value. Stores additional data not described in the OpenAPI description found when deserializing. Can be used for serialization as well.
-func (m *FilamentOptions_provider_labels) SetAdditionalData(value map[string]any) {
+func (m *SpoolOption_sb_spool_idMember1) SetAdditionalData(value map[string]any) {
 	m.additionalData = value
 }
 
-type FilamentOptions_provider_labelsable interface {
+type SpoolOption_sb_spool_idMember1able interface {
 	i878a80d2330e89d26896388a3f487eef27b0a0e6c010c493bf80be1452208f91.AdditionalDataHolder
 	i878a80d2330e89d26896388a3f487eef27b0a0e6c010c493bf80be1452208f91.Parsable
 }
