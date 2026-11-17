@@ -951,10 +951,10 @@ the zones: [docs/security/trust-boundaries.md](docs/security/trust-boundaries.md
    which every caller has run: people in the browser and in Bambuddy's frame, the agent
    (a chat, a flow run), a print, `bambuddy-fs` with a personal access token. A
    `no_credential` count on `internal.*` is a worker without its credential, and an
-   `out_of_scope` count there is a credential without that class (a 403, #5514); since
-   #5297 part 1 each of those is also a refusal in every mode, not only in `enforce`; `no_request_header`
-   is a page older than the request header; `author_header` is a caller naming an author
-   it may not.
+   `out_of_scope` count there is a credential without that class (a 403, #5514). Since
+   #5297 each of those is also refused in every mode, not only in `enforce`.
+   `no_request_header` is a page older than the request header; `author_header` is a
+   caller naming an author it may not.
 5. `SCADBUDDY_AUTH_MODE=enforce` on the API and the agent sidecar. The API refuses to
    start without a usable login, so a broken login fails the new pod's readiness and the
    rollout keeps the old pods.
@@ -962,7 +962,9 @@ the zones: [docs/security/trust-boundaries.md](docs/security/trust-boundaries.md
 The way back is `SCADBUDDY_AUTH_MODE=observe` and a rollout; with the issuer down, a
 person signs in with the break-glass link
 (`kubectl exec deploy/scadbuddy -- python -m scadbuddy.auth.break_glass`). The default
-for a new install stays `off`.
+for a new install stays `off`. The homelab's prod deployment stays in `off` (its front
+door gates people; the owner's decision of 2026-11-17): it used `observe` only to
+measure step 4 for the internal routes (#5297).
 
 A deploy that rolls the pod also migrates the database at startup
 (`backend/scadbuddy/migrations/`: `20260928T0630Z_events.sql` adds the `events`
@@ -1248,9 +1250,9 @@ clusters. It serves `/healthz` (`{"ok": true, "build_id": …, "task_queue": …
   native run's per-print copy is also written, #3818; neither in the OpenAPI schema), at `SCADBUDDY_API_INTERNAL_URL` (the API's Service, e.g.
   `http://scadbuddy:8080`; never the ingress). Each of those route groups takes only the
   service credential whose scope names it (#4975: the print worker's covers
-  `internal.outputs`, `internal.library` and `crud.print`, and nothing else); in `SCADBUDDY_AUTH_MODE=off`
-  and `observe` they still serve anyone who reaches the API, so until `enforce` they are
-  internal by path only. The agent's workspace blob routes
+  `internal.outputs`, `internal.library` and `crud.print`, and nothing else), in every
+  `SCADBUDDY_AUTH_MODE` (#5297, `auth/internal_guard.py`): a request without a live
+  service credential is a 401, one without the route's class a 403. The agent's workspace blob routes
   (`/api/v1/internal/workspace-blobs/…`, #4789) are the agent's credential's
   (`internal.workspace`) in the same way: `POST /uploads` is a write path, minting a token
   for one internal PUT of up to 128 MiB with no workflow or row behind it. An output's last print is recorded in

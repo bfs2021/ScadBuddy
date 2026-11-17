@@ -136,6 +136,21 @@ def test_the_guard_refuses_in_every_mode(mode: str) -> None:
         assert response.headers["Cache-Control"] == "no-store"
 
 
+@pytest.mark.parametrize("mode", ["off", "observe"])
+def test_the_real_internal_router_refuses_without_enforce(mode: str) -> None:
+    """#5297: the real `api/internal.py` router refuses outside `enforce` too, by its own
+    guard (`auth/internal_guard.py`): no credential is a 401, another class a 403."""
+    client = _client(mode)
+    url = "/api/v1/internal/outputs/nope/model.3mf"
+    none = client.get(url)
+    assert none.status_code == 401
+    assert none.json()["reason"] == "no_credential"
+    assert none.headers["WWW-Authenticate"] == 'Bearer realm="scadbuddy"'
+    other = client.get(url, headers={"authorization": "Bearer sbsvc_agent"})
+    assert other.status_code == 403
+    assert other.json()["reason"] == "out_of_scope"
+
+
 def test_enforce_answers_an_internal_route_as_a_crud_one() -> None:
     """#5514: a live credential without the class is a 403, not a 401 that would make the
     client exchange again and loop; only no live credential is a 401."""
