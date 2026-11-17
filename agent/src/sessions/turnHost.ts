@@ -1115,8 +1115,10 @@ class Spend {
   #closed = false
 
   /**
-   * The end's write's key (`TurnHost#write`): the placement's attempt and turn, not the token, so
-   * a retry of the activity whose end lost its answer sends the end under the same key.
+   * The end's write's key (`TurnHost#write`): the placement's attempt and turn. `session_turn` is
+   * never retried (`maximumAttempts: 1`) and each placement has an attempt of its own
+   * (`${runId}:${cycle}`, temporal/session/workflow.ts), so the key is this placement's alone, as
+   * the token is; it names the attempt and turn so the key row says which end it was.
    */
   readonly endKey: string
 
