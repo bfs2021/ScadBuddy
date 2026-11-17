@@ -137,6 +137,10 @@ from scadbuddy.crud.guard import CrudCaller, crud_router
 #: Its ``session-edits`` area is ``…/agent/sessions/{id}/edit``: a rename, marking a session done
 #: and archiving it, under the row's lock with its warm eviction, an archive's ``done`` summaries
 #: dismissed and their events in one transaction (#6449, `api/crud_agent_edits.py`).
+#: Its ``migrations`` area is ``…/agent/migrations/ledger``, the ledger rows of the files the
+#: agent expects, which it waits for at its start; its ``auth-sessions`` area is
+#: ``…/agent/auth-sessions/lookup``, a signed-in person's live session by its cookie's hash
+#: (#6501, `api/crud_agent_start.py`).
 CRUD_AREAS: dict[CrudCaller, list[str]] = {
     "projects": ["flows", "operations", "payload-keys"],
     "render": ["settings", "jobs", "refs", "blob-index", "store-folders", "assets", "libraries"],
@@ -210,6 +214,8 @@ CRUD_AREAS: dict[CrudCaller, list[str]] = {
         "session-reads",
         "session-turns",
         "session-edits",
+        "migrations",
+        "auth-sessions",
     ],
     "intake": ["sources"],
 }

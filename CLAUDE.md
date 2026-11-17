@@ -51,8 +51,8 @@ agent sidecar, the agent worker and agent-durable), and the agent and the API sh
 tables through grants. The render, print and projects workers hold none: #5298 is done,
 and prod has no `scadbuddy_render`, `scadbuddy_print` or `scadbuddy_projects` role and no
 database secret in those pods (measured 2026-11-14, after eh-homelab/clusters#3555,
-#3566 and #3578). The API still revokes those roles at every start where they exist, and
-the agent what it granted `scadbuddy_projects`. Template Python still runs in the render
+#3566 and #3578). The API still revokes those roles at every start where they exist; the
+agent revokes nothing since #6501. Template Python still runs in the render
 worker's pod, which holds no database secret now but holds its `crud.render` credential,
 the S3 keys and the Bambuddy render key. Do the rest in this order: #5299 (the agent),
 #5297 (authenticate `/api/v1/internal/*`, then `enforce`), #5296 (untrusted code out of

@@ -82,6 +82,13 @@ export const REST_AREAS = ['publish', 'session-reads'] as const
  */
 export const TURN_AREAS = ['session-turns', 'session-edits'] as const
 
+/**
+ * What the agent read at its start and per request (#6501; backend api/crud_agent_start.py):
+ * the ledger of its migrations (db/schema.ts `crudLedger`) and a signed-in person's session
+ * (auth/browserSession.ts `CrudSessionLookup`).
+ */
+export const START_AREAS = ['migrations', 'auth-sessions'] as const
+
 export type CrudAreasOptions = {
   fetch?: typeof fetch
   /** The areas the agent waits for. */
@@ -101,6 +108,7 @@ export class CrudAreas {
   readonly #firstMs: number
   readonly #maxMs: number
   readonly #listed = new Set<string>()
+  #answering: Promise<boolean> | undefined
   #timer: NodeJS.Timeout | undefined
   #started = false
   #stopped = false
@@ -124,6 +132,23 @@ export class CrudAreas {
   /** Whether every wanted area is served. */
   get complete(): boolean {
     return this.#wanted.every((a) => this.#listed.has(a))
+  }
+
+  /**
+   * Whether the API answers the agent's areas within `timeoutMs`: what health requires besides
+   * the Postgres ping once every area is listed (#6501). One read at a time, shared by every
+   * caller; never throws.
+   */
+  answers(timeoutMs = 2_000): Promise<boolean> {
+    this.#answering ??= crudRead<unknown>(this.#fetch, this.#base, 'its areas', '/areas', { timeoutMs })
+      .then(
+        () => true,
+        () => false,
+      )
+      .finally(() => {
+        this.#answering = undefined
+      })
+    return this.#answering
   }
 
   /** Reads the areas until every wanted one is listed, in the background; never throws. */

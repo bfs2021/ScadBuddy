@@ -880,8 +880,9 @@ The counter
 `scadbuddy_service_token_exchanges_total{caller, proof, result}` counts them. An exchange
 the API answers `404` (an older API pod during a roll) falls back to the view while the
 caller still has a database URL, except on the workers that hold no database (render,
-print and projects): they take the exchange only (`exchange_source`), since the CRUD areas
-they wait for come only from an API that serves the exchange (#5298). The API's own in-process `projects` worker gets its
+print and projects) and the agent: they take the exchange only (`exchange_source`; the
+agent's `ExchangeCredential`, #6501), since the CRUD areas they wait for come only from an
+API that serves the exchange (#5298). The API's own in-process `projects` worker gets its
 credential minted in memory. `GET /api/v1/auth/service-credentials` returns each
 credential's `proof`, `pod_name` and `pod_uid` (the Settings page does not show them, or the
 `render` caller, yet), and the API also revokes every credential of a pod
@@ -911,7 +912,7 @@ store or another caller's credential:
 |---|---|---|
 | render worker | none: the worker has no database client and ignores the URL (#5298 Task 20); the API revokes everything the role `scadbuddy_render` held at every start where the role still exists (#5298 Task 22) | none: prod sets none and has no such role (eh-homelab/clusters#3555, #3566, #3578; measured 2026-11-14) |
 | print worker | none: the worker holds no pool and no KEK. It exchanges its proof only (`exchange_source`, no view fallback) and ignores `SCADBUDDY_DATABASE_URL` with a warning; with no proof it refuses to start (#5298 Task 33). The API revokes everything the role `scadbuddy_print` held at every start where the role still exists (#5298 Task 35) | none: prod sets none and has no such role (as above) |
-| flow runs' worker | none: the worker has no database client and ignores the URL (#5298); the API and the agent revoke everything the role `scadbuddy_projects` held at every start where the role still exists | none: prod sets none and has no such role (as above) |
+| flow runs' worker | none: the worker has no database client and ignores the URL (#5298); the API revokes everything the role `scadbuddy_projects` held at every start where the role still exists | none: prod sets none and has no such role (as above) |
 | agent sidecar | `scadbuddy_agent` | the sidecar in `scadbuddy.yaml` |
 
 Create each role with a password (`CREATE ROLE scadbuddy_agent LOGIN PASSWORD '…'`; on
@@ -919,9 +920,9 @@ CNPG a `managed.roles` entry) and point that caller's `SCADBUDDY_DATABASE_URL` a
 the API itself stays on the database's owner role. At every start the API grants each
 role that exists exactly its list (`backend/scadbuddy/auth/caller_grants.py`) and its
 credential's view; a role created
-after the API started is granted on the API's next start. The agent's role owns the
-`ai_*` tables it migrates and grants what the API's role reads of them
-(`agent/src/db/grants.ts`).
+after the API started is granted on the API's next start. The agent grants nothing
+since #6501: on separate roles, the API's role must own the `ai_*` tables (the files it
+applies since #5299 D6 already are; transfer the older ones with `ALTER TABLE … OWNER TO`).
 
 On 2026-11-05 the render, print and projects workers connected as their own roles (the
 projects worker has made no connection since 2026-11-07, and the print worker none since
@@ -1919,7 +1920,9 @@ the backend on `http://127.0.0.1:8080` (§4.3).
   the previous file from every container and restart again. A row the old key
   cannot open is left as it is and counted in that log line. Which tables each
   one re-wraps: `docs/ai/operating.md` §3.3.
-- `/healthz` reports `"ai": "enabled"` only when the database answers, its
+- `/healthz` reports `"ai": "enabled"` only when the database answers (and, once the API lists
+  every area the agent wants, the API answers them too: `database` reads `unreachable` when either
+  does not, and the agent logs which, #6501), its
   `ai_*` migrations have applied (`backend/scadbuddy/migrations_agent/`, which
   the API applies at its start; the agent waits for them, #5299), the key is loaded and a Claude credential is
   saved. Otherwise `ai` names the first missing piece; each database step is

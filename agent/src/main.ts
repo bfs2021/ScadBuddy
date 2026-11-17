@@ -34,8 +34,8 @@ import { agentTimezone } from './background/schedule.js'
 import { BackgroundTasks } from './background/service.js'
 import { BackgroundTaskStore, CrudBackgroundTasks } from './background/store.js'
 import { runCronPasses, temporalTaskRunner } from './background/temporal.js'
-import { connectDatabase } from './db.js'
-import { MigrationChecksumError } from './db/schema.js'
+import { connectDatabase, type Database } from './db.js'
+import { crudLedger, type LedgerReader, MigrationChecksumError, sqlLedger } from './db/schema.js'
 import { CrudEventLogReads } from './events/eventLogReads.js'
 import { PgEventListener } from './events/pgListener.js'
 import { DEFAULT_STATE_DIR, pluginCacheDir } from './harness/options.js'
@@ -71,7 +71,7 @@ import {
   withServiceCredential,
 } from './api/serviceCredential.js'
 import { untilBackendAnswers } from './api/backendUp.js'
-import { BLOB_AREAS, CrudAreas, FORGET_AREAS, GATE_AREAS, RELAY_AREAS, SECRET_AREAS, SESSION_AREAS, TASK_AREAS, TURN_AREAS, WORKSPACE_AREAS, REST_AREAS } from './api/crudAreas.js'
+import { BLOB_AREAS, CrudAreas, FORGET_AREAS, GATE_AREAS, RELAY_AREAS, SECRET_AREAS, SESSION_AREAS, START_AREAS, TASK_AREAS, TURN_AREAS, WORKSPACE_AREAS, REST_AREAS } from './api/crudAreas.js'
 import { CrudApprovals } from './approvals/crudApprovals.js'
 import { CrudAudit } from './audit/crudAudit.js'
 import { CrudPending } from './gate/crudPending.js'
@@ -80,7 +80,7 @@ import { CrudEscalations } from './flows/crudEscalations.js'
 import { CrudGate } from './gate/crudStore.js'
 import { gated, STORE_AREAS, type StoreArea } from './api/crudStores.js'
 import { CrudFlowRunReads } from './flows/backendReads.js'
-import { BrowserSessions } from './auth/browserSession.js'
+import { BrowserSessions, CrudSessionLookup, PgSessionLookup, type SessionLookup } from './auth/browserSession.js'
 import { sealBackfill } from './sessions/sealBackfill.js'
 import { ApprovalActions } from './approvals/mcp.js'
 import { approvalHashKey, sweepErrorText } from './approvals/service.js'
@@ -233,22 +233,21 @@ if (previousKek && !previousKek.ok) {
   console.error(`previous secret key: ${previousKek.detail ?? previousKek.reason}; rows sealed under it will not open here`)
 }
 
-const database = config.databaseUrl
+const database: Database | undefined = config.databaseUrl
   ? connectDatabase(config.databaseUrl, {
       onMigrationError: (err) => {
         console.error('the database is not ready:', (err as Error).message)
         // An edited migration is not a transient failure: stop, visibly.
         if (err instanceof MigrationChecksumError) process.exit(1)
       },
+      // The ledger through the API once it lists area `migrations` (#6501), over SQL until then.
+      ledger: (sql: Sql): LedgerReader => (expected) => (crudAreas.has('migrations') ? crudLedger(crudTarget) : sqlLedger(sql))(expected),
     })
   : undefined
-// Migrate in the background: a database that is down at start-up is retried
-// by the next /healthz or API call instead of stopping the pod.
-void database?.ready()
 // #4975 phase 4: the agent's service credential, on the client and the workspace blob routes.
-// #5494: exchanged for its proof when one is configured, falling back to the view while the
-// agent has a database (an old backend answers the exchange 404); otherwise read from the view.
-const credentialView = database ? new ServiceCredential(database.sql, kek.ok ? kek.kek : undefined) : undefined
+// #5494: exchanged for its proof when one is configured: the API checks the proof, and the agent
+// reads no view (#6501; every API answers the exchange since #5494). Without a proof it is read
+// from the view `service_credentials_agent` over SQL, until #5299 step 12 makes a proof required.
 const proofFile = config.serviceTokenFile ?? config.serviceBootstrapFile
 const serviceCredential: CredentialSource | undefined =
   proofFile !== undefined
@@ -256,9 +255,10 @@ const serviceCredential: CredentialSource | undefined =
         backendUrl: config.backendUrl,
         proofFile,
         proof: config.serviceTokenFile !== undefined ? 'k8s' : 'bootstrap',
-        ...(credentialView ? { fallback: credentialView } : {}),
       })
-    : credentialView
+    : database
+      ? new ServiceCredential(database.sql, kek.ok ? kek.kek : undefined)
+      : undefined
 // The agent's settings, its Claude credentials and its payload data keys (#5299 step 4, D5) go
 // through the backend's CRUD routes once the API lists their areas, read from the start and
 // again with back-off until it does (api/crudAreas.ts); over SQL until then, as an API pod older
@@ -269,11 +269,34 @@ const serviceCredential: CredentialSource | undefined =
 // gate's writes (#5299 step 10, `GATE_AREAS`), but for a run grant's check, which only the API runs,
 // and the sessions' rows and what their calls touched (#5299 step 9, `SESSION_AREAS`).
 const crudFetch = serviceCredential ? withServiceCredential(globalThis.fetch, serviceCredential, config.backendUrl) : globalThis.fetch
-const crudAreas = new CrudAreas(config.backendUrl, { fetch: crudFetch, wanted: [...SECRET_AREAS, ...FORGET_AREAS, ...STORE_AREAS, ...WORKSPACE_AREAS, ...BLOB_AREAS, ...TASK_AREAS, ...GATE_AREAS, ...SESSION_AREAS, ...REST_AREAS, ...TURN_AREAS, ...RELAY_AREAS] })
+const crudAreas = new CrudAreas(config.backendUrl, { fetch: crudFetch, wanted: [...SECRET_AREAS, ...FORGET_AREAS, ...STORE_AREAS, ...WORKSPACE_AREAS, ...BLOB_AREAS, ...TASK_AREAS, ...GATE_AREAS, ...SESSION_AREAS, ...REST_AREAS, ...TURN_AREAS, ...RELAY_AREAS, ...START_AREAS] })
 crudAreas.start()
 // The small stores (#5299 step 5, api/crudStores.ts): each through its CRUD routes once the API
 // lists its area, over SQL until then.
 const crudTarget = { baseUrl: config.backendUrl, fetch: crudFetch }
+// Wait for the schema in the background: an API that has not migrated yet, or a database that is
+// down at start-up, is retried by the next /healthz or API call instead of stopping the pod.
+void database?.ready()
+// Health's probe of the agent's data (#6501): the Postgres ping, since the agent still runs SQL
+// (the LISTEN bus, a turn's claim and end, the MCP relay) until #5299 step 12, and, once the API
+// lists every area, its answer to them too. A change in the API's answer is logged, as /healthz
+// reports both under `database`.
+let apiAnswered = true
+const dataHealth = database
+  ? {
+      ...database,
+      ping: async (timeoutMs?: number) => {
+        if (!(await database.ping(timeoutMs))) return false
+        if (!crudAreas.complete) return true
+        const answered = await crudAreas.answers(timeoutMs)
+        if (answered !== apiAnswered) {
+          apiAnswered = answered
+          console.warn(answered ? "health: the API answers the agent's CRUD areas again" : "health: the API does not answer the agent's CRUD areas; /healthz reports database unreachable")
+        }
+        return answered
+      },
+    }
+  : undefined
 const storeArea = (area: StoreArea) => () => crudAreas.has(area)
 // The tool-call gate's routes (#5299 step 10, backend api/crud_agent_gate.py).
 const gateRoutes = { crud: new CrudGate(crudTarget), use: () => crudAreas.has('gate') }
@@ -438,7 +461,10 @@ const mcpRelay =
     : undefined
 // #4975 phase 5 (spec 2026-11-01 §5.6): the signed-in person on /api/v1/ai/*, from the
 // backend's `auth_sessions_agent`; a revocation the backend publishes drops its cache.
-const browserSessions = role.http && database ? new BrowserSessions(database.sql) : undefined
+const browserSessions =
+  role.http && database
+    ? new BrowserSessions(gated<SessionLookup>(new PgSessionLookup(database.sql), new CrudSessionLookup(crudTarget), () => crudAreas.has('auth-sessions')))
+    : undefined
 if (browserSessions && events) browserSessions.follow(events)
 events?.start()
 const resources = new ResourceHub(events)
@@ -1414,7 +1440,7 @@ if (pushDispatcher && database) {
 const app = !role.http
   ? undefined
   : createApp({
-  database,
+  database: dataHealth,
   backend: () => backendReachable(backend),
   ...(workspaceBytesStatus ? { workspaceBytes: workspaceBytesStatus } : {}),
   kek,
@@ -1495,7 +1521,7 @@ const app = !role.http
 const health = role.http
   ? undefined
   : workerHealthApp({
-      ...(database ? { database } : {}),
+      ...(dataHealth ? { database: dataHealth } : {}),
       kek,
       workers: () =>
         Object.fromEntries(

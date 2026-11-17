@@ -20,8 +20,8 @@ view fallback), refuses to start without one, and ignores `SCADBUDDY_DATABASE_UR
 warning; the API opens every sealed value it needs (area `access-codes`: whether the API
 opens access codes, and a virtual printer's sealed code). The projects and render workers have no database client
 (#5298): they reach their data through CRUD routes. Neither has a grant list. The API
-and the agent revoke what the projects worker's old role `scadbuddy_projects` held at
-every start (`auth/revoke.py`, `agent/src/db/grants.ts` `revokeRole`), and the API what
+revokes what the projects worker's old role `scadbuddy_projects` held at every start
+(`auth/revoke.py`; the agent no longer revokes or grants anything, #6501), and what
 the render worker's old role `scadbuddy_render` held (#5298 Task 22). The render
 worker also holds no KEK and runs only on a remote store (plan D11). Its blob-index
 routes take an allowlist (`api/crud_render.py` `RENDER_KEY`, `HELD_KEY`): it writes only
@@ -50,7 +50,8 @@ at `POST /api/v1/auth/service-token` (`ExchangeReader`; route `api/service_token
 credential, falling back to its view on a 404 while it has a database URL; otherwise it
 reads its sealed one from its view (`TokenReader`), as before (#5494). A caller with no database
 (the projects, render and print workers, #5298) takes `exchange_source` instead: the exchange
-only, with no view, and no proof refuses its start.
+only, with no view, and no proof refuses its start. The agent's `ExchangeCredential` reads no
+view on a 404 either (#6501); without a proof it still reads its view until #5299 step 12.
 `ExchangeReader`, `exchange_source` and `ServiceAuth`
 live in `auth/service_auth.py`, which imports no Postgres code (`service_credentials.py`
 re-exports them), so the storefront edge (`python -m scadbuddy.storefront`, #5282; it holds
@@ -198,8 +199,8 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   `tests/conftest.py`; a table or other object an agent migration creates belongs to the
   role the API connects as, not the agent's. Prod's API and agent connect as one role, so
   nothing changes there; with a role per caller, the agent could not use what a later file
-  makes (nothing grants it: `agent/src/db/grants.ts` grants only from the agent's own
-  tables to the API's role), so such a deployment keeps the API and the agent on one role
+  makes (nothing grants it, and since #6501 the agent grants the API's role nothing
+  either), so such a deployment keeps the API and the agent on one role
   until the agent's data moves behind CRUD routes (#5299)); the render worker holds no database (#5298,
   `tests/test_render_worker_nodb.py`; the API revokes its old role `scadbuddy_render` at
   every start, `auth/revoke.py`, and every caller's grant list goes through
