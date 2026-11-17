@@ -433,10 +433,12 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   `filament_spool_events`, and the run's settle books each start's `print_ended` actual
   (`done`) or 0 (`filament/print_uses.py`, `print_use_hook`; on the worker through
   `…/filament/print-uses`, `RemotePrintUses`). ScadBuddy's own spools are the `filament_*`
-  tables (#6261); the `native` provider, its `/native-spools` routes and Settings' editor
-  went in #6262 Task 11 (its anchor now resolves to Settings' Filament section, Task 13), and the spool providers' overlay in Task 12 (its tables,
-  `physical_spools` and the rest, stay unread until a later PR drops them; a migration
-  carried each person's tray link to the SB spool's tray place).
+  tables (#6261). The `native` provider, its `/native-spools` routes, the `native_spool_*`
+  agent tools and Settings' editor are gone (#6262; the old anchor `#native-spools` lands
+  on Settings' Filament section), and so is the spool providers' overlay: the print dialog reads the
+  SB spools. The old tables (`native_spools`, `physical_spools`
+  and the rest) are unread now; a follow-up PR drops them. A migration
+  carried each person's tray link to the SB spool's tray place.
   `printers/ams_mapping.py` computes `ams_mapping`/`ams_mapping2` from the
   plan's trays and `printers/nozzle_mapping.py` an H2C rack print's `nozzle_mapping`
   (measured values in the spec's §2); `printers/lan.py` is the FTPS upload and MQTT
@@ -513,7 +515,13 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   rows the caller parsed, as text cells; a dry run reads only, so it adds no catalog row and
   takes no spool number; a write is one transaction, refused whole when a line is an error,
   and its `Idempotency-Key` reply is kept in `crud_requests` under caller `filament`; a
-  `location` cell is a `move_on`). Colour is `#RRGGBBAA` (`colour.py`). Routes: `api/filament.py`.
+  `location` cell is a `move_on`), `inventory.py` (`read_sb_spools`: which SB spool is in
+  each AMS tray, by tag or by the spool placed there with the tray's fingerprint, and the shelf), `print_uses.py` (a LAN print's grams as
+  ledger events). Colour is `#RRGGBBAA` (`colour.py`). Routes: `api/filament.py`; the ledger
+  route `GET /filament/events` takes `since` (included) and `until` (excluded), so two ranges
+  tile, with `spool_id`, `kind`, `source` and a cursor. The price book (the `filaments` rows
+  that `orders/pricebook.py` prices) is edited on Filament → Types (`components/orders/FilamentsEditor.tsx`),
+  not in Settings.
 - `backend/scadbuddy/store/` — the blob store. Phase 1: the directory-shaped `BlobStore`
   Protocol and `LocalBlobStore` (`local.py`, a piece in `data/blobs/<piece_key>/`),
   `BlobRefs` (`refs.py`, the `blob_refs` table that keeps a blob alive) and `sweep_blobs`
