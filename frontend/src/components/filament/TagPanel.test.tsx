@@ -38,12 +38,17 @@ describe('TagPanel', () => {
     expect((await getSpool(spoolId(4))).tag?.id).toBe(TAG.BLACK)
   })
 
-  it('binds a tag by its UID and shows a refusal', async () => {
+  it('binds a tag by its UID', async () => {
     const { user, onChanged } = await render(2)
     await user.type(screen.getByLabelText('Tag UID'), '04 AA BB CC')
     await user.click(screen.getByRole('button', { name: 'Bind tag' }))
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
     expect((await getSpool(spoolId(2))).tag?.tag_uid).toBe('04AABBCC')
+  })
+
+  it('says the override box only records that the tag was taken', async () => {
+    await render(2)
+    expect(screen.getByRole('checkbox', { name: /Record that the tag was taken from another spool on purpose/ })).toBeInTheDocument()
   })
 
   it('refuses a bind with no key', async () => {

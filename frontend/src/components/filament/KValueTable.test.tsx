@@ -60,7 +60,7 @@ describe('KValueTable', () => {
       const row = screen.getByRole('row', { name: /Garage H2C 0\.4 from type/i })
       expect(within(row).getByText('From type')).toBeInTheDocument()
       expect(row).toHaveClass('opacity-60')
-      await user.click(within(row).getByRole('button', { name: 'Override' }))
+      await user.click(within(row).getByRole('button', { name: 'Override Garage H2C 0.4' }))
       expect(spy).toHaveBeenLastCalledWith([{ printer_id: 'p1', extruder: 0, nozzle_diameter: '0.4', nozzle_type: 'hardened_steel', k_value: '0.020', name: 'Jade White 0.4', cali_idx: 3, setting_id: null }])
     })
 
@@ -69,7 +69,16 @@ describe('KValueTable', () => {
       const spy = vi.fn()
       render(<Harness start={[ROW]} inherited={[{ ...FROM_TYPE, overridden: true }]} spy={spy} />)
       expect(screen.queryByText('From type')).toBeNull()
-      await user.click(screen.getByRole('button', { name: 'Reset to type' }))
+      await user.click(screen.getByRole('button', { name: 'Reset K value 1 to type' }))
+      expect(spy).toHaveBeenLastCalledWith([])
+    })
+
+    it('offers Remove, not Reset to type, for an own row the type has no value for', async () => {
+      const user = userEvent.setup()
+      const spy = vi.fn()
+      render(<Harness start={[{ ...ROW, extruder: 1 }]} inherited={[FROM_TYPE]} spy={spy} />)
+      expect(screen.queryByRole('button', { name: /to type/ })).toBeNull()
+      await user.click(screen.getByRole('button', { name: 'Remove K value 1' }))
       expect(spy).toHaveBeenLastCalledWith([])
     })
   })

@@ -35,6 +35,7 @@ export function KValueTable({ rows, onChange, printers, inherited }: Props) {
   const set = (at: number, patch: Partial<TypeKValueInput>) => onChange(rows.map((row, i) => (i === at ? { ...row, ...patch } : row)))
   const known = new Set(printers.map((printer) => printer.id))
   const own = new Set(rows.map(keyOf))
+  const typeKeys = new Set((inherited ?? []).map(keyOf))
   const fromType = (inherited ?? []).filter((row) => !row.overridden && !own.has(keyOf(row)))
   const printerName = (id: string) => printers.find((printer) => printer.id === id)?.name ?? `Printer ${id.slice(0, 8)}`
   return (
@@ -92,8 +93,8 @@ export function KValueTable({ rows, onChange, printers, inherited }: Props) {
                   <Input aria-label="K value name" className="h-7 min-w-36" value={row.name ?? ''} onChange={(e) => set(at, { name: e.target.value === '' ? null : e.target.value })} />
                 </td>
                 <td className="px-2 py-1 whitespace-nowrap">
-                  {inherited ? (
-                    <Button type="button" size="xs" variant="ghost" onClick={() => onChange(rows.filter((_, i) => i !== at))}>
+                  {inherited && typeKeys.has(keyOf(row)) ? (
+                    <Button type="button" size="xs" variant="ghost" aria-label={`Reset K value ${at + 1} to type`} onClick={() => onChange(rows.filter((_, i) => i !== at))}>
                       <Undo2Icon /> Reset to type
                     </Button>
                   ) : (
@@ -119,6 +120,7 @@ export function KValueTable({ rows, onChange, printers, inherited }: Props) {
                     type="button"
                     size="xs"
                     variant="ghost"
+                    aria-label={`Override ${printerName(row.printer_id)} ${row.nozzle_diameter}`}
                     onClick={() =>
                       onChange([
                         ...rows,

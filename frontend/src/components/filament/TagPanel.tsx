@@ -27,7 +27,7 @@ interface Props {
  * again" (free) or "Tag is on spool #N — Move it here" (another spool holds it now;
  * Decision 7), and a form to bind any tag by its UID or tray UUID. A restore binds
  * nothing: the tag comes back only through these buttons, which post the last tag's own
- * keys. Moving a tag is `override: true` and the server writes `tag_unbound` and
+ * keys. The server moves a tag that another spool holds whether or not `override` is set; the flag only records that a person did it on purpose. "Move it here" sends `override: true`, and the server writes `tag_unbound` and
  * `tag_bound` events on both spools.
  */
 export function TagPanel({ spool, onChanged }: Props) {
@@ -133,7 +133,7 @@ export function TagPanel({ spool, onChanged }: Props) {
         <div className="flex items-end gap-3">
           <Label className="flex items-center gap-2 pb-2 text-[13px] font-normal">
             <Checkbox checked={override} onCheckedChange={(next) => setOverride(next === true)} />
-            Take it from the spool that holds it
+            Record that the tag was taken from another spool on purpose
           </Label>
         </div>
         <div className="sm:col-span-2">

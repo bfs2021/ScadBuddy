@@ -976,10 +976,11 @@ export const handlers = [
     state.spoolKValues = [...state.spoolKValues.filter((one) => one.spool_id !== spoolId), ...rows]
     return HttpResponse.json(effectiveKValues(spoolId))
   }),
+  // Oldest first, as the route answers (`api/filament.py` `list_spool_events`).
   http.get(`${BASE}/spools/:id/events`, ({ params }) => {
     const spoolId = String(params.id)
     if (!findSpool(spoolId)) return problem(404, `no spool ${spoolId}`)
-    return HttpResponse.json(state.events.filter((event) => event.spool_id === spoolId).sort((a, b) => b.at.localeCompare(a.at)))
+    return HttpResponse.json(state.events.filter((event) => event.spool_id === spoolId).sort((a, b) => a.at.localeCompare(b.at)))
   }),
   http.post(`${BASE}/spools/:id/events`, async ({ params, request }) => {
     const at = state.spools.findIndex((row) => row.id === params.id)

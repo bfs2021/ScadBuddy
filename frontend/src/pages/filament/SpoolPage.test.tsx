@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react'
+import { http, HttpResponse } from 'msw'
 import { Route, Routes } from 'react-router'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { getSpool, getType, listSpoolEvents, listSpools, patchSpool } from '../../api/filament'
 import { L, spoolId, T, TAG } from '../../mocks/features/filament/seed'
 import { server } from '../../mocks/server'
@@ -43,20 +44,44 @@ describe('the spool page', () => {
     expect(screen.getByRole('combobox', { name: 'Go to section' })).toBeInTheDocument()
   })
 
-  it('resets an overridden colour with one PATCH of null, and the mark goes after the answer', async () => {
+  it('resets an overridden colour with one PATCH of null, and the mark stays until the answer', async () => {
     await patchSpool(spoolId(3), { rgba: '#112233FF' })
     const edited = (await listSpoolEvents(spoolId(3))).filter((event) => event.kind === 'edited').length
     const patches = recorded('PATCH', /\/spools\//)
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    // Holds the answer; a resolver that returns nothing falls through to the mock.
+    server.use(http.patch('*/api/v1/filament/spools/:id', async () => { await gate }))
     const { user } = open(3)
     await heading(3)
     const field = () => document.querySelector('[data-field="rgba"]') as HTMLElement
     expect(within(field()).getByText('Set on this spool')).toBeInTheDocument()
     await user.click(within(field()).getByRole('button', { name: 'Reset Colour to type' }))
+    await waitFor(() => expect(patches).toEqual([{ rgba: null }]))
+    expect(within(field()).getByText('Set on this spool')).toBeInTheDocument()
+    release()
     await waitFor(() => expect(within(field()).queryByText('Set on this spool')).toBeNull())
-    expect(patches).toEqual([{ rgba: null }])
     expect((await getSpool(spoolId(3))).overridden).not.toContain('rgba')
     expect((await getSpool(spoolId(3))).effective.rgba).toBe('#F5547CFF')
     expect((await listSpoolEvents(spoolId(3))).filter((event) => event.kind === 'edited')).toHaveLength(edited + 1)
+  })
+
+  it('keeps the mark and shows the refusal when the reset is refused', async () => {
+    await patchSpool(spoolId(3), { rgba: '#112233FF' })
+    server.use(
+      http.patch('*/api/v1/filament/spools/:id', () =>
+        HttpResponse.json({ type: 'about:blank', title: 'Conflict', status: 409, detail: 'the spool changed under you' }, { status: 409, headers: { 'Content-Type': 'application/problem+json' } }),
+      ),
+    )
+    const { user } = open(3)
+    await heading(3)
+    const field = () => document.querySelector('[data-field="rgba"]') as HTMLElement
+    await user.click(within(field()).getByRole('button', { name: 'Reset Colour to type' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('the spool changed under you')
+    expect(within(field()).getByText('Set on this spool')).toBeInTheDocument()
+    expect((await getSpool(spoolId(3))).overridden).toContain('rgba')
   })
 
   it('restores an archived spool and nothing else, then offers the last tag, held by spool #3', async () => {
@@ -73,12 +98,22 @@ describe('the spool page', () => {
     expect(await screen.findByRole('button', { name: 'Take off' })).toBeInTheDocument()
   })
 
-  it('asks for a material when it is Unknown, with the material list open', async () => {
+  it('asks for a material when it is Unknown, tied to the material select, which stays closed', async () => {
     open(7)
-    // The open list hides the page from assistive tech, so the page is found by its text.
-    expect(await screen.findByRole('listbox')).toBeInTheDocument()
-    expect(screen.getByText('Choose a material')).toBeInTheDocument()
-    expect(screen.getByText('Spool #7')).toBeInTheDocument()
+    await heading(7)
+    const prompt = screen.getByText('Choose a material')
+    const material = screen.getByRole('combobox', { name: 'Material' })
+    expect(material).toHaveAttribute('aria-invalid', 'true')
+    expect(material).toHaveAttribute('aria-describedby', prompt.id)
+    expect(prompt.id).not.toBe('')
+    expect(screen.queryByRole('listbox')).toBeNull()
+  })
+
+  it('has no material prompt once a material is chosen', async () => {
+    open(1)
+    await heading(1)
+    expect(screen.queryByText('Choose a material')).toBeNull()
+    expect(screen.getByRole('combobox', { name: 'Material' })).not.toHaveAttribute('aria-invalid', 'true')
   })
 
   it('offers no Delete for a spool that printed, only Archive and why', async () => {
@@ -96,6 +131,20 @@ describe('the spool page', () => {
     await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Delete spool' }))
     expect(await screen.findByText('The spools tab')).toBeInTheDocument()
     expect((await listSpools({ includeArchived: true })).some((spool) => spool.number === 11)).toBe(false)
+  })
+
+  it('closes the delete dialog and shows the error when the delete is refused', async () => {
+    server.use(
+      http.delete('*/api/v1/filament/spools/:id', () =>
+        HttpResponse.json({ type: 'about:blank', title: 'Conflict', status: 409, detail: 'the spool has prints in its ledger; archive it instead' }, { status: 409, headers: { 'Content-Type': 'application/problem+json' } }),
+      ),
+    )
+    const { user } = open(11)
+    await heading(11)
+    await user.click(screen.getByRole('button', { name: 'Delete' }))
+    await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Delete spool' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('archive it instead')
+    expect(screen.queryByRole('alertdialog')).toBeNull()
   })
 
   it('shows the type preset and K value as From type, and overrides a preset with one PUT', async () => {
@@ -139,9 +188,77 @@ describe('the spool page', () => {
     const { user } = open(1)
     await heading(1)
     expect(screen.getByText(/Empty spool/)).toHaveTextContent('250 g')
+    const posts = recorded('POST', /\/events$/)
     await user.type(screen.getByLabelText('Scale reading, with the spool (g)'), '900')
     await user.click(screen.getByRole('button', { name: 'Record weighing' }))
+    await waitFor(() => expect(posts).toEqual([{ kind: 'weighed', grams: 650, source: 'scale' }]))
     await waitFor(async () => expect((await getSpool(spoolId(1))).grams_left).toBe(650))
+  })
+
+  it('reads the ledger oldest first, and the history lists the newest first', async () => {
+    open(1)
+    await heading(1)
+    const ledger = await listSpoolEvents(spoolId(1))
+    expect(ledger.map((event) => event.at)).toEqual([...ledger.map((event) => event.at)].sort())
+    expect(ledger.length).toBeGreaterThan(1)
+    const history = await screen.findByRole('list', { name: 'History of this spool' })
+    expect(within(history).getAllByRole('listitem')[0]).toHaveTextContent('Weighed')
+    expect(within(history).getAllByRole('listitem').at(-1)).toHaveTextContent('Added')
+  })
+
+  it('refuses a drying temperature that is not a whole number, and records a valid one', async () => {
+    const posts = recorded('POST', /\/events$/)
+    const { user } = open(1)
+    await heading(1)
+    await user.type(screen.getByLabelText('Drying temperature (°C)'), 'abc')
+    await user.click(screen.getByRole('button', { name: 'Record drying' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/drying temperature/i)
+    expect(posts).toEqual([])
+    await user.clear(screen.getByLabelText('Drying temperature (°C)'))
+    await user.type(screen.getByLabelText('Drying temperature (°C)'), '55')
+    await user.click(screen.getByRole('button', { name: 'Record drying' }))
+    await waitFor(() => expect(posts).toEqual([{ kind: 'dried', temp_c: 55, hours: null }]))
+  })
+
+  it('names the colour group by its label', async () => {
+    open(1)
+    await heading(1)
+    expect(screen.getByRole('group', { name: 'Colour' })).toContainElement(screen.getByLabelText('Colour (hex)'))
+  })
+
+  it('jumps to the same section twice from the select', async () => {
+    const scroll = vi.fn()
+    Element.prototype.scrollIntoView = scroll
+    const { user } = open(1)
+    await heading(1)
+    await choose(user, screen.getByRole('combobox', { name: 'Go to section' }), 'Weight')
+    await choose(user, screen.getByRole('combobox', { name: 'Go to section' }), 'Weight')
+    // The select's own list scrolls too: count the jumps to the section.
+    expect(scroll.mock.contexts.filter((el) => (el as Element).id === 'weight')).toHaveLength(2)
+  })
+
+  it('keeps the marks the saved spool has while the type in the form changes', async () => {
+    await patchSpool(spoolId(3), { cost_per_kg: '20' })
+    const { user } = open(3)
+    await heading(3)
+    const mark = () => within(document.querySelector('[data-field="cost_per_kg"]') as HTMLElement).queryByText('Set on this spool')
+    expect(mark()).toBeInTheDocument()
+    await choose(user, screen.getByRole('combobox', { name: 'Type' }), /BL-PLA-BASIC-BLACK/)
+    expect(mark()).toBeInTheDocument()
+  })
+
+  it('loads the history of a spool whose later writes failed after it was made', async () => {
+    server.use(http.put('*/api/v1/filament/spools/:id/presets', () => HttpResponse.json({ type: 'about:blank', title: 'Unprocessable Content', status: 422, detail: 'two rows name the same printer and nozzle' }, { status: 422, headers: { 'Content-Type': 'application/problem+json' } })))
+    const { user } = render('/filament/spools/new')
+    await choose(user, await screen.findByRole('combobox', { name: 'Type' }), /BL-PLA-BASIC-HOT-PINK/)
+    await user.click(screen.getByRole('button', { name: 'Add preset' }))
+    const row = screen.getByRole('row', { name: 'New preset' })
+    await user.type(within(row).getByLabelText('Printer model'), 'H2C')
+    await user.type(within(row).getByLabelText('Slicer filament'), 'GFA00')
+    await user.click(screen.getByRole('button', { name: 'Save spool' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('two rows name')
+    const history = await screen.findByRole('list', { name: 'History of this spool' })
+    expect(within(history).getByText('Added')).toBeInTheDocument()
   })
 
   it('shows what the grams left are made of', async () => {
@@ -157,6 +274,8 @@ describe('the spool page', () => {
     await heading(6)
     expect(within(screen.getByRole('table', { name: 'Slicer presets' })).getByLabelText('Slicer filament')).toHaveValue('GFA00')
     await choose(user, screen.getByRole('combobox', { name: 'Type' }), /BL-PLA-BASIC-JADE-WHITE/)
+    expect(screen.queryByRole('table', { name: 'Slicer presets' })).toBeNull()
+    expect(screen.getByText(/dropped when the type is saved/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Save spool' }))
     const presets = screen.getByRole('table', { name: 'Slicer presets' })
     expect(await within(presets).findByRole('row', { name: /H2C 0\.4 from type/i })).toBeInTheDocument()

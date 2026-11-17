@@ -24,6 +24,8 @@ export interface OverrideFieldProps {
   inputMode?: 'decimal' | 'numeric'
   /** Another control than a text input (a select, the colour field), which then owns `value`. */
   children?: ReactNode
+  /** The control is several inputs (the colour field): they are a group the label names. */
+  group?: boolean
   className?: string
 }
 
@@ -32,16 +34,15 @@ export interface OverrideFieldProps {
  * the effective value, or `children` for a richer control. When the saved spool overrides
  * the field it carries the mark "Set on this spool" and "Reset to type", which the page
  * answers with a PATCH of `null` for that field alone (backend `SpoolPatch`: `null` on an
- * override clears it). Bambu Studio has no such layering: a filament preset is edited in
- * place, and what a spool changed from its preset is only visible as a modified-value dot.
+ * override clears it).
  */
-export function OverrideField({ name, label, value, effective, overridden, hasType, onChange, onReset, hint, inputMode, children, className }: OverrideFieldProps) {
+export function OverrideField({ name, label, value, effective, overridden, hasType, onChange, onReset, hint, inputMode, children, group, className }: OverrideFieldProps) {
   const id = `spool-${name}`
   const marked = overridden && hasType
   return (
     <div className={cn('flex min-w-0 flex-col gap-1', className)} data-field={name} data-overridden={marked ? 'true' : undefined}>
       <div className="flex min-h-6 items-center justify-between gap-2">
-        <Label htmlFor={id} className="text-[13px]">
+        <Label id={`${id}-label`} htmlFor={group ? undefined : id} className="text-[13px]">
           {label}
         </Label>
         {marked && (
@@ -53,7 +54,13 @@ export function OverrideField({ name, label, value, effective, overridden, hasTy
           </span>
         )}
       </div>
-      {children ?? <Input id={id} inputMode={inputMode} value={value} placeholder={hasType ? effective : undefined} onChange={(e) => onChange(e.target.value)} />}
+      {group ? (
+        <div role="group" aria-labelledby={`${id}-label`}>
+          {children}
+        </div>
+      ) : (
+        (children ?? <Input id={id} inputMode={inputMode} value={value} placeholder={hasType ? effective : undefined} onChange={(e) => onChange(e.target.value)} />)
+      )}
       {hint && <p className="text-[12px] text-muted-foreground">{hint}</p>}
     </div>
   )

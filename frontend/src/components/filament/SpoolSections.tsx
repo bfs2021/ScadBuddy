@@ -55,7 +55,7 @@ export function SectionIndex() {
         </ul>
       </nav>
       <div className="lg:hidden">
-        <Select onValueChange={jump}>
+        <Select value="" onValueChange={jump}>
           <SelectTrigger aria-label="Go to section" className="w-full">
             <SelectValue placeholder="Go to section" />
           </SelectTrigger>

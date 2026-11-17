@@ -16,9 +16,8 @@ function anchorText(event: SpoolEvent): string {
 
 /**
  * #6262 — what a spool's grams left are made of: the reading they start from, the print
- * use taken off since (`SpoolDetail.basis`, the server's own sum), and the result. Bambu
- * Studio shows only a remaining percentage per AMS slot; the arithmetic here is what lets
- * a person trust the number or weigh the spool again.
+ * use taken off since (`SpoolDetail.basis`, the server's own sum), and the result, so a
+ * person can trust the number or weigh the spool again.
  */
 export function GramsBasis({ basis, gramsLeft }: { basis: Basis; gramsLeft: number | null }) {
   return (

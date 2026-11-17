@@ -31,6 +31,7 @@ export function PresetTable({ rows, onChange, models = [], inherited }: Props) {
   const listId = useId()
   const set = (at: number, patch: Partial<PresetInput>) => onChange(rows.map((row, i) => (i === at ? { ...row, ...patch } : row)))
   const own = new Set(rows.map(keyOf))
+  const typeKeys = new Set((inherited ?? []).map(keyOf))
   const fromType = (inherited ?? []).filter((row) => !row.overridden && !own.has(keyOf(row)))
 
   return (
@@ -84,7 +85,7 @@ export function PresetTable({ rows, onChange, models = [], inherited }: Props) {
                     />
                   </td>
                   <td className="px-2 py-1 whitespace-nowrap">
-                    {inherited ? (
+                    {inherited && typeKeys.has(keyOf(row)) ? (
                       <Button type="button" size="xs" variant="ghost" onClick={() => onChange(rows.filter((_, i) => i !== at))}>
                         <Undo2Icon /> Reset to type
                       </Button>

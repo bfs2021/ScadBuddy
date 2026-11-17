@@ -231,16 +231,17 @@ interface PickProps {
   hasType: boolean
   onReset: () => void
   required?: boolean
-  defaultOpen?: boolean
+  /** The id of the text that says what is wrong with the choice; the trigger is then invalid. */
+  invalidBy?: string
 }
 
 /** A catalog choice that may override the type's: "From type (PLA)" is the cleared entry. */
-function Pick({ name, label, value, onChange, options, effectiveName, overridden, hasType, onReset, required = false, defaultOpen }: PickProps) {
+function Pick({ name, label, value, onChange, options, effectiveName, overridden, hasType, onReset, required = false, invalidBy }: PickProps) {
   const noneLabel = hasType ? (effectiveName ? `From type (${effectiveName})` : 'From type') : 'None'
   return (
     <OverrideField name={name} label={label} value={value} overridden={overridden} hasType={hasType} onChange={onChange} onReset={onReset}>
-      <Select value={value === '' && !required ? NONE : value || undefined} onValueChange={(next) => onChange(next === NONE ? '' : next)} defaultOpen={defaultOpen}>
-        <SelectTrigger id={`spool-${name}`} aria-label={label} className="w-full">
+      <Select value={value === '' && !required ? NONE : value || undefined} onValueChange={(next) => onChange(next === NONE ? '' : next)}>
+        <SelectTrigger id={`spool-${name}`} aria-label={label} aria-invalid={invalidBy ? true : undefined} aria-describedby={invalidBy} className="w-full">
           <SelectValue placeholder="Choose…" />
         </SelectTrigger>
         <SelectContent>
@@ -283,14 +284,6 @@ const grams = (value: number) => `${Number(value.toFixed(1))} g`
  * when the place changed, and the presets' and K values' PUTs when they changed; a created
  * spool keeps its id, so a retry is an edit. Weighings and dryings are ledger events and
  * land at once. Unsaved edits hold every way out (`useLeaveGuard`).
- *
- * Bambu Studio's filament settings (`Tab.cpp` `TabFilament::build`, the Filament page
- * with its Basic information, Print temperature, Bed temperature, Volumetric speed and
- * Pressure advance groups, and the Spool information `filament_colour`, `filament_type`,
- * `filament_vendor`, `filament_diameter`, `filament_density`, `filament_cost`,
- * `nozzle_temperature(_initial_layer)`, `*_plate_temp`) have a place here; the page also
- * holds what Bambu Studio has no place for: the weight reading, the lock, the tag, the
- * location, and the ledger.
  */
 export function SpoolPage() {
   const { id = 'new' } = useParams()
@@ -399,6 +392,7 @@ export function SpoolPage() {
     setError(null)
     setNotice(null)
     let spoolId = spoolKey
+    const firstType = !creating && saved !== null && !saved.type_id && draft.type_id !== ''
     try {
       let presetsWere = base.presets
       let kWere = base.k_values
@@ -417,7 +411,8 @@ export function SpoolPage() {
         if (Object.keys(patch).length > 0) await patchSpool(spoolId, patch)
       }
       if (draft.location_id !== placeWas) await moveSpool(spoolId, draft.location_id || null)
-      if (JSON.stringify(draft.presets) !== JSON.stringify(presetsWere)) await setSpoolPresets(spoolId, draft.presets)
+      // The first type drops the carried-over presets: the form's copy of them is not written back.
+      if (!firstType && JSON.stringify(draft.presets) !== JSON.stringify(presetsWere)) await setSpoolPresets(spoolId, draft.presets)
       if (JSON.stringify(draft.k_values) !== JSON.stringify(kWere)) await setSpoolKValues(spoolId, draft.k_values)
       setNotice('Saved')
       if (id === 'new') {
@@ -431,7 +426,7 @@ export function SpoolPage() {
     } catch (cause) {
       setError(message(cause))
       // A write that did land is shown as it now is, unsaved edits kept.
-      if (spoolId !== 'new') await getSpool(spoolId).then(setSaved, () => {})
+      if (spoolId !== 'new') await Promise.all([getSpool(spoolId).then(setSaved, () => {}), listSpoolEvents(spoolId).then(setEvents, () => {})])
     } finally {
       setBusy(false)
     }
@@ -469,7 +464,8 @@ export function SpoolPage() {
     const value: unknown = sameType ? saved.effective[name] : typeRow?.[name as keyof SpoolType]
     return value == null ? '' : Array.isArray(value) ? value.join(', ') : String(value)
   }
-  const own = (name: string) => sameType && saved.overridden.includes(name)
+  /** The marks are the saved spool's: picking another type in the form does not unset what the spool holds. */
+  const own = (name: string) => saved?.overridden.includes(name) ?? false
   const material = lists.materials.find((one) => one.id === (draft.material_id || eff('material_id')))
   const unknownMaterial = !hasType && material?.name === 'Unknown'
   const subtypes = lists.subtypes.filter((one) => !one.material_id || one.material_id === (draft.material_id || eff('material_id')))
@@ -477,11 +473,13 @@ export function SpoolPage() {
   const empty = lists.insertTypes.find((one) => one.id === (draft.insert_type_id || eff('insert_type_id')))
   const models = [...new Set(lists.printers.map((p) => p.model).filter((m): m is string => !!m))]
   const effective = saved?.effective
+  /** A spool with no type has chosen its first one in the form, not saved it yet. */
+  const firstTypeChosen = !creating && saved !== null && !saved.type_id && hasType
 
   const field = (key: 'colour_name' | 'diameter_mm' | 'density_g_cm3' | 'cost_per_kg' | 'label_weight_g' | 'low_stock_pct' | 'nozzle_temp_min' | 'nozzle_temp_max' | 'bed_temp_min' | 'bed_temp_max' | 'extra_colours', label: string, extra: { hint?: string; mode?: 'decimal' | 'numeric' } = {}) => (
     <OverrideField name={key} label={label} value={draft[key]} effective={eff(key)} overridden={own(key)} hasType={hasType} inputMode={extra.mode} hint={extra.hint} onChange={(next) => set(key, next)} onReset={() => void reset(key)} />
   )
-  const pick = (key: 'material_id' | 'subtype_id' | 'brand_id' | 'category_id' | 'effect_id' | 'insert_type_id', label: string, options: { id: string; name: string }[], extra: { required?: boolean; defaultOpen?: boolean; onChange?: (id: string) => void } = {}) => (
+  const pick = (key: 'material_id' | 'subtype_id' | 'brand_id' | 'category_id' | 'effect_id' | 'insert_type_id', label: string, options: { id: string; name: string }[], extra: { required?: boolean; invalidBy?: string; onChange?: (id: string) => void } = {}) => (
     <Pick
       name={key}
       label={label}
@@ -493,7 +491,7 @@ export function SpoolPage() {
       onChange={extra.onChange ?? ((next) => set(key, next))}
       onReset={() => void reset(key)}
       required={extra.required}
-      defaultOpen={extra.defaultOpen}
+      invalidBy={extra.invalidBy}
     />
   )
 
@@ -579,9 +577,13 @@ export function SpoolPage() {
                 )}
               </div>
             </div>
-            {unknownMaterial && <p className="text-[13px] font-medium">Choose a material</p>}
+            {unknownMaterial && (
+              <p id="spool-material-prompt" className="text-[13px] font-medium text-destructive">
+                Choose a material
+              </p>
+            )}
             <div className="grid gap-3 sm:grid-cols-2">
-              {pick('material_id', 'Material', lists.materials, { required: !hasType, defaultOpen: unknownMaterial, onChange: setMaterial })}
+              {pick('material_id', 'Material', lists.materials, { required: !hasType, invalidBy: unknownMaterial ? 'spool-material-prompt' : undefined, onChange: setMaterial })}
               {pick('subtype_id', 'Subtype', subtypes)}
               {pick('brand_id', 'Brand', lists.brands)}
               {pick('category_id', 'Category', lists.categories)}
@@ -647,7 +649,7 @@ export function SpoolPage() {
                   className="flex flex-col gap-2"
                   onSubmit={(event) => {
                     event.preventDefault()
-                    if (readingOk) void act(async () => { await addSpoolEvent(spoolKey, { kind: 'weighed', grams: filament }); setReading(''); await reload(true) }, 'Weighed')
+                    if (readingOk) void act(async () => { await addSpoolEvent(spoolKey, { kind: 'weighed', grams: filament, source: 'scale' }); setReading(''); await reload(true) }, 'Weighed')
                   }}
                 >
                   <Label htmlFor="spool-reading" className="text-[13px]">
@@ -674,7 +676,7 @@ export function SpoolPage() {
           </Section>
 
           <Section id="colour-and-cost" title="Colour and cost">
-            <OverrideField name="rgba" label="Colour" value={draft.rgba ?? ''} overridden={own('rgba')} hasType={hasType} onChange={() => {}} onReset={() => void reset('rgba')}>
+            <OverrideField name="rgba" label="Colour" group value={draft.rgba ?? ''} overridden={own('rgba')} hasType={hasType} onChange={() => {}} onReset={() => void reset('rgba')}>
               <RgbaColourField value={draft.rgba} onChange={(next) => set('rgba', next)} inherited={hasType ? eff('rgba') || null : null} />
             </OverrideField>
             <div className="grid gap-3 sm:grid-cols-2">
@@ -695,7 +697,13 @@ export function SpoolPage() {
             <div className="flex flex-col gap-2">
               <h3 className="text-[13px] font-medium">Slicer presets</h3>
               <p className="text-[12px] text-muted-foreground">The Bambu Studio filament preset to slice with, for each printer model and nozzle. A row you do not set takes the type&apos;s.</p>
-              <PresetTable rows={draft.presets} onChange={(rows) => set('presets', rows)} models={models} inherited={hasType ? (sameType ? saved.presets : []) : undefined} />
+              {firstTypeChosen ? (
+                <p className="rounded-md border border-dashed px-3 py-2 text-[13px] text-muted-foreground">
+                  The presets this spool carried over are dropped when the type is saved. The type&apos;s presets show here after that; override any of them then.
+                </p>
+              ) : (
+                <PresetTable rows={draft.presets} onChange={(rows) => set('presets', rows)} models={models} inherited={hasType ? (sameType ? saved.presets : []) : undefined} />
+              )}
             </div>
             <div className="flex flex-col gap-2">
               <h3 className="text-[13px] font-medium">K values</h3>
@@ -730,6 +738,8 @@ export function SpoolPage() {
                   className="flex flex-col gap-1"
                   onSubmit={(event) => {
                     event.preventDefault()
+                    if (dryTemp.trim() !== '' && !INTEGER.test(dryTemp.trim())) return setError('Enter the drying temperature as a whole number of degrees.')
+                    if (dryHours.trim() !== '' && !DECIMAL.test(dryHours.trim())) return setError('Enter the drying hours as a number, such as 8.')
                     const temp = dryTemp.trim() === '' ? null : Number(dryTemp)
                     const hours = dryHours.trim() === '' ? null : dryHours.trim()
                     void act(async () => { await addSpoolEvent(spoolKey, { kind: 'dried', temp_c: temp, hours }); setDryTemp(''); setDryHours(''); await reload(true) }, 'Drying recorded')
@@ -783,7 +793,13 @@ export function SpoolPage() {
               disabled={busy}
               onClick={() =>
                 void act(async () => {
-                  await deleteSpool(spoolKey)
+                  try {
+                    await deleteSpool(spoolKey)
+                  } catch (cause) {
+                    // The refusal is shown on the page, not behind the dialog.
+                    setConfirmDelete(false)
+                    throw cause
+                  }
                   setConfirmDelete(false)
                   guard.leaveTo('/filament/spools')
                 })
