@@ -269,6 +269,20 @@ async def test_shutdown_ends_every_stream_and_opens_none() -> None:
         hub.open("k")
 
 
+async def test_shutdown_ends_a_full_stream_too() -> None:
+    """A reader stalled until its queue is full still ends at a shutdown, never a replay that
+    waits on: an open stream holds uvicorn's drain."""
+    hub = ChangeHub(queue_max=2)
+    stream = hub.open("k")
+    source = frames(stream, FakeLog(), None)
+    await _take(source, 1)
+    for i in range(2):
+        stream.offer(Change("scadbuddy_input", f"p{i}"))
+    hub.shutdown()
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(anext(source), PROMPTLY)
+
+
 def test_the_signal_ends_the_streams_then_runs_the_servers_handler() -> None:
     import signal as signal_module
 
@@ -290,6 +304,50 @@ def test_the_signal_ends_the_streams_then_runs_the_servers_handler() -> None:
     finally:
         signal_module.signal(signal_module.SIGTERM, previous)
         loop.close()
+
+
+def test_an_ignored_signal_ends_no_stream() -> None:
+    import signal as signal_module
+
+    previous = signal_module.signal(signal_module.SIGTERM, signal_module.SIG_IGN)
+    loop = asyncio.new_event_loop()
+    try:
+        hub = ChangeHub()
+        replaced = chain_signals(hub, loop)
+        signal_module.raise_signal(signal_module.SIGTERM)
+        loop.run_until_complete(asyncio.sleep(0))
+        hub.open("k")  # the process goes on, and so do its streams
+        for sig, handler in replaced.items():
+            signal_module.signal(sig, handler)
+    finally:
+        signal_module.signal(signal_module.SIGTERM, previous)
+        loop.close()
+
+
+async def test_a_log_this_build_cannot_decode_is_a_resync() -> None:
+    log = FakeLog([_model("a"), _model("b")])
+
+    async def undecodable(after: int, *, limit: int = 100) -> Replay:
+        raise ValueError("unknown event kind 'from.a.newer.build'")
+
+    log.replay = undecodable  # type: ignore[method-assign]
+    [ready] = await _take(frames(ChangeStream("k"), log, log.events[0].id), 1)
+    assert ready["data"] == {"resync": True, "reconnect": True}
+    assert ready["id"] == log.events[-1].id
+
+
+async def test_a_fresh_stream_starts_where_it_subscribed_and_never_moves_back() -> None:
+    log = FakeLog([_model("a")])
+    start = log.events[0].id
+    stream = ChangeStream("k")
+    # Logged and heard after the place was read, before the frames began.
+    later = _model("b")
+    log.events.append(later)
+    stream.offer(Change(PG_CHANNEL, encode_event(later), later.id))
+    source = frames(stream, log, None, start=start)
+    ready, change = await _take(source, 2)
+    assert ready["id"] == start
+    assert change["id"] == later.id
 
 
 # -- served, over Postgres ----------------------------------------------------------------

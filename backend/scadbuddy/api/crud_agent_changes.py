@@ -30,7 +30,7 @@ from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 
 from scadbuddy.agent_changes.component import CHANGES
-from scadbuddy.agent_changes.hub import ChangeHub, StreamsFullError, frames
+from scadbuddy.agent_changes.hub import START, ChangeHub, StreamsFullError, frames
 from scadbuddy.api.components import component_dep
 from scadbuddy.api.deps import StateDep
 from scadbuddy.auth.gate import caller_of
@@ -74,6 +74,8 @@ async def changes(
     key = stream_key(request)
     if last_event_id is not None and len(last_event_id) > LAST_EVENT_ID_MAX:
         last_event_id = ""  # no place: a resync, as any other malformed id
+    # Read before the stream subscribes, so every live event comes after its place.
+    start = await log.newest() or START if last_event_id is None else None
     try:
         stream = hub.open(key)
     except StreamsFullError as error:
@@ -81,7 +83,7 @@ async def changes(
 
     async def body() -> AsyncIterator[bytes]:
         try:
-            async for chunk in frames(stream, log, last_event_id):
+            async for chunk in frames(stream, log, last_event_id, start=start):
                 yield chunk
         finally:
             hub.close(stream)

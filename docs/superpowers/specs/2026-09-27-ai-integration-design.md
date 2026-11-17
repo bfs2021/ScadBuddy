@@ -739,12 +739,14 @@ log's poll stays as the fallback. The backend decodes them (`SessionBusEvent`,
 follows sessions over the agent's chat socket, which checks who may see them.
 
 The event log used for MCP `Last-Event-ID` resumption belongs to the bus (#264). As
-built (`agent/src/events/pgListener.ts`), the agent LISTENs on a dedicated connection
-and keeps its place in the backend's `events` log by `seq`; when that connection drops
-and comes back, it replays the rows after its place, skipping event ids it has already
-delivered, and when the gap is larger than 1000 events or the log cannot be read it
-tells every subscriber to resync (each subscribed URI gets `resources/updated`, plus one
-`list_changed`). Resource notifications are coalesced to at most one per URI per 250 ms
+built since #5299 step 11, the agent opens no LISTEN connection: it reads its NOTIFY
+channels over the API's change stream (`agent/src/events/changeStream.ts`, `GET
+…/crud/agent/changes`), and keeps its place as the last logged event's id. When the
+stream drops and comes back it sends that id as `Last-Event-ID`; the API replays the
+`events` rows after it (`backend/scadbuddy/agent_changes/hub.py`) and the agent skips
+event ids it has already delivered. When the gap is larger than 1000 events or the place
+cannot be found, the API says `resync` and the agent tells every subscriber to resync
+(each subscribed URI gets `resources/updated`, plus one `list_changed`). Resource notifications are coalesced to at most one per URI per 250 ms
 per session (`agent/src/resources/hub.ts`). The UI socket does not replay: on every (re)subscribe the server confirms with
 `subscribed` only once it is listening, and the client re-reads then, so a reconnect
 cannot leave a gap.

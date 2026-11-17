@@ -45,6 +45,8 @@ def chain_signals(hub: ChangeHub, loop: asyncio.AbstractEventLoop) -> dict[int, 
         previous = signal.getsignal(sig)
 
         def handler(signum: int, frame: FrameType | None, previous: Any = previous) -> None:
+            if previous == signal.SIG_IGN:
+                return  # the process goes on: its streams do too
             loop.call_soon_threadsafe(hub.shutdown)
             if callable(previous):
                 previous(signum, frame)

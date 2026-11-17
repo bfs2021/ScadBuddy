@@ -126,7 +126,11 @@ class ChangeStream:
         self.overflows = 0
 
     def offer(self, item: Item) -> None:
-        if len(self._items) >= self._limit:
+        if isinstance(item, _End):
+            # Past the bound too: a stream told to end must end, or it holds the server's drain.
+            self._items.clear()
+            self._items.append(END)
+        elif len(self._items) >= self._limit:
             self.overflows += 1
             self._items.clear()
             self._items.append(GAP)
@@ -273,7 +277,13 @@ async def _replay(log: Log, last_id: str | None) -> tuple[list[bytes], _Place, b
     frames: list[bytes] = []
     place = _Place(last_id, set())
     while True:
-        page = await log.replay(after, limit=MAX_REPLAY_LIMIT)
+        try:
+            page = await log.replay(after, limit=MAX_REPLAY_LIMIT)
+        except ValueError:
+            # A kind this build does not know (a newer pod's, during a roll): replaying past it
+            # would fail the same way at every reconnect, so the agent re-reads instead.
+            logger.warning("the event log holds an event this build cannot decode; resyncing")
+            return [], _Place(await log.newest() or START, set()), True
         if page.gap or len(place.replayed) + len(page.events) > REPLAY_MAX:
             return [], _Place(await log.newest() or START, set()), True
         if not page.events:
@@ -293,20 +303,24 @@ async def frames(
     last_event_id: str | None,
     *,
     keepalive: float = KEEPALIVE_SECONDS,
+    start: str | None = None,
 ) -> AsyncIterator[bytes]:
     """The stream's bytes: a reconnect's replay, ``ready``, then each change as heard.
 
     ``ready`` says whether the agent must ``resync`` and whether this is a reconnect (it sent
     ``Last-Event-ID``), after which it re-reads what it follows on the other channels; a
     ``reconnected`` frame says the same after a gap here. ``stream`` must be open (subscribed)
-    before this runs, so nothing heard during the replay is lost."""
+    before this runs, so nothing heard during the replay is lost. A fresh stream's place is
+    ``start``, the newest logged id read before it subscribed: every live event then comes after
+    it, so none moves the place back (read here when not given)."""
     reconnect = last_event_id is not None
     if reconnect:
         replayed, place, resync = await _replay(log, last_event_id)
         for chunk in replayed:
             yield chunk
     else:
-        place, resync = _Place(await log.newest() or START, set()), False
+        place = _Place(start if start is not None else await log.newest() or START, set())
+        resync = False
     yield frame("ready", {"resync": resync, "reconnect": reconnect}, place.last_id)
     while True:
         item = await stream.next(keepalive)
