@@ -45,6 +45,9 @@ export const CHANGES_PATH = `${AGENT_CRUD}/changes`
 
 type Frame = { id?: string; event: string; data: string }
 
+/** The frames whose `id` is the stream's place. */
+const PLACED: ReadonlySet<string> = new Set(['change', 'ready', 'reconnected'])
+
 export class ChangeStream implements EventSource {
   readonly #url: string
   readonly #fetch: typeof fetch
@@ -218,8 +221,9 @@ export class ChangeStream implements EventSource {
       this.#log(`change stream: ignored a malformed ${frame.event} frame`)
       return false
     }
-    // Only a logged change or the stream's place moves it: another frame's id names nothing to replay from.
-    if (frame.id !== undefined && (frame.event === 'change' || frame.event === 'ready')) this.#lastId = frame.id
+    // Only a logged change or the stream's place (`ready`, and `reconnected` after a gap, whose
+    // resync moves the API's place to the newest event) moves it: another frame's id names nothing.
+    if (frame.id !== undefined && PLACED.has(frame.event)) this.#lastId = frame.id
     switch (frame.event) {
       case 'ready': {
         const resync = (data as { resync?: unknown }).resync === true

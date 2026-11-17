@@ -181,7 +181,7 @@ describe('the change stream client', () => {
     expect(resyncs()).toBe(1)
   })
 
-  it('keeps its place on a logged change: a NOTIFY-only event or another frame never moves it', async () => {
+  it("keeps its place on a logged change or the API's place: a NOTIFY-only event or another frame never moves it", async () => {
     const { heard } = open()
     const first = await api.open(1)
     send(first.res, 'ready', { resync: false, reconnect: false }, 'p1')
@@ -190,13 +190,19 @@ describe('the change stream client', () => {
     // The agent's own session.* bus event: NOTIFY only, never in the log, so the API sends no id.
     const unlogged = busEvent({ kind: 'session.waiting', session_id: 's1', seq: 3 })
     change(first.res, 'scadbuddy_events', JSON.stringify(unlogged))
-    // An id on any frame but `change` or `ready` names no place.
-    send(first.res, 'reconnected', { resync: false }, 'not-a-place')
+    // An id on a frame that is not a change, `ready` or `reconnected` names no place.
     send(first.res, 'unknown', {}, 'nor-this')
     await until(() => heard.length === 2, 'both bus events')
     first.res.destroy()
     const second = await api.open(2)
     expect(second.lastEventId).toBe(logged.id)
+    // A gap the API resynced past moves its place to the newest event: so does the agent's.
+    send(second.res, 'ready', { resync: false, reconnect: true }, logged.id)
+    send(second.res, 'reconnected', { resync: true }, 'newest')
+    await until(() => logs.some((m) => m.includes('resyncing')), 'the resync')
+    second.res.destroy()
+    const third = await api.open(3)
+    expect(third.lastEventId).toBe('newest')
   })
 
   it('retries a refused or missing route with back-off, and never takes a non-CRUD answer', async () => {

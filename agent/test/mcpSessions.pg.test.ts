@@ -498,20 +498,23 @@ describe.skipIf(!TEST_DATABASE_URL).each(['sql', 'crud'] as const)(`/mcp session
   })
 
   it('relays an answer past the API gate whole, in rows under it', async () => {
-    // One SSE event of about 12 MiB once escaped: a single row would be refused at the gate.
-    const big = Array.from({ length: 6 }, (_, i) => ({ ...MODELS[0], slug: `big${i}`, name: '"'.repeat(1 << 20) }))
+    // One SSE event of about 9 MiB: a single row would be refused at the gate. Plain letters, so
+    // nothing escapes ("relays answers of every size whole" covers escaping): a quote doubles at
+    // each JSON layer, and 6 MiB of them took past 15 s a call on a loaded CI runner (#6521).
+    const big = Array.from({ length: 9 }, (_, i) => ({ ...MODELS[0], slug: `big${i}`, name: 'x'.repeat(1 << 20) }))
     backend.use(http.get(`${BACKEND}/api/v1/models`, () => HttpResponse.json(big)))
     const { token } = await tokens.mint({ name: 't', tier: 'read' })
     let via: Replica = a
     const client = await connect(token, () => via)
-    const call = () => client.callTool({ name: 'list_models', arguments: { limit: 100 } }, undefined, { timeout: 15_000 })
+    // About 0.5 s a call on an idle machine; the margin is for a runner running the whole suite.
+    const call = () => client.callTool({ name: 'list_models', arguments: { limit: 100 } }, undefined, { timeout: 45_000 })
     const direct = await call()
     via = b
     const relayed = await call()
     expect(relayed.isError).toBeFalsy()
     expect(JSON.stringify(relayed.content).length).toBeGreaterThan(RELAY_SEND_MAX_BYTES)
     expect(relayed.content).toEqual(direct.content)
-  }, 60_000)
+  }, 120_000)
 
   it('answers 413 over the CRUD routes for a request whose relay message is past the API gate, sending nothing', async () => {
     // A 4 MiB body (the MCP SDK's limit) of backslashes doubles when the row escapes it: past
