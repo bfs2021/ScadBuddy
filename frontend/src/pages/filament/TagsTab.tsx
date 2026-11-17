@@ -1,0 +1,185 @@
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link, useSearchParams } from 'react-router'
+import { ApiError } from '../../api/client'
+import { getTag, listSpools, listTags, type TagDetail, type TagRow } from '../../api/filament'
+import { SELECT_CLASS, TD, TH, when } from '../../components/filament/formClasses'
+import { KINDS } from '../../components/filament/tagKinds'
+import { spoolPath } from '../../components/filament/spoolsQuery'
+import { Button } from '@/components/ui/button'
+
+const kindName = (kind: string) => KINDS.find((one) => one.id === kind)?.name ?? kind
+
+const message = (cause: unknown) => (cause instanceof ApiError ? cause.detail : 'The tags could not be loaded. Try again.')
+
+const SHOWN = ['all', 'bound', 'unbound'] as const
+
+/** A tag's key as a person finds it printed: the UID, else the tray UUID. */
+const keyOf = (tag: Pick<TagRow, 'tag_uid' | 'tray_uuid'>) => tag.tag_uid ?? tag.tray_uuid ?? ''
+
+/**
+ * #6262 — the Tags tab: every RFID tag the spools have had, the spool each is on now, since
+ * when, and whether it was taken over from another spool. A row opens the tag's history,
+ * newest first. The kind and bound filters are in the URL.
+ */
+export function TagsTab() {
+  const [params, setParams] = useSearchParams()
+  const kind = params.get('kind') ?? ''
+  const shown = SHOWN.find((one) => one === params.get('show')) ?? 'all'
+  const [tags, setTags] = useState<TagRow[] | null>(null)
+  const [numbers, setNumbers] = useState<Map<string, number>>(new Map())
+  const [error, setError] = useState<string | null>(null)
+  const [open, setOpen] = useState<TagDetail | null>(null)
+  const [historyError, setHistoryError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    try {
+      const [rows, spools] = await Promise.all([listTags({ includeUnbound: true }), listSpools({ includeArchived: true })])
+      setNumbers(new Map(spools.map((spool) => [spool.id, spool.number])))
+      setTags(rows)
+      setError(null)
+    } catch (cause) {
+      setError(message(cause))
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const change = (name: string, value: string, fallback: string) => {
+    const next = new URLSearchParams(params)
+    if (value === fallback) next.delete(name)
+    else next.set(name, value)
+    setParams(next, { replace: true })
+  }
+
+  const rows = useMemo(
+    () => (tags ?? []).filter((tag) => (!kind || tag.kind === kind) && (shown === 'all' || (shown === 'bound') === (tag.binding != null))),
+    [tags, kind, shown],
+  )
+
+  async function openHistory(tag: TagRow) {
+    setHistoryError(null)
+    try {
+      setOpen(await getTag(tag.id))
+    } catch (cause) {
+      setOpen(null)
+      setHistoryError(message(cause))
+    }
+  }
+
+  const spoolLink = (id: string) => {
+    const number = numbers.get(id)
+    return (
+      <Link to={spoolPath({ id })} className="font-medium underline-offset-4 hover:underline">
+        {number == null ? 'Spool' : `#${number}`}
+      </Link>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center gap-3 text-[13px]">
+        <label className="flex items-center gap-2 text-muted-foreground">
+          Kind
+          <select className={SELECT_CLASS} value={kind} onChange={(event) => change('kind', event.target.value, '')}>
+            <option value="">Every kind</option>
+            {KINDS.map((one) => (
+              <option key={one.id} value={one.id}>
+                {one.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-muted-foreground">
+          Show
+          <select className={SELECT_CLASS} value={shown} onChange={(event) => change('show', event.target.value, 'all')}>
+            <option value="all">All tags</option>
+            <option value="bound">On a spool</option>
+            <option value="unbound">Not on a spool</option>
+          </select>
+        </label>
+      </div>
+      {error && (
+        <p role="alert" className="text-[13px] text-warn">
+          {error}
+        </p>
+      )}
+      {!tags && !error && <p className="text-[13px] text-muted-foreground">Loading tags…</p>}
+      {tags && (
+        <div className="overflow-x-auto rounded-md border">
+          <table aria-label="Tags" className="w-full text-left text-[13px]">
+            <thead className="bg-muted/50 text-muted-foreground">
+              <tr>
+                <th scope="col" className={TH}>Tag</th>
+                <th scope="col" className={TH}>Kind</th>
+                <th scope="col" className={TH}>Spool</th>
+                <th scope="col" className={TH}>Bound since</th>
+                <th scope="col" className={TH}>Taken over</th>
+                <th scope="col" className={TH}>
+                  <span className="sr-only">History</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((tag) => (
+                <tr key={tag.id} data-tag={tag.id} className="border-t">
+                  <td className={`${TD} font-mono text-[12px]`}>{keyOf(tag)}</td>
+                  <td className={TD}>{kindName(tag.kind)}</td>
+                  <td className={TD}>
+                    {tag.binding ? spoolLink(tag.binding.spool_id) : <span className="text-muted-foreground">Not on a spool</span>}
+                  </td>
+                  <td className={TD}>
+                    {tag.binding ? <time dateTime={tag.binding.bound_at}>{when(tag.binding.bound_at)}</time> : ''}
+                  </td>
+                  <td className={TD}>{tag.binding ? (tag.binding.override ? 'Yes' : 'No') : ''}</td>
+                  <td className={`${TD} text-right`}>
+                    <Button type="button" size="xs" variant="outline" aria-label={`History of ${keyOf(tag)}`} onClick={() => void openHistory(tag)}>
+                      History
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+              {rows.length === 0 && (
+                <tr className="border-t">
+                  <td colSpan={6} className="px-2 py-3 text-muted-foreground">
+                    No tags match. A spool&apos;s page binds a tag to it.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {historyError && (
+        <p role="alert" className="text-[13px] text-warn">
+          {historyError}
+        </p>
+      )}
+      {open && (
+        <section aria-label="Tag history" className="flex flex-col gap-2 rounded-md border p-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold tracking-tight">History of {keyOf(open)}</h2>
+            <Button type="button" size="xs" variant="ghost" onClick={() => setOpen(null)}>
+              Close
+            </Button>
+          </div>
+          <ul className="flex flex-col gap-1 text-[13px]">
+            {(open.history ?? []).map((binding) => (
+              <li key={binding.id} className="flex flex-wrap items-baseline gap-x-2">
+                {spoolLink(binding.spool_id)}
+                <span className="text-muted-foreground">
+                  <time dateTime={binding.bound_at}>{when(binding.bound_at)}</time>
+                  {' to '}
+                  {binding.unbound_at ? <time dateTime={binding.unbound_at}>{when(binding.unbound_at)}</time> : 'now'}
+                </span>
+                {binding.override && <span className="text-muted-foreground">Taken over</span>}
+                {binding.reason && <span>{binding.reason}</span>}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </div>
+  )
+}

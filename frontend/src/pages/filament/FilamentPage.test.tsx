@@ -69,4 +69,17 @@ describe('the Filament section', () => {
     const tabs = screen.getByRole('navigation', { name: 'Filament' })
     expect(within(tabs).getByRole('link', { name: 'Ledger' })).toHaveAttribute('aria-current', 'page')
   })
+
+  it('mounts the Tags, Locations, Catalog and Ledger tabs', async () => {
+    for (const [route, find] of [
+      ['/filament/tags', () => screen.findByRole('table', { name: 'Tags' })],
+      ['/filament/locations', () => screen.findByRole('tree', { name: 'Locations' })],
+      ['/filament/catalog', () => screen.findByRole('table', { name: 'Materials' })],
+      ['/filament/ledger', () => screen.findByRole('table', { name: 'Ledger' })],
+    ] as const) {
+      const view = render(route)
+      await find()
+      view.unmount()
+    }
+  })
 })

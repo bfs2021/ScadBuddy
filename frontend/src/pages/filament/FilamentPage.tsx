@@ -1,7 +1,11 @@
 import { NavLink } from 'react-router'
 import { tabsListVariants } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
+import { CatalogTab } from './CatalogTab'
+import { LedgerTab } from './LedgerTab'
+import { LocationsTab } from './LocationsTab'
 import { SpoolsTab } from './SpoolsTab'
+import { TagsTab } from './TagsTab'
 import { TypesTab } from './TypesTab'
 import { FILAMENT_TABS, type TabId } from './tabs'
 
@@ -49,6 +53,10 @@ export function FilamentPage({ tab }: { tab: TabId }) {
         </nav>
         {tab === 'spools' && <SpoolsTab />}
         {tab === 'types' && <TypesTab />}
+        {tab === 'tags' && <TagsTab />}
+        {tab === 'locations' && <LocationsTab />}
+        {tab === 'catalog' && <CatalogTab />}
+        {tab === 'ledger' && <LedgerTab />}
       </div>
     </div>
   )
