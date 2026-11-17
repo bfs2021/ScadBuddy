@@ -287,11 +287,13 @@ export function TypePage() {
     setDraft((was) => ({ ...was, [key]: value }))
   }
   /** A subtype belongs to one material: a new material drops one of another's. */
-  const setMaterial = (materialId: string) =>
+  const setMaterial = (materialId: string) => {
+    setNotice(null)
     setDraft((was) => {
       const kept = lists?.subtypes.find((one) => one.id === was.subtype_id)
       return { ...was, material_id: materialId, subtype_id: kept?.material_id && kept.material_id !== materialId ? '' : was.subtype_id }
     })
+  }
 
   async function save() {
     const body = bodyOf(draft)
@@ -416,7 +418,7 @@ export function TypePage() {
           <h2 className="text-sm font-semibold tracking-tight">What it is</h2>
           {text('code', 'Code', { hint: 'One per type, in any case. Bambu Studio calls it the filament name.' })}
           <div className="grid grid-cols-2 gap-3">
-            <Pick label="Material" required value={draft.material_id} onChange={(next) => { setNotice(null); setMaterial(next) }} options={lists.materials} />
+            <Pick label="Material" required value={draft.material_id} onChange={setMaterial} options={lists.materials} />
             <Pick label="Subtype" value={draft.subtype_id} onChange={(next) => set('subtype_id', next)} options={subtypes} />
             <Pick label="Brand" value={draft.brand_id} onChange={(next) => set('brand_id', next)} options={lists.brands} />
             <Pick label="Category" value={draft.category_id} onChange={(next) => set('category_id', next)} options={lists.categories} />

@@ -100,8 +100,8 @@ function fillLine(row: DensityFillRow): string {
 
 /**
  * #4250 — the price book's filaments (spec 2026-10-18 §5.1, plan Ruling 4): what a
- * kilogram of each costs, and its density for the rough estimate. A record is never deleted, only archived: a quote priced with it keeps
- * its lines, and an item may still name it. "Show archived" lists the archived ones, each
+ * kilogram of each costs, and its density for the rough estimate. A record is never
+ * deleted, only archived: a quote priced with it keeps its lines, and an item may still name it. "Show archived" lists the archived ones, each
  * with an Unarchive that brings the same record back (#4977). "Import from spools" makes
  * or updates one record per filament of ScadBuddy's spools (names and `#RRGGBBAA`, so an
  * opaque and a translucent spool are two records, #6316), on click only: a quote never
