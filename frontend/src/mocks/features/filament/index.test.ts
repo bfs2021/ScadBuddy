@@ -348,3 +348,29 @@ describe('the spools CSV import (Task 15)', () => {
     expect(await refusal(request('/filament/spools/import', { method: 'POST', body }))).toMatchObject({ status: 428 })
   })
 })
+
+describe('extra keys in a write body (every body model of `filament/models.py` forbids them)', () => {
+  const body = (extra: object, base: object = {}) => JSON.stringify({ ...base, ...extra })
+  const rows = (row: object) => JSON.stringify([row])
+  const PRESET = { printer_model: 'H2C', nozzle_diameter: '0.4', slicer_filament: 'GFA00' }
+  const K = { printer_id: H2C.printer_id, extruder: 0, nozzle_diameter: '0.4', k_value: '0.02' }
+  const cases: [string, string, string, string][] = [
+    ['PUT spool presets', 'PUT', `/filament/spools/${spoolId(1)}/presets`, rows({ ...PRESET, migrated: true })],
+    ['PUT type presets', 'PUT', `/filament/types/${T.JADE}/presets`, rows({ ...PRESET, overridden: false })],
+    ['PUT spool K values', 'PUT', `/filament/spools/${spoolId(1)}/k-values`, rows({ ...K, overridden: false })],
+    ['PUT type K values', 'PUT', `/filament/types/${T.JADE}/k-values`, rows({ ...K, type_id: T.JADE })],
+    ['PATCH a spool', 'PATCH', `/filament/spools/${spoolId(1)}`, body({ bogus: 1 })],
+    ['POST a spool', 'POST', '/filament/spools', body({ bogus: 1 }, { type_id: T.JADE })],
+    ['PATCH a type', 'PATCH', `/filament/types/${T.JADE}`, body({ bogus: 1 })],
+    ['POST a type', 'POST', '/filament/types', body({ bogus: 1 }, { code: 'X', material_id: M.PLA, rgba: '#FFFFFFFF', diameter_mm: '1.75', label_weight_g: 1000 })],
+    ['POST a move', 'POST', `/filament/spools/${spoolId(1)}/move`, body({ bogus: 1 }, { location_id: null })],
+    ['POST an archive', 'POST', `/filament/spools/${spoolId(1)}/archive`, body({ bogus: 1 })],
+    ['POST a tag', 'POST', `/filament/spools/${spoolId(1)}/tags`, body({ bogus: 1 }, { tag_uid: '04AABB' })],
+    ['POST an event', 'POST', `/filament/spools/${spoolId(1)}/events`, body({ bogus: 1 }, { kind: 'weighed', grams: 5 })],
+    ['POST a location', 'POST', '/filament/locations', body({ bogus: 1 }, { name: 'X', kind_id: LK.SHELF })],
+    ['PATCH a location', 'PATCH', `/filament/locations/${L.SHELF_A}`, body({ bogus: 1 })],
+  ]
+  it.each(cases)('refuses it on %s', async (_name, method, path, payload) => {
+    expect(await refusal(request(path, { method, body: payload }))).toMatchObject({ status: 422, detail: expect.stringContaining('Extra inputs are not permitted') })
+  })
+})

@@ -23,7 +23,7 @@ interface Props {
   /**
    * The keys the spool's type itself holds a preset for (`presetRows` `keyOf`), from the
    * type's own rows: `inherited` cannot say, because a row the spool overrides is shown
-   * there as the spool's. An own row with a key in it has "Reset to type"; any other has Remove.
+   * there as the spool's. An own row with a key in it has "Reset to type"; any other has Remove. With `inherited` and no `typeKeys` (the type is loading, or failed to load) an own row has no action.
    */
   typeKeys?: ReadonlySet<string>
 }
@@ -90,7 +90,7 @@ export function PresetTable({ rows, onChange, models = [], inherited, typeKeys }
                     />
                   </td>
                   <td className="px-2 py-1 whitespace-nowrap">
-                    {inherited && typeKeys?.has(keyOf(row)) ? (
+                    {inherited && !typeKeys ? null : inherited && typeKeys?.has(keyOf(row)) ? (
                       <Button type="button" size="xs" variant="ghost" aria-label={`Reset preset ${at + 1} to type`} onClick={() => onChange(rows.filter((_, i) => i !== at))}>
                         <Undo2Icon /> Reset to type
                       </Button>

@@ -42,6 +42,33 @@ const problem = (status: keyof typeof TITLES, detail: string) =>
     { status, headers: { 'Content-Type': 'application/problem+json' } },
   )
 
+/**
+ * The fields each write body takes: every body model of `filament/models.py` extends
+ * `_In` (`extra="forbid"`), so a key outside them is a 422. Read from the models' fields.
+ */
+const FIELDS = {
+  preset: ['printer_model', 'nozzle_diameter', 'slicer_filament', 'slicer_filament_name'],
+  kValue: ['printer_id', 'extruder', 'nozzle_diameter', 'nozzle_type', 'k_value', 'name', 'cali_idx', 'setting_id'],
+  typeCreate: ['code', 'material_id', 'subtype_id', 'brand_id', 'category_id', 'effect_id', 'insert_type_id', 'rgba', 'colour_name', 'extra_colours', 'diameter_mm', 'density_g_cm3', 'cost_per_kg', 'label_weight_g', 'low_stock_pct', 'nozzle_temp_min', 'nozzle_temp_max', 'bed_temp_min', 'bed_temp_max', 'note'],
+  spoolCreate: ['type_id', 'brand_id', 'material_id', 'subtype_id', 'category_id', 'effect_id', 'colour_name', 'rgba', 'extra_colours', 'diameter_mm', 'density_g_cm3', 'nozzle_temp_min', 'nozzle_temp_max', 'bed_temp_min', 'bed_temp_max', 'label_weight_g', 'insert_type_id', 'low_stock_pct', 'cost_per_kg', 'weight_locked', 'note', 'grams_left'],
+  move: ['location_id'],
+  archive: ['archived'],
+  tag: ['tag_uid', 'tray_uuid', 'kind', 'override'],
+  event: ['kind', 'source', 'at', 'grams', 'temp_c', 'hours', 'note'],
+  locationCreate: ['name', 'kind_id', 'parent_id', 'identifier', 'capacity', 'printer_id', 'ams_id', 'tray_id', 'note', 'sort_order'],
+} as const
+const PATCH_FIELDS = { type: [...FIELDS.typeCreate, 'archived'], spool: [...FIELDS.spoolCreate.filter((field) => field !== 'grams_left'), 'archived'], location: [...FIELDS.locationCreate, 'archived'] }
+
+/** The 422 for a body (or each row of a list body) that has a key `allowed` lacks, or `null`. */
+function extraKeys(body: unknown, allowed: readonly string[]): Response | null {
+  for (const row of Array.isArray(body) ? body : [body]) {
+    if (row === null || typeof row !== 'object') continue
+    const extra = Object.keys(row).find((field) => !allowed.includes(field))
+    if (extra) return problem(422, `${extra}: Extra inputs are not permitted`)
+  }
+  return null
+}
+
 /** The fields a spool may override, as `EffectiveValues` lists them. */
 const OVERRIDABLE = [
   'brand_id',
@@ -756,7 +783,10 @@ export const handlers = [
     return HttpResponse.json(state.types.filter((type) => archived || !type.archived_at).sort((a, b) => a.code.localeCompare(b.code)))
   }),
   http.post(`${BASE}/types`, async ({ request }) => {
-    const body = normalised((await request.json()) as S['SpoolTypeCreate'])
+    const raw = await request.json()
+    const extra = extraKeys(raw, FIELDS.typeCreate)
+    if (extra) return extra
+    const body = normalised(raw as S['SpoolTypeCreate'])
     const refused = typeRefusal(body)
     if (refused) return refused
     const made = linkPriceBook({
@@ -798,6 +828,8 @@ export const handlers = [
     const at = state.types.findIndex((one) => one.id === params.id)
     if (at < 0) return problem(404, `no spool type ${String(params.id)}`)
     const body = (await request.json()) as Record<string, unknown>
+    const extra = extraKeys(body, PATCH_FIELDS.type)
+    if (extra) return extra
     const clear = cleared(body, ['code', 'material_id', 'rgba', 'diameter_mm', 'label_weight_g'])
     if (clear) return problem(422, clear)
     const next = patched(state.types[at]!, body)
@@ -808,7 +840,10 @@ export const handlers = [
   }),
   http.put(`${BASE}/types/:id/presets`, async ({ params, request }) => {
     const typeId = String(params.id)
-    const rows = ((await request.json()) as S['TypePresetCreate'][]).map((one) => ({ slicer_filament_name: null, ...one, type_id: typeId }))
+    const sent = await request.json()
+    const extra = extraKeys(sent, FIELDS.preset)
+    if (extra) return extra
+    const rows = (sent as S['TypePresetCreate'][]).map((one) => ({ slicer_filament_name: null, ...one, type_id: typeId }))
     if (duplicated(rows, (row) => `${row.printer_model}|${row.nozzle_diameter}`)) return problem(422, REFUSED.rowsDuplicate)
     if (!state.types.some((one) => one.id === typeId)) return problem(404, `no spool type ${typeId}`)
     state.typePresets = [...state.typePresets.filter((one) => one.type_id !== typeId), ...rows]
@@ -816,7 +851,10 @@ export const handlers = [
   }),
   http.put(`${BASE}/types/:id/k-values`, async ({ params, request }) => {
     const typeId = String(params.id)
-    const rows = ((await request.json()) as S['TypeKValueCreate'][]).map((one) => ({
+    const sent = await request.json()
+    const extra = extraKeys(sent, FIELDS.kValue)
+    if (extra) return extra
+    const rows = (sent as S['TypeKValueCreate'][]).map((one) => ({
       nozzle_type: null,
       name: null,
       cali_idx: null,
@@ -842,7 +880,10 @@ export const handlers = [
     )
   }),
   http.post(`${BASE}/spools`, async ({ request }) => {
-    const body = normalised((await request.json()) as S['SpoolCreate'])
+    const raw = await request.json()
+    const extra = extraKeys(raw, FIELDS.spoolCreate)
+    if (extra) return extra
+    const body = normalised(raw as S['SpoolCreate'])
     const made = newSpool(body)
     const refused = spoolRefusal(made)
     if (refused) return refused
@@ -874,6 +915,8 @@ export const handlers = [
     const at = state.spools.findIndex((row) => row.id === params.id)
     if (at < 0) return problem(404, `no spool ${String(params.id)}`)
     const body = (await request.json()) as Record<string, unknown>
+    const extra = extraKeys(body, PATCH_FIELDS.spool)
+    if (extra) return extra
     const clear = cleared(body, ['weight_locked'])
     if (clear) return problem(422, clear)
     const { archived, ...fields } = normalised(body)
@@ -908,12 +951,17 @@ export const handlers = [
   http.post(`${BASE}/spools/:id/archive`, async ({ params, request }) => {
     const at = state.spools.findIndex((row) => row.id === params.id)
     if (at < 0) return problem(404, `no spool ${String(params.id)}`)
-    const { archived = true } = (await request.json()) as S['SpoolArchive']
+    const sent = await request.json()
+    const extra = extraKeys(sent, FIELDS.archive)
+    if (extra) return extra
+    const { archived = true } = sent as S['SpoolArchive']
     setArchived(at, archived)
     return HttpResponse.json(view(state.spools[at]!))
   }),
   http.post(`${BASE}/spools/:id/tags`, async ({ params, request }) => {
     const body = (await request.json()) as S['TagBind']
+    const extra = extraKeys(body, FIELDS.tag)
+    if (extra) return extra
     const uid = keyOf(hexOf(body.tag_uid).slice(-16))
     const tray = keyOf(hexOf(body.tray_uuid).slice(0, 32))
     if (uid === null && tray === null) return problem(422, REFUSED.tagUnnamed)
@@ -952,9 +1000,12 @@ export const handlers = [
   http.put(`${BASE}/spools/:id/presets`, async ({ params, request }) => {
     const spoolId = String(params.id)
     if (!findSpool(spoolId)) return problem(404, `no spool ${spoolId}`)
+    const sent = await request.json()
+    const extra = extraKeys(sent, FIELDS.preset)
+    if (extra) return extra
     // `set_presets`: a row sent back unchanged (same key and values) stays migrated; a new or changed one is the person's.
     const was = state.spoolPresets.filter((one) => one.spool_id === spoolId && one.migrated)
-    const rows = ((await request.json()) as S['SpoolPresetCreate'][]).map((one) => {
+    const rows = (sent as S['SpoolPresetCreate'][]).map((one) => {
       const row = { slicer_filament_name: null, ...one, spool_id: spoolId }
       const same = was.some((old) => old.printer_model === row.printer_model && old.nozzle_diameter === row.nozzle_diameter && old.slicer_filament === row.slicer_filament && old.slicer_filament_name === row.slicer_filament_name)
       return same ? { ...row, migrated: true } : row
@@ -969,7 +1020,10 @@ export const handlers = [
   http.put(`${BASE}/spools/:id/k-values`, async ({ params, request }) => {
     const spoolId = String(params.id)
     if (!findSpool(spoolId)) return problem(404, `no spool ${spoolId}`)
-    const rows = ((await request.json()) as S['SpoolKValueCreate'][]).map((one) => ({
+    const sent = await request.json()
+    const extra = extraKeys(sent, FIELDS.kValue)
+    if (extra) return extra
+    const rows = (sent as S['SpoolKValueCreate'][]).map((one) => ({
       nozzle_type: null,
       name: null,
       cali_idx: null,
@@ -991,7 +1045,10 @@ export const handlers = [
   http.post(`${BASE}/spools/:id/events`, async ({ params, request }) => {
     const at = state.spools.findIndex((row) => row.id === params.id)
     if (at < 0) return problem(404, `no spool ${String(params.id)}`)
-    const body = normalised((await request.json()) as S['SpoolEventAdd'])
+    const raw = await request.json()
+    const extra = extraKeys(raw, FIELDS.event)
+    if (extra) return extra
+    const body = normalised(raw as S['SpoolEventAdd'])
     if (body.kind === 'weighed' && body.grams == null) return problem(422, 'body: Value error, a weighing needs grams')
     const row = state.spools[at]!
     const when = body.at ?? now()
@@ -1008,7 +1065,10 @@ export const handlers = [
   http.post(`${BASE}/spools/:id/move`, async ({ params, request }) => {
     const at = state.spools.findIndex((row) => row.id === params.id)
     if (at < 0) return problem(404, `no spool ${String(params.id)}`)
-    const { location_id } = (await request.json()) as S['SpoolMove']
+    const sent = await request.json()
+    const extra = extraKeys(sent, FIELDS.move)
+    if (extra) return extra
+    const { location_id } = sent as S['SpoolMove']
     if (location_id && !state.locations.some((place) => place.id === location_id && !place.archived_at)) {
       return problem(422, REFUSED.moveTarget)
     }
@@ -1074,6 +1134,8 @@ export const handlers = [
   http.get(`${BASE}/locations`, ({ request }) => HttpResponse.json(tree(flag(request, 'include_archived')))),
   http.post(`${BASE}/locations`, async ({ request }) => {
     const body = (await request.json()) as S['LocationCreate']
+    const extra = extraKeys(body, FIELDS.locationCreate)
+    if (extra) return extra
     const absent = missing(body, ['name', 'kind_id'])
     if (absent) return problem(422, absent)
     if (placeTaken(body)) return problem(409, REFUSED.locationExists)
@@ -1099,6 +1161,8 @@ export const handlers = [
     const at = state.locations.findIndex((place) => place.id === params.id)
     if (at < 0) return problem(404, `no location ${String(params.id)}`)
     const body = (await request.json()) as Record<string, unknown>
+    const extra = extraKeys(body, PATCH_FIELDS.location)
+    if (extra) return extra
     const clear = cleared(body, ['name', 'sort_order', 'kind_id'])
     if (clear) return problem(422, clear)
     const self = state.locations[at]!.id

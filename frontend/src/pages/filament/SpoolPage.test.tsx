@@ -316,6 +316,29 @@ describe('the spool page', () => {
     expect(presets).toContainEqual(expect.objectContaining({ nozzle_diameter: '0.4', slicer_filament: 'GFA00', overridden: false }))
   })
 
+  it('shows no Reset or Remove on an own preset row until the type has loaded', async () => {
+    await setSpoolPresets(spoolId(1), [{ printer_model: 'H2C', nozzle_diameter: '0.4', slicer_filament: 'GFA09', slicer_filament_name: null }])
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    server.use(http.get('*/api/v1/filament/types/:id', async () => { await gate }))
+    open(1)
+    const table = await screen.findByRole('table', { name: 'Slicer presets' })
+    expect(await within(table).findByDisplayValue('GFA09')).toBeInTheDocument()
+    expect(within(table).queryByRole('button', { name: /to type|^Remove/ })).toBeNull()
+    release()
+    expect(await within(table).findByRole('button', { name: 'Reset preset 1 to type' })).toBeInTheDocument()
+  })
+
+  it('says so when the type could not be loaded, and offers no Reset or Remove', async () => {
+    await setSpoolPresets(spoolId(1), [{ printer_model: 'H2C', nozzle_diameter: '0.4', slicer_filament: 'GFA09', slicer_filament_name: null }])
+    server.use(http.get('*/api/v1/filament/types/:id', () => HttpResponse.json({ type: 'about:blank', title: 'Not Found', status: 404, detail: 'no spool type gone' }, { status: 404, headers: { 'Content-Type': 'application/problem+json' } })))
+    open(1)
+    expect(await screen.findByText(/The type's presets and K values could not be loaded: no spool type gone/)).toBeInTheDocument()
+    expect(within(screen.getByRole('table', { name: 'Slicer presets' })).queryByRole('button', { name: /to type|^Remove/ })).toBeNull()
+  })
+
   it('offers Reset to type only for a row the type has, and Remove for one it lacks', async () => {
     const { user } = open(1)
     await heading(1)
@@ -328,6 +351,7 @@ describe('the spool page', () => {
   })
 
   it('makes a type from a spool that needs one, and attaches it', async () => {
+    const puts = recorded('PUT', /\/types\/.*\/presets$/)
     const { user } = open(6)
     await heading(6)
     await user.click(screen.getByRole('button', { name: 'Create type from this spool' }))
@@ -336,6 +360,8 @@ describe('the spool page', () => {
     const type = await getType(spool.type_id!)
     expect(type).toMatchObject({ colour_name: 'Teal', rgba: '#1B9AAAFF' })
     expect(type.presets).toHaveLength(1)
+    // Only the four fields of a preset: the server refuses any other key (`extra="forbid"`).
+    expect(puts).toEqual([[{ printer_model: 'H2C', nozzle_diameter: '0.4', slicer_filament: 'GFA00', slicer_filament_name: 'Bambu PLA Basic @BBL H2C' }]])
     expect(spool.overridden).toEqual([])
   })
 

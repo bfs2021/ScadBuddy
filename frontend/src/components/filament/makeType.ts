@@ -146,8 +146,13 @@ export async function makeTypeFromSpool(spool: SpoolDetail): Promise<SpoolType> 
     bed_temp_min: e.bed_temp_min ?? null,
     bed_temp_max: e.bed_temp_max ?? null,
   })
-  const presets = spool.presets.filter((row) => row.overridden).map(({ overridden: _o, ...row }) => row)
-  const kValues = spool.k_values.filter((row) => row.overridden).map(({ overridden: _o, ...row }) => row)
+  // Only the input fields: an effective row also carries `overridden` and `migrated`, which the server refuses.
+  const presets = spool.presets
+    .filter((row) => row.overridden)
+    .map(({ printer_model, nozzle_diameter, slicer_filament, slicer_filament_name }) => ({ printer_model, nozzle_diameter, slicer_filament, slicer_filament_name }))
+  const kValues = spool.k_values
+    .filter((row) => row.overridden)
+    .map(({ printer_id, extruder, nozzle_diameter, nozzle_type, k_value, name, cali_idx, setting_id }) => ({ printer_id, extruder, nozzle_diameter, nozzle_type, k_value, name, cali_idx, setting_id }))
   if (presets.length > 0) await setTypePresets(type.id, presets)
   if (kValues.length > 0) await setTypeKValues(type.id, kValues)
   await patchSpool(spool.id, { type_id: type.id, ...Object.fromEntries(TYPE_FIELDS.map((field) => [field, null])) })

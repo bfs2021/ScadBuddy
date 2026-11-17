@@ -23,7 +23,7 @@ interface Props {
   /**
    * The keys the spool's type itself holds a K value for (`kValueRows` `keyOf`), from the
    * type's own rows: `inherited` cannot say, because a row the spool overrides is shown
-   * there as the spool's. An own row with a key in it has "Reset to type"; any other has Remove.
+   * there as the spool's. An own row with a key in it has "Reset to type"; any other has Remove. With `inherited` and no `typeKeys` (the type is loading, or failed to load) an own row has no action.
    */
   typeKeys?: ReadonlySet<string>
 }
@@ -97,7 +97,7 @@ export function KValueTable({ rows, onChange, printers, inherited, typeKeys }: P
                   <Input aria-label="K value name" className="h-7 min-w-36" value={row.name ?? ''} onChange={(e) => set(at, { name: e.target.value === '' ? null : e.target.value })} />
                 </td>
                 <td className="px-2 py-1 whitespace-nowrap">
-                  {inherited && typeKeys?.has(keyOf(row)) ? (
+                  {inherited && !typeKeys ? null : inherited && typeKeys?.has(keyOf(row)) ? (
                     <Button type="button" size="xs" variant="ghost" aria-label={`Reset K value ${at + 1} to type`} onClick={() => onChange(rows.filter((_, i) => i !== at))}>
                       <Undo2Icon /> Reset to type
                     </Button>
