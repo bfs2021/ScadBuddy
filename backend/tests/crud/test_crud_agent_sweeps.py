@@ -154,6 +154,14 @@ def test_a_live_read_is_bounded(client: tuple[TestClient, dict[str, str]]) -> No
     c, headers = client
     many = {"ids": [str(uuid.uuid4()) for _ in range(1001)]}
     assert c.post(f"{BASE}/sessions/live", json=many, headers=headers).status_code == 422
+    # Past the byte cap, the route refuses before it parses the body.
+    big = b'{"ids": [], "pad": "' + b"x" * (40 * 1024 * 1024) + b'"}'
+    refused = c.post(
+        f"{BASE}/sessions/live",
+        content=big,
+        headers={**headers, "content-type": "application/json"},
+    )
+    assert refused.status_code == 413
 
 
 def test_a_session_not_forgotten_keeps_its_rows(
