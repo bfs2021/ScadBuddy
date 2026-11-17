@@ -1,7 +1,7 @@
 """An edit of a session behind a CRUD route (#5299 step 9, #6449): under
 ``/api/v1/internal/crud/agent/``, for the ``agent`` credential only (`crud_router`), area
 ``session-edits``. ``POST …/sessions/{id}/edit`` is the agent's ``sessions/edits.ts``
-``SessionEdits.update`` transaction (`agent_data/edits.py`): a rename, marking it done and
+``PgEditRows.edit`` transaction (`agent_data/edits.py`): a rename, marking it done and
 archiving it, under the row's lock and only while ``principal`` owns it, with its warm
 eviction, an archive's ``done`` summaries dismissed, and their events, in one transaction
 (#5299 D2). It answers what it logged (as the gate's routes do) and the summaries it dismissed,

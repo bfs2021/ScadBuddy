@@ -1,6 +1,6 @@
 """An edit of a session behind a CRUD route (#5299 step 9, #6449), for ``api/crud_agent_edits.py``
 (area ``session-edits``): a rename, marking it done and archiving it, the agent's
-``sessions/edits.ts`` ``SessionEdits.update`` transaction statement for statement.
+``sessions/edits.ts`` ``PgEditRows.edit`` transaction statement for statement.
 
 Under the row's lock, taken only while ``principal`` owns it: a done refused while a turn holds
 the row, an archive refused while a turn holds it or anything is parked on the person (an

@@ -36,8 +36,9 @@ import { notifyWarmEvict } from './warmEvict.js'
 // means the edit would pass and nothing was written. Only then is the workflow told and the edit
 // sent again, told. A refusal, a 503 or a lost answer on the first call ends no workflow. What
 // changes between the two calls (a turn claimed, a call parked) can still refuse the second with
-// the workflow told: a later send then reads it `closed`, as one did on SQL after a commit that
-// failed past the signal.
+// the workflow told, and a 503 or a lost answer on the second leaves the workflow told and the row
+// not done: either way a later send reads it `closed`, as one did on SQL after a commit that
+// failed past the signal, and the edit sent again marks it done.
 
 export type SessionEdit = { title?: string; done?: true; archived?: boolean }
 

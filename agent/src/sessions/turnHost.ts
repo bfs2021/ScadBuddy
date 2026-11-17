@@ -1097,10 +1097,11 @@ export class TurnHost {
  * `unpriced_cost_usd` (Claude Code has priced none of it yet), whether or not the row is still
  * this placement's. The end (`TurnHost#write`) replaces it with the turn's own reckoning.
  *
- * Each write has a key of its own (`#token` and a sequence number). A write whose answer never
- * came is sent again under its key before any new one, so one that committed while its answer was
- * lost is added once (`SpendDelta.key`). The token is this object's, never the attempt id, which
- * the next turn's first placement in a run shares; the end's key names the turn too.
+ * Each write as it runs has a key of its own (`#token` and a sequence number). A write whose answer
+ * never came is sent again under its key before any new one, so one that committed while its
+ * answer was lost is added once (`SpendDelta.key`). The token is this object's, never the attempt
+ * id alone, which the next turn's first placement in a run shares. The end's write is keyed
+ * `<attempt>:<turn>:end` (`endKey`), not by the token.
  */
 class Spend {
   readonly turns: Pick<TurnRows, 'spend'>
@@ -1115,10 +1116,10 @@ class Spend {
   #closed = false
 
   /**
-   * The end's write's key (`TurnHost#write`): the placement's attempt and turn. `session_turn` is
-   * never retried (`maximumAttempts: 1`) and each placement has an attempt of its own
-   * (`${runId}:${cycle}`, temporal/session/workflow.ts), so the key is this placement's alone, as
-   * the token is; it names the attempt and turn so the key row says which end it was.
+   * The end's write's key (`TurnHost#write`): `<attempt>:<turn>:end`. The attempt
+   * (`${runId}:${cycle}`, temporal/session/workflow.ts) is shared by the next turn's first placement
+   * in a run, since `cycle` starts at 0 for every turn, so the key adds the turn id. `session_turn`
+   * is never retried (`maximumAttempts: 1`), so (attempt, turn) is this placement's alone.
    */
   readonly endKey: string
 
