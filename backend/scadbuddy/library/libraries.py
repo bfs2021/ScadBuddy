@@ -453,6 +453,10 @@ class LeaseTokenTakenError(Exception):
     """A lease taken under a token that already holds another holder's or checkouts'."""
 
 
+class LeaseLostError(LibraryError):
+    """A renewal found its hold gone; the block must stop rather than carry on."""
+
+
 class SharedLeases(Protocol):
     """The rows a :class:`CheckoutGate` takes and renews where other processes see them:
     :class:`CheckoutLeases` over SQL, or the render worker's `crud/render.py`
@@ -739,17 +743,34 @@ async def _renewed(
     then dropped. ``sleep`` is the wait before each renewal: a test sets it to renew
     when it says so (#6527)."""
 
+    lost = asyncio.Event()
+    owner = asyncio.current_task()
+
     async def renewing() -> None:
         while True:
             await sleep(ttl / 3)
             try:
-                await asyncio.to_thread(renew)
+                held = await asyncio.to_thread(renew)
             except Exception:
                 logger.exception("could not renew a row", extra={"row": what, "holder": holder})
+                continue
+            if held is False:
+                # The row lapsed or another holder took it. Carrying on would
+                # leave the block reading a checkout it no longer holds (#6560):
+                # log it and stop the block with an error that reaches the caller.
+                logger.error("hold lost while renewing a row", extra={"row": what, "holder": holder})
+                lost.set()
+                if owner is not None:
+                    owner.cancel()
+                return
 
     task = asyncio.create_task(renewing())
     try:
         yield
+    except asyncio.CancelledError:
+        if lost.is_set():
+            raise LeaseLostError(f"lost the {what} held by {holder} during renewal") from None
+        raise
     finally:
         task.cancel()
         try:

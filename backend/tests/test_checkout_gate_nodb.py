@@ -9,6 +9,9 @@ import uuid
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+import pytest
+
+from scadbuddy.library import libraries
 from scadbuddy.library.libraries import CheckoutGate
 
 
@@ -78,3 +81,28 @@ async def test_a_pin_is_renewed_each_third_of_its_ttl_until_it_ends() -> None:
         assert rows.held == {token}
     assert rows.held == set()
     assert set(asked) == {rows.ttl / 3}
+
+
+async def test_a_pin_whose_hold_is_lost_stops_the_block_with_an_error() -> None:
+    """A renewal that finds the hold gone (#6560) must stop the block with an
+    error instead of letting it read a checkout it no longer holds. The row's
+    ``renew_pin`` reports the loss as False; no database is involved."""
+    rows = _Rows()
+    cue: asyncio.Queue[None] = asyncio.Queue()
+
+    async def on_cue(delay: float) -> None:
+        await cue.get()
+
+    gate = CheckoutGate(rows, sleep=on_cue)
+    entered = 0
+    with pytest.raises(libraries.LeaseLostError, match="pin hold"):
+        async with gate.pinning():
+            entered += 1
+            (token,) = rows.held
+            await _reaches(lambda: len(rows.renewed), 1)
+            # The hold lapses (the row is gone or another holder took it).
+            rows.held.discard(token)
+            cue.put_nowait(None)  # next renewal sees False
+            await asyncio.sleep(2)  # the block must be interrupted, not run on
+    assert entered == 1
+    assert rows.held == set()  # drop still ran in the context manager's finally
