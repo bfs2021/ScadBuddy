@@ -912,7 +912,7 @@ store or another caller's credential:
 |---|---|---|
 | render worker | none: the worker has no database client and ignores the URL (#5298 Task 20); the API revokes everything the role `scadbuddy_render` held at every start where the role still exists (#5298 Task 22) | none: prod sets none and has no such role (eh-homelab/clusters#3555, #3566, #3578; measured 2026-11-14) |
 | print worker | none: the worker holds no pool and no KEK. It exchanges its proof only (`exchange_source`, no view fallback) and ignores `SCADBUDDY_DATABASE_URL` with a warning; with no proof it refuses to start (#5298 Task 33). The API revokes everything the role `scadbuddy_print` held at every start where the role still exists (#5298 Task 35) | none: prod sets none and has no such role (as above) |
-| flow runs' worker | none: the worker has no database client and ignores the URL (#5298); the API and the agent revoke everything the role `scadbuddy_projects` held at every start where the role still exists | none: prod sets none and has no such role (as above) |
+| flow runs' worker | none: the worker has no database client and ignores the URL (#5298); the API revokes everything the role `scadbuddy_projects` held at every start where the role still exists | none: prod sets none and has no such role (as above) |
 | agent sidecar | `scadbuddy_agent` | the sidecar in `scadbuddy.yaml` |
 
 Create each role with a password (`CREATE ROLE scadbuddy_agent LOGIN PASSWORD '…'`; on

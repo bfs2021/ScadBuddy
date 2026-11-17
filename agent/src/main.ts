@@ -71,7 +71,7 @@ import {
   withServiceCredential,
 } from './api/serviceCredential.js'
 import { untilBackendAnswers } from './api/backendUp.js'
-import { BLOB_AREAS, CrudAreas, FORGET_AREAS, GATE_AREAS, SECRET_AREAS, SESSION_AREAS, START_AREAS, TASK_AREAS, WORKSPACE_AREAS, REST_AREAS, SWEEP_AREAS } from './api/crudAreas.js'
+import { BLOB_AREAS, CrudAreas, FORGET_AREAS, GATE_AREAS, SECRET_AREAS, SESSION_AREAS, START_AREAS, TASK_AREAS, TURN_AREAS, WORKSPACE_AREAS, REST_AREAS, SWEEP_AREAS } from './api/crudAreas.js'
 import { CrudApprovals } from './approvals/crudApprovals.js'
 import { CrudAudit } from './audit/crudAudit.js'
 import { CrudPending } from './gate/crudPending.js'
@@ -120,6 +120,7 @@ import { decidedCalls, gateActivities, PgApprovalRecords, RowSessionOwners, type
 import { finishedToolCalls, toolCallResult, type ToolCallStarter, toolCallStarter } from './tools/activityProjection.js'
 import { TASK_QUEUE } from './temporal/names.js'
 import { sessionFinishActivities } from './temporal/session/finishActivity.js'
+import { CrudTurnRows, PgTurnRows, type TurnRows } from './sessions/turnRows.js'
 import { gateDb, sessionGateActivities } from './temporal/session/gateActivities.js'
 import { acquireActivities, liveHostQueues, releaseActivities } from './temporal/session/affinity.js'
 import { startHostWorkers, stopAfter } from './temporal/session/hostWorkers.js'
@@ -266,7 +267,7 @@ const serviceCredential: CredentialSource | undefined =
 // gate's writes (#5299 step 10, `GATE_AREAS`), but for a run grant's check, which only the API runs,
 // and the sessions' rows and what their calls touched (#5299 step 9, `SESSION_AREAS`).
 const crudFetch = serviceCredential ? withServiceCredential(globalThis.fetch, serviceCredential, config.backendUrl) : globalThis.fetch
-const crudAreas = new CrudAreas(config.backendUrl, { fetch: crudFetch, wanted: [...SECRET_AREAS, ...FORGET_AREAS, ...STORE_AREAS, ...WORKSPACE_AREAS, ...BLOB_AREAS, ...TASK_AREAS, ...GATE_AREAS, ...SESSION_AREAS, ...REST_AREAS, ...START_AREAS, ...SWEEP_AREAS] })
+const crudAreas = new CrudAreas(config.backendUrl, { fetch: crudFetch, wanted: [...SECRET_AREAS, ...FORGET_AREAS, ...STORE_AREAS, ...WORKSPACE_AREAS, ...BLOB_AREAS, ...TASK_AREAS, ...GATE_AREAS, ...SESSION_AREAS, ...REST_AREAS, ...TURN_AREAS, ...START_AREAS, ...SWEEP_AREAS] })
 crudAreas.start()
 // The small stores (#5299 step 5, api/crudStores.ts): each through its CRUD routes once the API
 // lists its area, over SQL until then.
@@ -277,7 +278,11 @@ void database?.ready()
 // Health's probe of the agent's data (#6501): the API's answer once it lists every area, so
 // /healthz asks Postgres nothing; the SQL ping only while an older API pod lists fewer.
 const dataHealth = database
-  ? { ...database, ping: (timeoutMs?: number) => (crudAreas.complete ? crudAreas.answers(timeoutMs) : database.ping(timeoutMs)) }
+  ? { ...database, ping: async (timeoutMs?: number) =>
+        // The agent still runs SQL (the LISTEN bus, a turn's claim and end, the MCP relay), so
+        // Postgres counts too until #5299 step 12; the API's answer counts once it lists every area.
+        (await database.ping(timeoutMs)) && (!crudAreas.complete || (await crudAreas.answers(timeoutMs))),
+    }
   : undefined
 const storeArea = (area: StoreArea) => () => crudAreas.has(area)
 // The tool-call gate's routes (#5299 step 10, backend api/crud_agent_gate.py).
@@ -313,6 +318,11 @@ const crudPublisher = new CrudPublisher(crudTarget)
 const publisher = (sql: Sql): Publisher => gated<Publisher>(new PgPublisher(sql), crudPublisher, () => crudAreas.has('publish'))
 const crudSessionReads = new CrudSessionReads(crudTarget)
 const sessionReads = (sql: Sql): SessionReads => gated<SessionReads>(new PgSessionReads(sql), crudSessionReads, () => crudAreas.has('session-reads'))
+// A durable turn's writes of its session's row with their events (#6449, backend
+// api/crud_agent_turns.py): a send's claim, a placement's, its spend, the turn's end with the
+// queue's head and the sweep's end of a lost turn, over SQL until the API lists area `session-turns`.
+const crudTurns = new CrudTurnRows(config.backendUrl, { fetch: crudFetch })
+const turnRows = (sql: Sql): TurnRows => gated<TurnRows>(new PgTurnRows(sql), crudTurns, () => crudAreas.has('session-turns'))
 // Which sessions still have a row, for the directory sweeps (#6501): over SQL until the API lists area `session-sweeps`.
 const crudPresence = new CrudSessionPresence(crudTarget)
 const sessionPresence = (sql: Sql): SessionPresence =>
@@ -947,6 +957,7 @@ const turnHost =
     ? new TurnHost({
         core: sessions.turnCore,
         sql: temporal.sql,
+        turns: turnRows(temporal.sql),
         pendingRoutes,
         images: sessionImages(temporal.sql),
         hostQueue: SESSION_HOST_QUEUE,
@@ -1157,7 +1168,7 @@ const temporalWorker =
           // Its events through this replica's event log, so they wake its followers at once and
           // go on the bus under its id (#3365); with no session manager, a log that only publishes.
           ...sessionGateActivities(gateDb(temporal.sql, sessions?.events, sessionEvents?.onAppend, gateRoutes), settings),
-          ...(sessions ? sessionFinishActivities(temporal.sql, sessions.events, orderCosts, sessionImages(temporal.sql)) : {}),
+          ...(sessions ? sessionFinishActivities(temporal.sql, sessions.events, orderCosts, sessionImages(temporal.sql), turnRows(temporal.sql)) : {}),
           ...(sessionAcquire ?? {}),
           // A durable turn's plugin and http_request tools (#2320): listed per turn, and
           // each call the `default` activity `turn:<server>__<tool>`.
@@ -1280,6 +1291,7 @@ if (sessions && temporalClient && payloadKeys && database) {
     client: temporalClient,
     sql: database.sql,
     blobs: sessionImages(database.sql),
+    turns: turnRows(database.sql),
     events: sessions.events,
     audit,
     pendingRoutes,
@@ -1291,6 +1303,7 @@ const stopDurableSweep =
   role.http && sessions && temporalClient && database
     ? new DurableRunningSweep({
         sql: database.sql,
+        turns: turnRows(database.sql),
         events: sessions.events,
         describe: durableDescriber(temporalClient),
       }).start(
