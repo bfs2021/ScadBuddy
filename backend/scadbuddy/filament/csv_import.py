@@ -22,7 +22,7 @@ from collections.abc import Sequence
 from typing import Annotated, Any, Final, Literal
 from uuid import UUID
 
-from psycopg import Connection
+from psycopg import Connection, errors
 from psycopg.rows import DictRow
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -30,8 +30,9 @@ from scadbuddy.filament import models as m
 from scadbuddy.filament.bambuddy_pull import _catalog_id
 from scadbuddy.filament.component import Filament
 from scadbuddy.filament.locations import LocationStore
-from scadbuddy.filament.spools import FilamentSpoolStore
+from scadbuddy.filament.spools import FilamentSpoolStore, SpoolTypelessError
 from scadbuddy.filament.types import TypeTempError
+from scadbuddy.filament.types import effective as work_out_effective
 
 Conn = Connection[DictRow]
 
@@ -284,7 +285,7 @@ def _plan(
         changes[field] = [before, value]
         values[field] = value
 
-    _check_temps(effective, plain)
+    _check_temps(_after(conn, spool, values))
 
     location: UUID | None = None
     if row.location is not None:
@@ -312,9 +313,11 @@ def _plan(
             spool_id = store.spools.create_on(conn, m.SpoolCreate(**values), actor=actor)
         else:
             spool_id = spool.id
-            if values:
-                store.spools.update_on(conn, spool_id, m.SpoolPatch(**values), actor=actor)
-    except TypeTempError as exc:
+            if values and not store.spools.update_on(
+                conn, spool_id, m.SpoolPatch(**values), actor=actor
+            ):
+                raise _RowError(f"no spool #{spool.number}")
+    except (TypeTempError, SpoolTypelessError, ValidationError, errors.ForeignKeyViolation) as exc:
         raise _RowError(str(exc)) from None
     if location is not None:
         LocationStore.move_on(conn, spool_id, location, actor=actor)
@@ -347,10 +350,37 @@ def _plain(row: CsvRow) -> dict[str, Any]:
     return {field: getattr(patch, field) for field in cells}
 
 
-def _check_temps(effective: m.EffectiveValues, plain: dict[str, Any]) -> None:
+def _after(conn: Conn, spool: m.Spool | None, values: dict[str, Any]) -> m.EffectiveValues:
+    """What the spool shows once ``values`` are written: its own cells over its type's
+    (the new type's, when the row sets one), the type's subtype and material, as a read
+    of it would work them out (`types.effective`). A catalog name not in the catalog yet
+    has no row to inherit from."""
+    own: dict[str, Any] = (spool.model_dump() if spool is not None else {}) | values
+
+    def one(table: str, row_id: UUID | None) -> dict[str, Any] | None:
+        if row_id is None:
+            return None
+        return conn.execute(f"SELECT * FROM {table} WHERE id = %s", (row_id,)).fetchone()
+
+    kind = one("filament_spool_types", own.get("type_id"))
+
+    def level(field: str) -> UUID | None:
+        if own.get(field) is not None or kind is None:
+            return own.get(field)
+        return kind[field]  # type: ignore[no-any-return]
+
+    return work_out_effective(
+        own,
+        kind,
+        one("filament_subtypes", level("subtype_id")),
+        one("filament_materials", level("material_id")),
+    )
+
+
+def _check_temps(after: m.EffectiveValues) -> None:
     for kind in ("nozzle", "bed"):
-        low = plain.get(f"{kind}_temp_min", getattr(effective, f"{kind}_temp_min"))
-        high = plain.get(f"{kind}_temp_max", getattr(effective, f"{kind}_temp_max"))
+        low = getattr(after, f"{kind}_temp_min")
+        high = getattr(after, f"{kind}_temp_max")
         if low is not None and high is not None and low > high:
             raise _RowError(f"{kind}_temp_min is above {kind}_temp_max")
 

@@ -1,5 +1,5 @@
 import { screen, waitFor, within } from '@testing-library/react'
-import { http } from 'msw'
+import { delay, http } from 'msw'
 import { describe, expect, it, vi } from 'vitest'
 import { server } from '../../mocks/server'
 import { renderPage } from '../../test/utils'
@@ -57,5 +57,32 @@ describe('the spools CSV import', () => {
       { material: 'PLA', brand: 'Sunlu', colour_name: 'Red' },
       { material: 'PETG', brand: 'Sunlu', colour_name: 'Blue' },
     ])
+  })
+
+  it('clears the file input, so the same file can be chosen again', async () => {
+    const sent = watchImports()
+    const { user } = open()
+    const input = screen.getByLabelText<HTMLInputElement>('CSV file')
+    const file = csv('material\r\nPLA\r\n')
+    await user.upload(input, file)
+    await screen.findByRole('table', { name: 'Import preview' })
+    expect(input.value).toBe('')
+    await user.upload(input, file)
+    await waitFor(() => expect(sent.map((one) => one.dry_run)).toEqual([true, true]))
+  })
+
+  it('announces that the file is being checked while the dry run runs', async () => {
+    server.use(
+      http.post(IMPORT, async () => {
+        await delay(150)
+      }),
+    )
+    const { user } = open()
+    await user.upload(screen.getByLabelText('CSV file'), csv('material\r\nPLA\r\n'))
+    const status = screen.getByRole('status')
+    expect(await within(status).findByText('Checking each line of the file')).toBeInTheDocument()
+    expect(status).toHaveAttribute('aria-live', 'polite')
+    await screen.findByRole('table', { name: 'Import preview' })
+    expect(within(status).queryByText('Checking each line of the file')).toBeNull()
   })
 })

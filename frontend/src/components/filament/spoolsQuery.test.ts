@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Spool } from '../../api/filament'
-import { DEFAULT_COLUMNS, DEFAULT_SPOOLS_QUERY, filterSpools, groupSpools, readQuery, sortSpools, writeQuery, type SpoolsQuery } from './spoolsQuery'
+import { DEFAULT_COLUMNS, DEFAULT_SPOOLS_QUERY, filterSpools, groupSpools, hasUnknownMaterial, needsType, readQuery, sortSpools, writeQuery, type SpoolsQuery } from './spoolsQuery'
 
 function spool(number: number, over: Partial<Spool> = {}): Spool {
   return {
@@ -97,5 +97,14 @@ describe('sorting and grouping', () => {
       ['No material', [3]],
     ])
     expect(groupSpools([spool(1)], 'none')).toEqual([{ key: '', label: '', spools: [spool(1)] }])
+  })
+
+  it('keeps needs-type to spools with no type, not one with a type and an Unknown material', () => {
+    const typed = spool(1, { names: { material: 'Unknown' } as Spool['names'] })
+    const none = spool(2, { type_id: null })
+    expect(filterSpools([typed, none], { ...DEFAULT_SPOOLS_QUERY, needsType: true }).map((s) => s.number)).toEqual([2])
+    expect(needsType(typed)).toBe(false)
+    expect(hasUnknownMaterial(typed)).toBe(true)
+    expect(hasUnknownMaterial(none)).toBe(false)
   })
 })

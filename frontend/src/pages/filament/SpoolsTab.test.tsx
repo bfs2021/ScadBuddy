@@ -23,9 +23,10 @@ describe('the Spools tab', () => {
   it('marks a spool that needs a type, and one whose material is Unknown, with Set type', async () => {
     render()
     const rows = spoolRows(await table())
+    const badge = (number: string) => rows.find((one) => one.dataset.spool === number)!
     for (const number of ['6', '7']) {
-      const row = rows.find((one) => one.dataset.spool === number)!
-      expect(within(row).getByRole('link', { name: `Set type for spool #${number}` })).toBeInTheDocument()
+      expect(within(badge(number)).getByRole('link', { name: `Set type for spool #${number}` })).toBeInTheDocument()
+      expect(within(badge(number)).getByText('Needs type')).toBeInTheDocument()
     }
     expect(within(rows[0]!).queryByRole('link', { name: /Set type/ })).toBeNull()
   })
@@ -48,5 +49,29 @@ describe('the Spools tab', () => {
     expect(await screen.findByText(/Skipped #4: it has printed; archive it instead\./)).toBeInTheDocument()
     await waitFor(async () => expect(spoolRows(await table()).map((row) => row.dataset.spool)).not.toContain('9'))
     expect(spoolRows(await table()).map((row) => row.dataset.spool)).toContain('4')
+  })
+
+  it('keeps Needs type to spools with no type: the two seed spools, 6 and 7', async () => {
+    render('/filament/spools?needs_type=true')
+    await waitFor(async () => expect(spoolRows(await table()).map((row) => row.dataset.spool)).toEqual(['6', '7']))
+  })
+
+  it('filters by material, and by use, from the Filter menu; the URL keeps the state', async () => {
+    const { user } = render()
+    await table()
+    await user.click(screen.getByRole('button', { name: /Filter/ }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Material' }))
+    const petg = await screen.findByRole('menuitemradio', { name: 'PETG' })
+    // A sub-menu's item takes the keyboard here: jsdom's pointer grace area closes it on a click.
+    petg.focus()
+    await user.keyboard('{Enter}')
+    expect(await screen.findByRole('button', { name: 'Clear filter Material: PETG' })).toBeInTheDocument()
+    const rows = spoolRows(await table())
+    expect(rows.length).toBeGreaterThan(0)
+    expect(rows.length).toBeLessThan(11)
+    await user.click(screen.getByRole('button', { name: 'Clear filter Material: PETG' }))
+    await user.click(screen.getByRole('button', { name: /Filter/ }))
+    await user.click(await screen.findByRole('menuitemradio', { name: /^Used/ }))
+    expect(await screen.findByRole('button', { name: 'Clear filter Used' })).toBeInTheDocument()
   })
 })

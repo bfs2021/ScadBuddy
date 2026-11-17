@@ -1,3 +1,4 @@
+import { Loader2Icon } from 'lucide-react'
 import { useId, useRef, useState } from 'react'
 import { ApiError } from '../../api/client'
 import { importSpools, type CsvRow, type ImportPreview, type ImportRowResult } from '../../api/filament'
@@ -59,6 +60,7 @@ export function SpoolImport({ open, onOpenChange, onImported }: Props) {
   const [opened, setOpened] = useState<Opened | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [working, setWorking] = useState<'preview' | 'write' | null>(null)
 
   const close = (next: boolean) => {
     if (next) return onOpenChange(true)
@@ -75,18 +77,21 @@ export function SpoolImport({ open, onOpenChange, onImported }: Props) {
     setOpened(next)
     if (!read.rows.length || read.unknown.length) return
     setBusy(true)
+    setWorking('preview')
     try {
       setOpened({ ...next, preview: await importSpools(read.rows, { dryRun: true }) })
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.detail : 'The preview failed. Try again.')
     } finally {
       setBusy(false)
+      setWorking(null)
     }
   }
 
   const write = async () => {
     if (!opened) return
     setBusy(true)
+    setWorking('write')
     setError(null)
     try {
       const done = await importSpools(opened.rows, { dryRun: false, key: opened.key })
@@ -96,6 +101,7 @@ export function SpoolImport({ open, onOpenChange, onImported }: Props) {
       setError(cause instanceof ApiError ? cause.detail : 'The import failed. Try again.')
     } finally {
       setBusy(false)
+      setWorking(null)
     }
   }
 
@@ -124,12 +130,26 @@ export function SpoolImport({ open, onOpenChange, onImported }: Props) {
             type="file"
             accept=".csv,text/csv"
             className="sr-only"
-            onChange={(event) => void choose(event.target.files?.[0])}
+            onChange={(event) => {
+              const file = event.target.files?.[0]
+              // Cleared at once, so choosing the same path again fires a change.
+              event.target.value = ''
+              void choose(file)
+            }}
           />
           <Button type="button" variant="outline" size="sm" onClick={() => input.current?.click()}>
             {opened ? 'Choose another file' : 'Choose a file'}
           </Button>
           {opened && <span className="text-muted-foreground">{opened.name}</span>}
+        </div>
+
+        <div role="status" aria-live="polite" className="empty:hidden">
+          {working && (
+            <p className="flex items-center gap-2 text-[13px] text-muted-foreground">
+              <Loader2Icon className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden />
+              {working === 'preview' ? 'Checking each line of the file' : 'Importing the spools'}
+            </p>
+          )}
         </div>
 
         {opened && opened.ignored.length > 0 && (

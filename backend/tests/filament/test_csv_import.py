@@ -25,6 +25,7 @@ from scadbuddy.filament.models import (
     LocationPatch,
     Material,
     SpoolCreate,
+    SpoolTypeCreate,
 )
 from scadbuddy.filament.presets import PoolSpoolPresets
 from scadbuddy.filament.spools import FilamentSpoolStore
@@ -74,7 +75,31 @@ def _by_number(f: Filament, number: int) -> UUID:
 
 def test_columns_are_the_csv_row_fields() -> None:
     assert list(CsvRow.model_fields) == COLUMNS
-    assert "number" in COLUMNS and "location" in COLUMNS
+    assert COLUMNS == [
+        "number",
+        "type",
+        "material",
+        "subtype",
+        "brand",
+        "category",
+        "effect",
+        "colour_name",
+        "rgba",
+        "extra_colours",
+        "diameter_mm",
+        "density_g_cm3",
+        "nozzle_temp_min",
+        "nozzle_temp_max",
+        "bed_temp_min",
+        "bed_temp_max",
+        "label_weight_g",
+        "insert_type",
+        "low_stock_pct",
+        "cost_per_kg",
+        "weight_locked",
+        "location",
+        "note",
+    ]
     assert not set(DERIVED_COLUMNS) & set(COLUMNS)
 
 
@@ -202,3 +227,38 @@ def test_a_blank_cell_changes_nothing(pg_pool: PgPool) -> None:
     done = import_rows(f, [row], dry_run=False, actor="ann")
     assert done.rows[0].changes == {}
     assert f.spools.list()[0].note == "keep"
+
+
+def test_a_spool_gone_mid_import_is_a_row_error(
+    pg_pool: PgPool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    f = _filament(pg_pool)
+    number = _spool(f, note="old")
+    monkeypatch.setattr(FilamentSpoolStore, "update_on", lambda *_a, **_k: False)
+    with pytest.raises(ImportRefusedError) as refused:
+        import_rows(f, [CsvRow(number=str(number), note="new")], dry_run=False, actor="ann")
+    assert refused.value.preview.rows[0].error == f"no spool #{number}"
+    assert [e.kind for e in f.spools.events(_by_number(f, number))] == ["created"]
+
+
+def test_the_dry_run_checks_temperatures_against_the_new_type(pg_pool: PgPool) -> None:
+    f = _filament(pg_pool)
+    kind = f.types.create(
+        SpoolTypeCreate(
+            code="HOT",
+            material_id=_material(f),
+            rgba="#FF0000FF",
+            label_weight_g=1000,
+            nozzle_temp_min=200,
+            nozzle_temp_max=220,
+        )
+    )
+    number = _spool(f, nozzle_temp_max=190)
+    row = CsvRow(number=str(number), type="hot")
+    preview = import_rows(f, [row], dry_run=True, actor="ann")
+    assert preview.rows[0].action == "error"
+    assert preview.rows[0].error == "nozzle_temp_min is above nozzle_temp_max"
+    with pytest.raises(ImportRefusedError):
+        import_rows(f, [row], dry_run=False, actor="ann")
+    assert f.spools.get(_by_number(f, number)).type_id is None  # type: ignore[union-attr]
+    assert kind.code == "HOT"

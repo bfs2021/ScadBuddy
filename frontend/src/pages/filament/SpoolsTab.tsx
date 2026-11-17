@@ -1,4 +1,4 @@
-import { Columns3Icon, DownloadIcon, LayoutGridIcon, Rows3Icon, UploadIcon, XIcon } from 'lucide-react'
+import { Columns3Icon, DownloadIcon, ListFilterIcon, LayoutGridIcon, Rows3Icon, UploadIcon, XIcon } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { ApiError } from '../../api/client'
@@ -33,6 +33,10 @@ import {
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { downloadBlob } from '../../lib/embed'
@@ -72,6 +76,23 @@ const CHIPS: { key: keyof SpoolsQuery; title: (q: SpoolsQuery) => string }[] = [
   { key: 'insertType', title: (q) => `Insert: ${q.insertType}` },
   { key: 'location', title: (q) => `Location: ${q.location}` },
 ]
+
+/** The filters picked by name: the spool's names they match, and the query key each sets. */
+const NAME_FILTERS = [
+  { key: 'material', title: 'Material', name: (spool: Spool) => spool.names?.material },
+  { key: 'brand', title: 'Brand', name: (spool: Spool) => spool.names?.brand },
+  { key: 'location', title: 'Location', name: (spool: Spool) => spool.names?.location },
+] as const
+
+/** The distinct names in use, in alphabetical order (any case counts once, as the filter matches). */
+function namesIn(spools: Spool[], name: (spool: Spool) => string | null | undefined): string[] {
+  const found = new Map<string, string>()
+  for (const spool of spools) {
+    const one = name(spool)
+    if (one && !found.has(one.toUpperCase())) found.set(one.toUpperCase(), one)
+  }
+  return [...found.values()].sort((a, b) => a.localeCompare(b))
+}
 
 function flatten(nodes: LocationNode[], trail: string[] = []): { places: Place[]; trays: string[] } {
   const places: Place[] = []
@@ -198,6 +219,40 @@ export function SpoolsTab() {
             <LayoutGridIcon className="size-4" />
           </button>
         </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button size="sm" variant="outline">
+              <ListFilterIcon /> Filter
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            {NAME_FILTERS.map((filter) => (
+              <DropdownMenuSub key={filter.key}>
+                <DropdownMenuSubTrigger>{filter.title}</DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="max-h-72 overflow-y-auto">
+                  <DropdownMenuRadioGroup value={q[filter.key] ?? ''} onValueChange={(value) => update({ [filter.key]: value || undefined })}>
+                    <DropdownMenuRadioItem value="">Any {filter.title.toLowerCase()}</DropdownMenuRadioItem>
+                    {namesIn(data?.spools ?? [], filter.name).map((name) => (
+                      <DropdownMenuRadioItem key={name} value={name}>
+                        {name}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            ))}
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>Use</DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={q.used ? 'used' : q.fresh ? 'new' : ''}
+              onValueChange={(value) => update({ used: value === 'used' ? true : undefined, fresh: value === 'new' ? true : undefined })}
+            >
+              <DropdownMenuRadioItem value="">Any</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="used">Used: some filament gone</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="new">New: full and never printed</DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button size="sm" variant="outline">

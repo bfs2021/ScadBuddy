@@ -147,9 +147,17 @@ export function isFresh(spool: Spool): boolean {
   return spool.grams_left != null && label != null && spool.grams_left >= label && !spool.last_used_at
 }
 
-/** A spool still to be given a type: none yet, or Bambuddy's `Unknown` material. */
+/**
+ * A spool with no type yet. This is the backend's meaning (`type_id` null), which the
+ * "Needs type" tile and filter count; a spool with a type is never in it.
+ */
 export function needsType(spool: Spool): boolean {
-  return spool.type_id == null || spool.names?.material === 'Unknown'
+  return spool.type_id == null
+}
+
+/** A spool that has a type but Bambuddy's `Unknown` material: a badge of its own, not "Needs type". */
+export function hasUnknownMaterial(spool: Spool): boolean {
+  return spool.type_id != null && spool.names?.material === 'Unknown'
 }
 
 /**
@@ -160,7 +168,7 @@ export function filterSpools(spools: readonly Spool[], q: SpoolsQuery, trays: Re
   return spools.filter((spool) => {
     const archived = spool.archived_at != null
     if (q.status === 'active' ? archived : q.status === 'archived' ? !archived : false) return false
-    if (q.needsType !== undefined && (spool.type_id == null) !== q.needsType) return false
+    if (q.needsType !== undefined && needsType(spool) !== q.needsType) return false
     if (q.lowStock !== undefined && Boolean(spool.low_stock) !== q.lowStock) return false
     if (q.used !== undefined && isUsed(spool) !== q.used) return false
     if (q.fresh !== undefined && isFresh(spool) !== q.fresh) return false

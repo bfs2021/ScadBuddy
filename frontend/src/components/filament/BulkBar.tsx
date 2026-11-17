@@ -30,7 +30,8 @@ interface Props {
   onClear: () => void
 }
 
-const why = (cause: unknown) => (cause instanceof ApiError ? cause.detail : 'the request failed')
+/** The refusal's words without a closing full stop; the report adds its own. */
+const why = (cause: unknown) => (cause instanceof ApiError ? cause.detail : 'the request failed').replace(/\.+$/, '')
 const spools = (count: number) => (count === 1 ? '1 spool' : `${count} spools`)
 
 /**

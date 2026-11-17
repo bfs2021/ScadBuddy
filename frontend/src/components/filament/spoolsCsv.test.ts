@@ -62,4 +62,22 @@ describe('the spools CSV', () => {
   it('reads an empty file as no rows', () => {
     expect(readSpoolsCsv('').rows).toEqual([])
   })
+
+  it('guards a formula-like text cell with a quote and reads it back unchanged', () => {
+    const formula = { ...spool, note: '=HYPERLINK("http://x","y")' } as Spool
+    const text = spoolsCsv([formula], ['number', 'note'])
+    expect(text).toBe('number,note\r\n12,"\'=HYPERLINK(""http://x"",""y"")"\r\n')
+    expect(readSpoolsCsv(text).rows).toEqual([{ number: '12', note: '=HYPERLINK("http://x","y")' }])
+    for (const lead of ['+1', '-1', '@sum', '\tx']) {
+      const [, row] = parseCsv(spoolsCsv([{ ...spool, note: lead } as Spool], ['note']))
+      expect(row![0]).toBe(`'${lead}`)
+    }
+  })
+
+  it('leaves a number, even a negative one, and an ordinary quote alone', () => {
+    const negative = { ...spool, effective: { ...spool.effective, cost_per_kg: '-5' }, note: "'Tis fine" } as unknown as Spool
+    const text = spoolsCsv([negative], ['cost_per_kg', 'note'])
+    expect(text).toBe("cost_per_kg,note\r\n-5,'Tis fine\r\n")
+    expect(readSpoolsCsv(text).rows).toEqual([{ cost_per_kg: '-5', note: "'Tis fine" }])
+  })
 })

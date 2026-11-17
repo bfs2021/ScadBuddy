@@ -93,15 +93,39 @@ function cell(spool: Spool, column: CsvColumn, typeCodes: ReadonlyMap<string, st
   }
 }
 
-function quote(value: Cell): string {
+/** Columns that hold a number: a leading minus there is a sign, not a formula. */
+const NUMERIC_COLUMNS = new Set<CsvColumn>([
+  'number',
+  'diameter_mm',
+  'density_g_cm3',
+  'nozzle_temp_min',
+  'nozzle_temp_max',
+  'bed_temp_min',
+  'bed_temp_max',
+  'label_weight_g',
+  'low_stock_pct',
+  'cost_per_kg',
+  'grams_left',
+  'last_weighed_g',
+])
+/** What makes a spreadsheet read a cell as a formula (OWASP, "CSV Injection"). */
+const FORMULA_START = /^[=+\-@\t\r]/
+
+/**
+ * A cell as CSV text. A text cell that starts like a formula gets a leading `'`, so a
+ * spreadsheet shows it as text (CSV injection,
+ * https://owasp.org/www-community/attacks/CSV_Injection); `readSpoolsCsv` removes it again.
+ */
+function quote(value: Cell, column: CsvColumn): string {
   if (value === null || value === undefined) return ''
-  const text = String(value)
+  let text = String(value)
+  if (!NUMERIC_COLUMNS.has(column) && FORMULA_START.test(text)) text = `'${text}`
   return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text
 }
 
 /** The spools as CSV text under `columns`, one header line then a line per spool. */
 export function spoolsCsv(spools: readonly Spool[], columns: readonly CsvColumn[], typeCodes: ReadonlyMap<string, string> = new Map()): string {
-  const lines = [columns.join(','), ...spools.map((spool) => columns.map((column) => quote(cell(spool, column, typeCodes))).join(','))]
+  const lines = [columns.join(','), ...spools.map((spool) => columns.map((column) => quote(cell(spool, column, typeCodes), column)).join(','))]
   return lines.map((line) => `${line}\r\n`).join('')
 }
 
@@ -152,6 +176,11 @@ export interface ReadCsv {
 const OWN = new Set<string>(SPOOL_CSV_COLUMNS)
 const DERIVED = new Set<string>(DERIVED_CSV_COLUMNS)
 
+/** Undoes the export's `'` guard: one leading `'` before a formula start, in a text column. */
+function unprefix(column: string, value: string): string {
+  return !NUMERIC_COLUMNS.has(column as CsvColumn) && value.startsWith("'") && FORMULA_START.test(value.slice(1)) ? value.slice(1) : value
+}
+
 /** A spools CSV's rows, as the import route takes them. */
 export function readSpoolsCsv(text: string): ReadCsv {
   const [header = [], ...records] = parseCsv(text)
@@ -160,7 +189,7 @@ export function readSpoolsCsv(text: string): ReadCsv {
     const row: Record<string, string> = {}
     names.forEach((name, at) => {
       const value = record[at] ?? ''
-      if (OWN.has(name) && value.trim() !== '') row[name] = value
+      if (OWN.has(name) && value.trim() !== '') row[name] = unprefix(name, value)
     })
     return row as CsvRow
   })

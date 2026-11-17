@@ -6,20 +6,23 @@ import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { cn } from '@/lib/utils'
 import { RgbaSwatch } from './RgbaSwatch'
-import { COLUMN_TITLES, grams, needsType, spoolPath, type ColumnId, type SpoolGroup } from './spoolsQuery'
+import { COLUMN_TITLES, grams, hasUnknownMaterial, needsType, spoolPath, type ColumnId, type SpoolGroup } from './spoolsQuery'
 
 const NUMERIC = new Set<ColumnId>(['grams_left', 'label_weight'])
 const UNSORTABLE = new Set<ColumnId>(['type', 'note'])
 
 const day = (at: string | null | undefined) => (at ? new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '')
 
-/** "Needs type" or "Unknown material", and the way to fix it. */
+/**
+ * "Needs type" (no type yet, the filter's meaning) or "Unknown material" (a type, but the
+ * material Bambuddy could not name), each with the same way to fix it.
+ */
 export function NeedsType({ spool }: { spool: Spool }) {
-  if (!needsType(spool)) return null
+  if (!needsType(spool) && !hasUnknownMaterial(spool)) return null
   return (
     <span className="inline-flex items-center gap-1.5">
       <Badge variant="outline" className="font-normal text-muted-foreground">
-        {spool.type_id == null ? 'Needs type' : 'Unknown material'}
+        {needsType(spool) ? 'Needs type' : 'Unknown material'}
       </Badge>
       <Link to={spoolPath(spool)} aria-label={`Set type for spool #${spool.number}`} className="text-[12px] font-medium underline-offset-4 hover:underline">
         Set type
