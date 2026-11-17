@@ -207,6 +207,15 @@ def test_an_unknown_column_is_refused() -> None:
         CsvRow.model_validate({"colour": "red"})
 
 
+def test_a_cell_is_at_most_200_characters_and_a_note_2000() -> None:
+    """M-5 of the final review: one body cannot be 230 MB."""
+    with pytest.raises(ValueError, match="200"):
+        CsvRow.model_validate({"brand": "x" * 201})
+    assert CsvRow.model_validate({"brand": "x" * 200, "note": "n" * 2000}).note is not None
+    with pytest.raises(ValueError, match="2000"):
+        CsvRow.model_validate({"note": "n" * 2001})
+
+
 def test_a_bad_cell_is_a_row_error(pg_pool: PgPool) -> None:
     f = _filament(pg_pool)
     rows = [

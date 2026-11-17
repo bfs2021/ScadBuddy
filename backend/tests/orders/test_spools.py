@@ -22,7 +22,6 @@ import respx
 from scadbuddy.bambuddy.filaments import FilamentPlan
 from scadbuddy.bambuddy.models import SlotChoice, SpoolAssignment
 from scadbuddy.core.problems import ApiError
-from scadbuddy.filament.bambuddy_pull import ASSIGNMENTS_TIMEOUT
 from scadbuddy.filament.models import EffectivePreset, FilamentInventorySpool, TrayPlace
 from scadbuddy.library.settings_store import SettingsStore, StoredSettings
 from scadbuddy.orders.bambuddy import BambuddyIntegrations
@@ -381,7 +380,9 @@ def seam(settings: Settings | None = None) -> BambuddyIntegrations:
 
 @pytest.mark.requires_postgres
 @respx.mock
-async def test_a_refused_assignment_read_places_by_the_reports_alone(shop: Shop) -> None:
+async def test_a_refused_assignment_read_places_by_the_reports_alone(
+    shop: Shop, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Fix round 2 (I1, M2, M4): an assignment read Bambuddy refuses, answers in no JSON
     or does not answer within `ASSIGNMENTS_TIMEOUT` places the spools by the reports
     alone: the spool Bambuddy would put in printer 2 is on the shelf, and is taken."""
@@ -402,12 +403,13 @@ async def test_a_refused_assignment_read_places_by_the_reports_alone(shop: Shop)
         await asyncio.sleep(30)
         return httpx.Response(200, json=[])
 
+    monkeypatch.setattr("scadbuddy.filament.bambuddy_pull.ASSIGNMENTS_TIMEOUT", 0.3)
     route.mock(side_effect=hang)
     inventory = Inventory(bb_linked(41, 15), registry={2: "printer-2"})
     started = time.monotonic()
     plan = await item_plan(shop.rows, inventory, seam(), item_id, FilamentPlan(ids="sb"), PRINTER)
     assert _slots(plan) == [(1, 41)]
-    assert time.monotonic() - started < ASSIGNMENTS_TIMEOUT + 1
+    assert time.monotonic() - started < 10  # far under the 30 s hang
 
 
 @pytest.mark.requires_postgres

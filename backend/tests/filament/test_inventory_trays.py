@@ -25,6 +25,7 @@ from scadbuddy.filament.spools import FilamentDefaults, FilamentSpoolStore
 from scadbuddy.printers.reports import PrinterReportStore
 from scadbuddy.spools.models import SeenTray
 from tests.conftest import PgPool
+from tests.support.pg_waits import wait_for_blocked
 
 pytestmark = pytest.mark.requires_postgres
 
@@ -271,13 +272,26 @@ def test_a_tag_uid_only_tray_binds_an_other_tag(pg_pool: PgPool) -> None:
 
 
 def test_two_links_to_one_tray_serialise(pg_pool: PgPool) -> None:
-    """The tray's advisory lock: links racing for one tray leave one holder."""
-    spools = [_spool(pg_pool) for _ in range(3)]
+    """The tray's advisory lock: while it is held, two links to the tray both wait on it
+    (seen in `pg_stat_activity`, no sleep); once it is let go they run one after the
+    other and leave one holder."""
+    spools = [_spool(pg_pool), _spool(pg_pool)]
     printer = _printer(pg_pool)
     inventory = FilamentInventory(pg_pool)
-    # Three threads on the test pool's four connections: each link holds one at a time.
-    with ThreadPoolExecutor(3) as workers:
-        list(workers.map(lambda s: inventory.link(printer, 0, 1, s, _seen(), actor="ann"), spools))
+    with ThreadPoolExecutor(2) as workers:
+        with pg_pool.connection() as conn, conn.transaction():
+            conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                (f"filament_tray:{printer}:0:1",),
+            )
+            links = [
+                workers.submit(inventory.link, printer, 0, 1, s, _seen(), actor="ann")
+                for s in spools
+            ]
+            wait_for_blocked(pg_pool, 2)
+            assert not any(link.done() for link in links)
+        for link in links:
+            link.result(timeout=60)
     with pg_pool.connection() as conn:
         placed = conn.execute(
             "SELECT count(*) AS n FROM filament_spools s JOIN filament_locations l"
@@ -343,6 +357,44 @@ def test_the_shelf_leaves_out_what_another_printers_report_holds(pg_pool: PgPool
     }
     PrinterReportStore(pg_pool).put(str(other), report, datetime.now(UTC))
     view = FilamentInventory(pg_pool).trays(printer, [_seen()])
+    assert [s.id for s in view.shelf] == [b]
+
+
+def _report_of(colour: str, tray_uuid: str | None = None) -> dict[str, object]:
+    tray: dict[str, object] = {"id": "1", "tray_type": "PLA", "tray_color": colour, "state": 11}
+    if tray_uuid is not None:
+        tray["tray_uuid"] = tray_uuid
+    return {"ams": {"ams": [{"id": "0", "tray": [tray]}]}}
+
+
+def test_a_link_on_a_tray_that_gained_an_unbound_tag_holds_nothing(pg_pool: PgPool) -> None:
+    """A link made on an untagged tray does not hold once the tray reads a tag no spool
+    is bound to: the tray is another spool now, and the linked one is on the shelf."""
+    a, printer = _spool(pg_pool), _printer(pg_pool)
+    inventory = FilamentInventory(pg_pool)
+    inventory.link(printer, 0, 1, a, _seen(), actor="ann")
+    assert _held(inventory.trays(printer, [_seen()])) == a
+
+    view = inventory.trays(printer, [_seen(tray_uuid=UUID_A)])
+
+    assert _held(view) is None
+    assert _holder(view).found_by is None
+    assert [s.id for s in view.shelf] == [a]
+
+
+def test_the_shelf_leaves_out_what_another_printers_link_holds(pg_pool: PgPool) -> None:
+    """F6 by a link: a spool linked to a tray of another printer, whose latest report
+    still shows what the person saw, is not on this printer's shelf."""
+    a, b = _spool(pg_pool), _spool(pg_pool)
+    other, printer = _printer(pg_pool), _printer(pg_pool)
+    with pg_pool.connection() as conn:
+        conn.execute("UPDATE printers SET lan_host = '10.0.0.9' WHERE id = %s", (other,))
+    inventory = FilamentInventory(pg_pool)
+    inventory.link(other, 0, 1, a, _seen(), actor="ann")
+    PrinterReportStore(pg_pool).put(str(other), _report_of("FF0000FF"), datetime.now(UTC))
+
+    view = inventory.trays(printer, [_seen(tray_uuid=UUID_A)])
+
     assert [s.id for s in view.shelf] == [b]
 
 

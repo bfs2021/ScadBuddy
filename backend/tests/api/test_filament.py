@@ -14,10 +14,10 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 
+from scadbuddy.api import filament as filament_api
 from scadbuddy.api.deps import STATE_ATTR, AppState
 from scadbuddy.api.filament import actor
 from scadbuddy.auth.models import ANONYMOUS, AuthSession, Person, PersonalToken, Service
-from scadbuddy.filament.bambuddy_pull import ASSIGNMENTS_TIMEOUT
 from scadbuddy.library.settings_store import SettingsStore
 from scadbuddy.printers.reports import PrinterReportStore
 from tests.api.test_send import API, configure
@@ -27,6 +27,14 @@ from tests.support.sb_rows import seed_app_sb_spools
 pytestmark = pytest.mark.requires_postgres
 
 URL = "/api/v1/filament/catalog"
+
+
+@pytest.fixture(autouse=True)
+def _no_assignments_cached(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each test reads Bambuddy's assignments afresh (the route caches them, I-1)."""
+    monkeypatch.setattr(filament_api, "_assignments_seen", None)
+
+
 MISSING = "00000000-0000-4000-8000-000000000001"
 
 
@@ -171,6 +179,35 @@ def test_a_spool_is_made_read_changed_and_weighed(client: TestClient) -> None:
     weighed = client.post(f"{one}/events", json={"kind": "weighed", "grams": 420})
     assert weighed.status_code == 201, weighed.text
     assert client.get(one).json()["grams_left"] == 420
+
+
+def test_patching_a_colour_to_null_returns_the_spool_to_its_types_colour(
+    client: TestClient,
+) -> None:
+    """Review focus 5, over HTTP: `rgba: null` clears the spool's own colour."""
+    kind = client.post(
+        "/api/v1/filament/types",
+        json={
+            "code": "PLA-RED",
+            "material_id": _material_id(client),
+            "rgba": "#FF0000",
+            "label_weight_g": 1000,
+        },
+    )
+    assert kind.status_code == 201, kind.text
+    made = client.post(SPOOLS, json={"type_id": kind.json()["id"], "rgba": "#00FF00"})
+    assert made.status_code == 201, made.text
+    one = f"{SPOOLS}/{made.json()['id']}"
+    assert made.json()["effective"]["rgba"] == "#00FF00FF"
+
+    reset = client.patch(one, json={"rgba": None})
+
+    assert reset.status_code == 200, reset.text
+    assert reset.json()["effective"]["rgba"] == "#FF0000FF"
+    assert "rgba" not in reset.json()["overridden"]
+    events = client.get(f"{one}/events").json()
+    assert [e["kind"] for e in events] == ["created", "edited"]
+    assert events[-1]["data"] == {"changes": {"rgba": ["#00FF00FF", None]}}
 
 
 def test_a_spool_that_is_typeless_or_backwards_is_422(client: TestClient) -> None:
@@ -490,7 +527,7 @@ def test_inventory_route_lists_sb_spools(client: TestClient, pg_conninfo: str) -
 
 @respx.mock
 def test_inventory_places_a_linked_spool_by_bambuddys_assignment(
-    client: TestClient, pg_conninfo: str
+    client: TestClient, pg_conninfo: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Task 9 review ruling (plan Decision 3, until #6263): while Bambuddy is linked, a
     spool no registry printer reports is in the tray Bambuddy assigns its linked Bambuddy
@@ -526,6 +563,7 @@ def test_inventory_places_a_linked_spool_by_bambuddys_assignment(
     assert summary["spool"]["loaded"]["printer_id"] == printer
 
     assignments.mock(return_value=httpx.Response(403, json={"detail": "no"}))
+    monkeypatch.setattr(filament_api, "_assignments_seen", None)
     refused = client.get(INVENTORY)
     assert refused.status_code == 200, refused.text
     assert refused.json()["spools"][0]["loaded"] is None
@@ -533,7 +571,7 @@ def test_inventory_places_a_linked_spool_by_bambuddys_assignment(
 
 @respx.mock
 def test_a_slow_or_garbled_assignment_read_places_by_the_reports_alone(
-    client: TestClient, pg_conninfo: str
+    client: TestClient, pg_conninfo: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Fix round 2 (I1, M2): an assignment read that does not answer within
     `ASSIGNMENTS_TIMEOUT`, or answers 200 with no JSON, places by the reports alone."""
@@ -559,12 +597,65 @@ def test_a_slow_or_garbled_assignment_read_places_by_the_reports_alone(
         await asyncio.sleep(30)
         return httpx.Response(200, json=[])
 
+    monkeypatch.setattr("scadbuddy.filament.bambuddy_pull.ASSIGNMENTS_TIMEOUT", 0.3)
     route.mock(side_effect=hang)
+    monkeypatch.setattr(filament_api, "_assignments_seen", None)
     started = time.monotonic()
     slow = client.get(INVENTORY)
-    assert time.monotonic() - started < ASSIGNMENTS_TIMEOUT + 1.5
+    assert time.monotonic() - started < 10  # far under the 30 s hang
     assert slow.status_code == 200, slow.text
     assert slow.json()["spools"][0]["loaded"] is None
+
+
+@respx.mock
+def test_the_assignments_are_cached_and_a_failure_is_not_retried_for_a_while(
+    client: TestClient, pg_conninfo: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """I-1 of the final review: the inventory reads Bambuddy's assignments at most once
+    in 5 s, and after a failed read not again for 30 s (served as no assignments)."""
+    configure(client)
+    bambuddy_printer(pg_conninfo, 2)
+    bb = {
+        "id": 15,
+        "material": "PLA",
+        "rgba": "00FF00FF",
+        "label_weight": 1000,
+        "weight_used": 250,
+        "archived_at": None,
+        "updated_at": "2026-11-15T00:00:00Z",
+    }
+    seed_app_sb_spools(client, [bb], offset=100)
+    clock = [1000.0]
+    monkeypatch.setattr(filament_api, "_now", lambda: clock[0])
+    place = {"id": 1, "spool_id": 15, "printer_id": 2, "ams_id": 0, "tray_id": 1}
+    route = respx.get(f"{API}/inventory/assignments").mock(
+        return_value=httpx.Response(200, json=[place | {"printer_name": "Workshop"}])
+    )
+
+    def loaded() -> object:
+        return client.get(INVENTORY).json()["spools"][0]["loaded"]
+
+    assert loaded() is not None
+    assert loaded() is not None
+    spool_id = client.get(INVENTORY).json()["spools"][0]["spool"]["id"]
+    assert client.get(f"{SPOOLS}/{spool_id}/summary").status_code == 200
+    assert route.call_count == 1
+    clock[0] += 4.9
+    assert loaded() is not None
+    assert route.call_count == 1
+    clock[0] += 0.2
+    route.mock(return_value=httpx.Response(503, json={"detail": "down"}))
+    assert loaded() is None  # the fresh window had ended: this read fails
+    assert route.call_count == 2
+    assert loaded() is None  # and now Bambuddy is not asked
+    assert route.call_count == 2
+    clock[0] += 29.0
+    assert loaded() is None
+    assert route.call_count == 2
+    clock[0] += 1.5
+    route.mock(return_value=httpx.Response(200, json=[place | {"printer_name": "Workshop"}]))
+    assert loaded() is not None
+    assert route.call_count == 3
 
 
 def test_a_settings_read_that_fails_is_a_503(
@@ -609,6 +700,54 @@ def test_a_spool_summary_prices_it_and_counts_its_filament(client: TestClient) -
         None,
     )
     assert client.get(f"{SPOOLS}/{MISSING}/summary").status_code == 404
+
+
+def test_an_archived_spool_is_summarised_but_not_counted_as_stock(client: TestClient) -> None:
+    kept = _spool(client, rgba="#FFFFFF", grams_left=100)
+    gone = _spool(client, rgba="#FFFFFF", grams_left=900)
+    assert client.post(f"{SPOOLS}/{gone['id']}/archive", json={"archived": True}).is_success
+
+    summary = client.get(f"{SPOOLS}/{gone['id']}/summary")
+
+    assert summary.status_code == 200, summary.text
+    stock = summary.json()["filament"]
+    assert (stock["spool_numbers"], stock["grams_left"]) == ([kept["number"]], 100.0)
+
+
+def test_the_price_per_gram_is_rounded_to_six_places(client: TestClient) -> None:
+    """#2918: 15.96 per kg is 0.01596 per gram, not a float's tail; no grams of a priced
+    spool cost 0.0, not null."""
+    made = _spool(client, grams_left=400, cost_per_kg="15.96")
+
+    body = client.get(f"{SPOOLS}/{made['id']}/summary", params={"grams": 0}).json()
+
+    assert repr(body["price_per_g"]) == "0.01596"
+    assert (body["grams"], body["grams_cost"]) == (0.0, 0.0)
+    assert body["value_left"] == 6.384
+
+
+def test_a_loaded_spools_summary_says_where_it_is_loaded(
+    client: TestClient, pg_conninfo: str
+) -> None:
+    made = _spool(client, rgba="#FFFFFF", grams_left=500)
+    tag = {"tray_uuid": TRAY_UUID, "kind": "bambu_mifare"}
+    assert client.post(f"{SPOOLS}/{made['id']}/tags", json=tag).status_code == 201
+    printer = _garage_reports_tray(client, pg_conninfo)
+
+    summary = client.get(f"{SPOOLS}/{made['id']}/summary").json()
+
+    [place] = summary["filament"]["loaded"]
+    assert place["spool_id"] == made["id"]
+    assert (place["loaded"]["printer_id"], place["loaded"]["tray_id"]) == (printer, 2)
+
+
+def test_a_naive_since_or_until_is_422(client: TestClient) -> None:
+    """The ledger's time filters take an aware datetime; a naive one is refused."""
+    for name in ("since", "until"):
+        refused = client.get("/api/v1/filament/events", params={name: "2026-01-01T00:00:00"})
+        assert refused.status_code == 422, (name, refused.text)
+    aware = client.get("/api/v1/filament/events", params={"until": "2026-01-01T00:00:00Z"})
+    assert aware.status_code == 200, aware.text
 
 
 # -- the CSV import (#6262 Task 15, F24) ------------------------------------------------

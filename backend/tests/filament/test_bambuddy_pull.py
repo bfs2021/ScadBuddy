@@ -20,7 +20,6 @@ from scadbuddy.bambuddy.models import Spool as BbSpool
 from scadbuddy.bambuddy.models import SpoolCatalogEntry
 from scadbuddy.core.settings import FilamentSync
 from scadbuddy.filament.bambuddy_pull import (
-    ASSIGNMENTS_TIMEOUT,
     pull,
     read_and_pull,
     read_assignments,
@@ -47,6 +46,7 @@ from scadbuddy.filament.types import SpoolTypeStore
 from scadbuddy.library.settings_store import StoredSettings
 from scadbuddy.operations.kinds import CHECK_ON_BAMBUDDY
 from tests.conftest import PgPool
+from tests.support.pg_waits import wait_for_blocked
 
 pytestmark = pytest.mark.requires_postgres
 
@@ -395,7 +395,7 @@ def test_the_preset_sync_waits_for_a_persons_edit_and_keeps_it(pg_pool: PgPool) 
                 [bb(slicer_filament="GFA05", slicer_filament_name="Bambu PLA Silk")],
                 now=NOW,
             )
-            time.sleep(1)
+            wait_for_blocked(pg_pool)  # the pull is waiting on the spool's lock
             assert not pulled.done()
         pulled.result(timeout=60)
     finally:
@@ -932,11 +932,15 @@ def test_a_persons_row_matching_bambuddys_value_is_kept(pg_pool: PgPool) -> None
 
 
 @respx.mock
-async def test_the_assignment_read_names_bambuddy_only_while_it_waits() -> None:
+async def test_the_assignment_read_names_bambuddy_only_while_it_waits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Task 9 fix round 3: `read_assignments` is a `waiting_on_bambuddy` wait. Its own
     `ASSIGNMENTS_TIMEOUT` ends the wait (no assignments, the flag cleared), so a check
     that goes on is not blamed on Bambuddy later; a cancel inside it (the check's budget
     running out) leaves the flag set, so that timeout names Bambuddy."""
+
+    monkeypatch.setattr("scadbuddy.filament.bambuddy_pull.ASSIGNMENTS_TIMEOUT", 0.5)
 
     async def hang(request: httpx.Request) -> httpx.Response:
         await asyncio.sleep(30)
@@ -949,7 +953,7 @@ async def test_the_assignment_read_names_bambuddy_only_while_it_waits() -> None:
     try:
         started = time.monotonic()
         assert await read_assignments(settings) == []
-        assert time.monotonic() - started < ASSIGNMENTS_TIMEOUT + 1
+        assert time.monotonic() - started < 10  # far under the 30 s hang
         assert waiting == [False]
 
         with pytest.raises(TimeoutError):
