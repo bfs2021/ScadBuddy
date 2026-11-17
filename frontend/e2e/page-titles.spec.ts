@@ -41,6 +41,18 @@ const PAGES = [
   '/storefront',
   // A listing's editor (#6157): its tab is the listing's title, "New listing" for a new one.
   '/storefront/listings/new',
+  // The Filament section (#6262): each tab, a seeded spool (#3) and a seeded type, from
+  // src/mocks/features/filament/seed.ts.
+  // `/filament` redirects to the Spools tab.
+  '/filament',
+  '/filament/spools',
+  '/filament/spools/62620000-0000-4000-8000-000000000003',
+  '/filament/types',
+  '/filament/types/62620001-0000-4000-8000-000000000001',
+  '/filament/tags',
+  '/filament/locations',
+  '/filament/catalog',
+  '/filament/ledger',
   // The component gallery (#3653): in the mocked build only, which this spec runs on.
   '/ui-gallery',
 ]

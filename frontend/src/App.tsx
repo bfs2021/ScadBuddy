@@ -5,7 +5,7 @@ import { AppShell } from './components/AppShell'
 import { lazyRetry } from './lib/lazyRetry'
 import { ActivityPage } from './pages/ActivityPage'
 import { CataloguePage } from './pages/CataloguePage'
-import { FILAMENT_HOME, FILAMENT_TABS } from './pages/filament/tabs'
+import { FILAMENT_HOME } from './pages/filament/tabs'
 
 // #2356 — every page but the catalogue is its own chunk, so the shell's entry chunk
 // carries no page's dependencies: three.js only loads with a page that draws in 3D.
@@ -116,9 +116,13 @@ export function App() {
         <Route path="filament" element={<Navigate to={FILAMENT_HOME} replace />} />
         <Route path="filament/spools/:id" element={<SpoolPage />} />
         <Route path="filament/types/:id" element={<TypePage />} />
-        {FILAMENT_TABS.filter((tab) => tab.available).map((tab) => (
-          <Route key={tab.id} path={tab.path} element={<FilamentPage tab={tab.id} />} />
-        ))}
+        {/* One literal path per available tab (`pages/filament/tabs.ts`): e2e/page-titles.spec.ts reads these. */}
+        <Route path="filament/spools" element={<FilamentPage tab="spools" />} />
+        <Route path="filament/types" element={<FilamentPage tab="types" />} />
+        <Route path="filament/tags" element={<FilamentPage tab="tags" />} />
+        <Route path="filament/locations" element={<FilamentPage tab="locations" />} />
+        <Route path="filament/catalog" element={<FilamentPage tab="catalog" />} />
+        <Route path="filament/ledger" element={<FilamentPage tab="ledger" />} />
         <Route path="orders" element={<OrdersPage />} />
         <Route path="orders/profit" element={<ProfitPage />} />
         <Route path="orders/parts" element={<PartsPage />} />
