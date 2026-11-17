@@ -131,6 +131,7 @@ _NOT_COLUMNS = frozenset(
 )
 #: The catalog entries already warned about as skipped, so a clash is told once a process.
 _WARNED_SKIPS: set[tuple[int, str]] = set()
+_WARNED_SKIPS_MAX = 1000
 
 Outcome = Literal["pulled", "skipped", "failed"]
 
@@ -274,6 +275,8 @@ def _insert_types(store: Filament, catalog: Sequence[SpoolCatalogEntry]) -> int:
         nonlocal skipped
         skipped += 1
         key = (entry.id, why)
+        if len(_WARNED_SKIPS) > _WARNED_SKIPS_MAX:
+            _WARNED_SKIPS.clear()
         log = logger.debug if key in _WARNED_SKIPS else logger.warning
         _WARNED_SKIPS.add(key)
         log(
@@ -1085,9 +1088,14 @@ async def read_catalog(settings: StoredSettings) -> list[SpoolCatalogEntry] | No
 
 
 async def read_assignments(settings: StoredSettings) -> list[SpoolAssignment]:
+    """:func:`try_assignments`, with ``[]`` for a failed read."""
+    return await try_assignments(settings) or []
+
+
+async def try_assignments(settings: StoredSettings) -> list[SpoolAssignment] | None:
     """Bambuddy's tray assignments (``GET /inventory/assignments``), which place a linked
     SB spool where no registry printer reports it (plan Decision 3, until #6263): none
-    with no BB URL, and none, logged, when Bambuddy refuses, answers in another shape or
+    with no BB URL, and ``None``, logged, when Bambuddy refuses, answers in another shape or
     no JSON, or does not answer within :data:`ASSIGNMENTS_TIMEOUT`, so the spools are
     placed by the reports alone. The read is a wait on Bambuddy (`waiting_on_bambuddy`),
     so a check cut short inside it names Bambuddy."""
@@ -1108,7 +1116,7 @@ async def read_assignments(settings: StoredSettings) -> list[SpoolAssignment]:
             logger.warning(
                 "no tray assignments from Bambuddy: an answer of another shape: %s", error
             )
-    return []
+    return None
 
 
 async def scheduled_pull(

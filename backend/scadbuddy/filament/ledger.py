@@ -223,7 +223,8 @@ def page(
 ) -> m.EventPage:
     """One page of every spool's events, newest first by ``(at, seq)``. The cursor names
     the last row of the page before, as that pair, so two events of one time never lose
-    or repeat a row at the page's edge (F4)."""
+    or repeat a row at the page's edge (F4). ``since`` is included and ``until`` excluded,
+    both on the event's ``at``."""
     where: list[str] = []
     args: list[Any] = []
     for column, value in (("e.spool_id", spool_id), ("e.kind", kind), ("e.source", source)):

@@ -37,7 +37,8 @@ from scadbuddy.filament.types import effective as work_out_effective
 Conn = Connection[DictRow]
 
 #: One cell as the browser read it; empty or blank reads as no value.
-Cell = Annotated[str | None, Field(max_length=2000)]
+Cell = Annotated[str | None, Field(max_length=200)]
+NoteCell = Annotated[str | None, Field(max_length=2000)]
 
 #: The columns an export writes that are not a spool's own values: what the ledger and
 #: the settings work out. An import ignores them (F24c), and the preview says so.
@@ -84,7 +85,7 @@ class CsvRow(BaseModel):
     cost_per_kg: Cell = None
     weight_locked: Cell = None
     location: Cell = None
-    note: Cell = None
+    note: NoteCell = None
 
     @model_validator(mode="before")
     @classmethod

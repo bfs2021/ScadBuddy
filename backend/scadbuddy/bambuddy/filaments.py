@@ -254,7 +254,15 @@ class FilamentPlan(BaseModel):
 
     slots: list[SlotChoice] = Field(default_factory=list)
     force_colour_match: bool = True
-    ids: Literal["bb", "sb"] = "bb"
+    ids: Literal["bb", "sb"] = Field(
+        default="bb",
+        description=(
+            "What a positive `spool_id` names: `sb` an SB spool's number (what "
+            "`GET /print/filaments` and the choices offer), `bb` a Bambuddy spool id "
+            "(the default, for a plan from before this field). Send `sb` with the "
+            "numbers you read; an omitted `ids` is read as Bambuddy ids."
+        ),
+    )
 
     def spool_for(self, slot_id: int) -> int | None:
         return next((slot.spool_id for slot in self.slots if slot.slot_id == slot_id), None)
