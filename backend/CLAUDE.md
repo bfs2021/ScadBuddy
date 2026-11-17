@@ -442,6 +442,11 @@ so a write sent again after its answer was lost is added once), the turn's end o
   `parent` for the session named), the hop's timeout sweep, and a delivery's claim, hand back and
   skip, with the record of a run's own calls sent. Who may answer stays the agent's check. Tests
   `tests/crud/test_crud_agent_escalations.py`.
+  `api/crud_agent_mcp.py` (area `mcp-relay`, #5299 step 11) is the agent's `mcp/relayRows.ts`
+  `PgRelayRows` statement for statement: the /mcp session directory (`ai_mcp_sessions`), a relay
+  message's body row and its `scadbuddy_mcp` NOTIFY in one transaction (the header checked against
+  the relay's shapes and the NOTIFY payload cap), a row taken or withdrawn once, and the sweep.
+  Tests `tests/crud/test_crud_agent_mcp.py`.
   `api/crud_agent_publish.py` (areas `publish` and `session-reads`, #6501): the NOTIFYs the
   agent sent outside a store's write, a `session.*` bus event on `scadbuddy_events` (each field
   checked, so the payload stays small) and a warm eviction on `scadbuddy_warm_evict`; and two
