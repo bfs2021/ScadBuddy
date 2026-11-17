@@ -4,7 +4,7 @@ import type { Sql } from 'postgres'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CrudEditRows, type EditRows, PgEditRows } from '../src/sessions/edits.js'
 import { SessionError } from '../src/sessions/manager.js'
-import type { ServerEvent, SessionStatus } from '../src/sessions/protocol.js'
+import type { ServerEvent } from '../src/sessions/protocol.js'
 import { TEST_DATABASE_URL, TEST_DATABASE_URL_ENV, throwawayDatabase, type Throwaway } from './support/postgres.js'
 
 // The API's port of an edit of a session (backend scadbuddy/agent_data/edits.py behind
@@ -36,25 +36,28 @@ async function scenario(rows: EditRows): Promise<{ out: unknown[]; told: string[
     told.push(sid)
   }
   const out: unknown[] = []
-  const run = async (sid: string, write: Parameters<EditRows['edit']>[1], status: SessionStatus) => {
+  const run = async (sid: string, write: Parameters<EditRows['edit']>[1]) => {
     try {
-      const edited = await rows.edit(sid, write, { status }, tell)
+      const edited = await rows.edit(sid, write, tell)
       out.push({ logged: edited.logged ?? null, dismissed: edited.dismissed.map((d) => ({ ...d, created_at: d.created_at instanceof Date })) })
     } catch (err) {
       out.push(err instanceof SessionError ? { code: err.code, message: err.message } : String(err))
     }
   }
-  await run(S1, { principal: BROWSER, title: 'renamed "é"', done: false }, 'idle')
-  await run(S1, { principal: BROWSER, done: true }, 'idle')
-  await run(S1, { principal: BROWSER, done: true }, 'done')
-  await run(S2, { principal: BROWSER, done: true }, 'running')
-  await run(S2, { principal: BROWSER, done: false, archived: true }, 'running')
-  await run(S3, { principal: BROWSER, done: false, archived: true }, 'idle')
-  await run(S3, { principal: BROWSER, done: false, archived: false }, 'idle')
-  await run(S4, { principal: BROWSER, done: false, archived: true }, 'idle')
-  await run(S5, { principal: { kind: 'bearer', id: 'not-the-owner' }, title: 'x', done: false }, 'idle')
-  await run(MISSING, { principal: BROWSER, title: 'x', done: false }, 'idle')
-  await run(S6, { principal: BROWSER, done: true }, 'idle')
+  await run(S1, { principal: BROWSER, title: 'renamed "é"', done: false })
+  await run(S1, { principal: BROWSER, done: true })
+  await run(S1, { principal: BROWSER, done: true })
+  await run(S2, { principal: BROWSER, done: true })
+  await run(S2, { principal: BROWSER, done: false, archived: true })
+  await run(S3, { principal: BROWSER, done: false, archived: true })
+  await run(S3, { principal: BROWSER, done: false, archived: false })
+  await run(S4, { principal: BROWSER, done: false, archived: true })
+  // Done and archived at once on an idle session with a call parked: refused `parked`, and no
+  // workflow is told either way.
+  await run(S4, { principal: BROWSER, done: true, archived: true })
+  await run(S5, { principal: { kind: 'bearer', id: 'not-the-owner' }, title: 'x', done: false })
+  await run(MISSING, { principal: BROWSER, title: 'x', done: false })
+  await run(S6, { principal: BROWSER, done: true })
   return { out, told }
 }
 

@@ -5,7 +5,7 @@ import { inputResolved } from '../gate/projection.js'
 import { isDoneSummary } from '../gate/waiting.js'
 import { appendEventsIn, type EventLog } from './eventLog.js'
 import { SessionError, type SessionRecord } from './manager.js'
-import { event, type Owner, type ServerEvent, type SessionStatus, sameOwner } from './protocol.js'
+import { event, type Owner, type ServerEvent, sameOwner } from './protocol.js'
 import { sessionPath, type Who } from './rows.js'
 import type { WarmSessions } from './warm.js'
 import { notifyWarmEvict } from './warmEvict.js'
@@ -30,11 +30,13 @@ import { notifyWarmEvict } from './warmEvict.js'
 // The edit's transaction is `EditRows.edit` (#6449): `PgEditRows`, the agent's own SQL, or
 // `CrudEditRows`, the API's route (backend api/crud_agent_edits.py, area `session-edits`), which
 // runs it as one transaction there (#5299 D2), chosen per call in main.ts once the API lists the
-// area. Over SQL the workflow is told it is done inside the transaction; over the route it is
-// told before it, and only when the row read at the start was neither done nor running a turn, so
-// the route (which refuses a newly done session not `told`) writes nothing the workflow was not
-// told of. A turn claimed between the two makes the route refuse `busy` with the workflow told:
-// a later send then reads it `closed`, as one did after a commit that failed past the signal.
+// area. Over SQL the workflow is told it is done inside the transaction. Over the route the edit
+// is sent untold first: the route checks every refusal before `untold`, its last, so `untold`
+// means the edit would pass and nothing was written. Only then is the workflow told and the edit
+// sent again, told. A refusal, a 503 or a lost answer on the first call ends no workflow. What
+// changes between the two calls (a turn claimed, a call parked) can still refuse the second with
+// the workflow told: a later send then reads it `closed`, as one did on SQL after a commit that
+// failed past the signal.
 
 export type SessionEdit = { title?: string; done?: true; archived?: boolean }
 
@@ -74,13 +76,11 @@ export type Edited = { logged?: { events: ServerEvent[]; seqs: number[] } | unde
 
 export interface EditRows {
   /**
-   * The edit in one transaction, or a SessionError (not_found, busy) and nothing written. `before`
-   * is the row as the edit read it first; `endDurable` tells the workflow it is done.
+   * The edit in one transaction, or a SessionError (not_found, busy) and nothing written.
+   * `endDurable` tells the workflow it is done, only once the edit's other checks passed.
    */
-  edit(id: string, write: EditWrite, before: { status: SessionStatus }, endDurable: (id: string) => Promise<void>): Promise<Edited>
+  edit(id: string, write: EditWrite, endDurable: (id: string) => Promise<void>): Promise<Edited>
 }
-
-const RUNNING: readonly SessionStatus[] = ['running', 'waiting_approval', 'waiting_input']
 
 const busyDone = (id: string) => new SessionError('busy', `session ${id} is running a turn; Stop it first, then mark it done`)
 const busyArchive = (id: string) => new SessionError('busy', `session ${id} is running a turn; Stop it first, then archive it`)
@@ -96,7 +96,7 @@ export class PgEditRows implements EditRows {
     this.#sql = sql
   }
 
-  async edit(id: string, write: EditWrite, _before: { status: SessionStatus }, endDurable: (id: string) => Promise<void>): Promise<Edited> {
+  async edit(id: string, write: EditWrite, endDurable: (id: string) => Promise<void>): Promise<Edited> {
     const { principal, title, done } = write
     const archive = write.archived === true
     const unarchive = write.archived === false
@@ -172,26 +172,37 @@ export class CrudEditRows implements EditRows {
     this.#fetch = options.fetch ?? globalThis.fetch
   }
 
-  async edit(id: string, write: EditWrite, before: { status: SessionStatus }, endDurable: (id: string) => Promise<void>): Promise<Edited> {
+  async edit(id: string, write: EditWrite, endDurable: (id: string) => Promise<void>): Promise<Edited> {
     const path = sessionPath(id)
     // Not a UUID: no session, as the SQL's cast refused it.
     if (path === undefined) throw new SessionError('not_found', `no session ${id}`)
-    // Told before the route only when this edit would newly mark it done and no turn held it as
-    // read: never a workflow ended under a running turn the route then refuses.
-    const tell = write.done && before.status !== 'done' && !RUNNING.includes(before.status)
-    if (tell) await endDurable(id)
-    let answer: { logged: { session_id: string; events: ServerEvent[]; seqs: number[] }[]; dismissed: WireDismissed[] }
+    const send = (told: boolean) =>
+      crudRead<{ logged: { session_id: string; events: ServerEvent[]; seqs: number[] }[]; dismissed: WireDismissed[] }>(
+        this.#fetch,
+        this.#base,
+        `an edit of session ${id}`,
+        `${path}/edit`,
+        {
+          method: 'POST',
+          // Well-formed: the API refuses a lone surrogate in a title (crudRead.ts).
+          body: wellFormed({
+            principal: { kind: write.principal.kind, id: write.principal.id },
+            title: write.title ?? null,
+            done: write.done,
+            archived: write.archived ?? null,
+            told,
+          }),
+        },
+      )
+    let answer
     try {
-      answer = await crudRead(this.#fetch, this.#base, `an edit of session ${id}`, `${path}/edit`, {
-        method: 'POST',
-        // Well-formed: the API refuses a lone surrogate in a title (crudRead.ts).
-        body: wellFormed({
-          principal: { kind: write.principal.kind, id: write.principal.id },
-          title: write.title ?? null,
-          done: write.done,
-          archived: write.archived ?? null,
-          told: tell,
-        }),
+      // First untold. The route checks `untold` last, so that answer means every other check
+      // passed and nothing was written; only then is the workflow told, and the edit sent again.
+      // A refusal, a 503 or a lost answer on the first call ends no workflow.
+      answer = await send(false).catch(async (error: unknown) => {
+        if (!(error instanceof CrudReadError && error.fromRoute && error.status === 409 && error.reason === 'untold')) throw error
+        await endDurable(id)
+        return send(true)
       })
     } catch (error) {
       if (error instanceof CrudReadError && error.fromRoute) {
@@ -201,7 +212,6 @@ export class CrudEditRows implements EditRows {
           if (error.reason === 'busy_archive') throw busyArchive(id)
           if (error.reason === 'parked') throw parkedArchive(id)
           if (error.reason === 'changed_owner') throw changedOwner(id)
-          if (error.reason === 'untold') throw new SessionError('busy', `session ${id} changed meanwhile; try again`)
         }
       }
       throw error
@@ -242,7 +252,6 @@ export class SessionEdits {
     const { logged, dismissed } = await rows.edit(
       id,
       { principal, title, done, archived: archive ? true : unarchive ? false : undefined },
-      { status: session.status },
       (sid) => this.deps.endDurable(sid),
     )
     if (logged) this.deps.events.committed(id, logged.events, logged.seqs)

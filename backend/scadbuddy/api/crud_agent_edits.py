@@ -6,9 +6,10 @@ archiving it, under the row's lock and only while ``principal`` owns it, with it
 eviction, an archive's ``done`` summaries dismissed, and their events, in one transaction
 (#5299 D2). It answers what it logged (as the gate's routes do) and the summaries it dismissed,
 which the agent audits; a refusal is 404 ``gone`` or 409 with its reason (``changed_owner``,
-``busy_done``, ``busy_archive``, ``parked``, ``untold``: a newly done session whose workflow the
-agent did not say it told). A lock or connection wait past the turn routes' bounds is 503, as
-theirs (``crud_agent_turns.py`` ``_in_conn``).
+``busy_done``, ``busy_archive``, ``parked``, and last ``untold``: a newly done session whose
+workflow the agent did not say it told, which the agent sends first and then tells the
+workflow). A lock or connection wait past the turn routes' bounds is 503, as theirs
+(``crud_agent_turns.py`` ``_in_conn``).
 
 The session id is the only id in a path, a UUID checked by its pattern. The body is bounded."""
 

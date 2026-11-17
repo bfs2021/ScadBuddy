@@ -378,7 +378,8 @@ only the sleeps move; a budget on the real clock fails on a slow runner (#6252).
   scenario both ways). `edits.py` is an edit of a session, for `api/crud_agent_edits.py` (area
   `session-edits`, #6449): the agent's `PgEditRows` transaction, under the row's lock and only
   while the principal owns it, with its warm eviction, an archive's `done` summaries dismissed and
-  their events; a newly done session needs `told` (the agent tells its workflow first) (tests
+  their events; a newly done session needs `told`, checked last (`untold`), so that answer means
+  the edit would pass: the agent then tells its workflow and sends it again (tests
   `tests/crud/test_crud_agent_edits.py`; the agent's `test/editRowsParity.pg.test.ts`).
 - The agent's small stores (#5299 step 5): `api/crud_agent_stores.py` (areas
   `activity-kinds`, `browser-origins`, `bridge-tabs`, `pairings`, `mcp-tokens`) and

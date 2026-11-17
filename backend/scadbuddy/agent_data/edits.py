@@ -8,9 +8,10 @@ approval, a question, an attention request, a durable entry); the row written; t
 evicted on commit (``scadbuddy_warm_evict``); an undismissed ``done`` summary dismissed with an
 archive; and their events, in one transaction.
 
-The session's workflow is told it is done before this runs (Temporal is the agent's), so a done
-that this transaction would newly write needs ``told``: without it nothing is written, never a
-done the workflow was not told of."""
+The session's workflow is told it is done by the agent (Temporal is the agent's), so a done that
+this transaction would newly write needs ``told``: without it nothing is written, never a done the
+workflow was not told of. ``untold`` is the last check, so it means every other check passed: the
+agent sends the edit untold first and tells the workflow only on that answer."""
 
 from __future__ import annotations
 
@@ -75,7 +76,8 @@ def edit(
             if before["parked"]:
                 raise EditRefusedError("parked")
         newly_done = done and before["was"] != "done"
-        # The workflow is told first, on the agent: never a done it was not told of.
+        # Last, after every other refusal: `untold` tells the agent the edit would pass, so it tells
+        # the workflow then and sends the edit again. Never a done the workflow was not told of.
         if newly_done and not told:
             raise EditRefusedError("untold")
         conn.execute(
