@@ -75,7 +75,23 @@ describe('the Ledger tab', () => {
     expect(screen.getByText('No events match.')).toBeInTheDocument()
   })
 
-  it('drops events after the To date from the rows', async () => {
+  it('sends the end of the To day as until, so a first page that is all after it never comes back', async () => {
+    const seen: URLSearchParams[] = []
+    server.use(
+      http.get('/api/v1/filament/events', ({ request }) => {
+        const params = new URL(request.url).searchParams
+        seen.push(params)
+        // The server holds only events after the To day on its newest pages, as a real ledger would.
+        return HttpResponse.json({ events: [], next_cursor: null })
+      }),
+    )
+    renderPage(<LedgerTab />, { route: '/filament/ledger?to=2026-11-02' })
+    await ledger()
+    expect(seen).toHaveLength(1)
+    expect(new Date(seen[0]!.get('until')!).getTime()).toBe(new Date('2026-11-03T00:00:00').getTime())
+  })
+
+  it('shows only the events before the end of the To day', async () => {
     renderPage(<LedgerTab />, { route: '/filament/ledger?to=2026-11-02' })
     const rows = dataRows(await ledger())
     expect(rows.length).toBeGreaterThan(0)

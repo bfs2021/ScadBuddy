@@ -217,6 +217,7 @@ def page(
     kind: m.EventKind | None = None,
     source: m.EventSource | None = None,
     since: datetime | None = None,
+    until: datetime | None = None,
     cursor: str | None = None,
     limit: int = 100,
 ) -> m.EventPage:
@@ -232,6 +233,9 @@ def page(
     if since is not None:
         where.append("e.at >= %s")
         args.append(since)
+    if until is not None:
+        where.append("e.at < %s")
+        args.append(until)
     if cursor is not None:
         at, seq = _decode(cursor)
         where.append("(e.at, e.seq) < (%s, %s)")

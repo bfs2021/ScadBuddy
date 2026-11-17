@@ -168,6 +168,19 @@ def test_events_filter_by_source_and_since(pg_pool: PgPool) -> None:
     assert store.ledger(source="print_actual", since=at + timedelta(days=1)).events == []
 
 
+def test_events_filter_by_until_which_is_excluded(pg_pool: PgPool) -> None:
+    store, spool_id = _spool(pg_pool, grams_left=500)
+    at = _at_one_time(pg_pool, spool_id, 1)
+    printed = store.ledger(source="print_actual")
+    assert len(printed.events) == 1
+    assert store.ledger(source="print_actual", until=at).events == []
+    assert len(store.ledger(source="print_actual", until=at + timedelta(seconds=1)).events) == 1
+    # since is included and until is not: [since, until) tiles.
+    day = timedelta(days=1)
+    assert len(store.ledger(source="print_actual", since=at, until=at + day).events) == 1
+    assert store.ledger(source="print_actual", since=at + day, until=at + 2 * day).events == []
+
+
 def test_low_stock_uses_the_spool_then_the_default(pg_pool: PgPool) -> None:
     store, spool_id = _spool(pg_pool, label_weight_g=1000, grams_left=150, low_stock_pct=10)
     spool = store.get(spool_id)

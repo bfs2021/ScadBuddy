@@ -229,6 +229,18 @@ describe('filament spool tools', () => {
     expect(queries).toEqual(['?include_unbound=true', `?spool_id=${ROW}&cursor=abc&limit=2`])
   })
 
+  it('reads the ledger between a since and an until', async () => {
+    const queries: string[] = []
+    server.use(
+      http.get(`${BACKEND}/api/v1/filament/events`, ({ request }) => {
+        queries.push(new URL(request.url).search)
+        return HttpResponse.json({ events: [], next_cursor: null })
+      }),
+    )
+    await runTool(tool('filament_ledger_list'), { since: '2026-11-01T00:00:00Z', until: '2026-11-02T00:00:00Z', limit: 5 }, ctx())
+    expect(queries).toEqual(['?since=2026-11-01T00%3A00%3A00Z&until=2026-11-02T00%3A00%3A00Z&limit=5'])
+  })
+
   it('adds a spool, edits it, archives it and deletes another', async () => {
     const calls: unknown[] = []
     server.use(

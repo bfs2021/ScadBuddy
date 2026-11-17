@@ -73,7 +73,7 @@ describe('the Filament section', () => {
   it('mounts the Tags, Locations, Catalog and Ledger tabs', async () => {
     for (const [route, find] of [
       ['/filament/tags', () => screen.findByRole('table', { name: 'Tags' })],
-      ['/filament/locations', () => screen.findByRole('tree', { name: 'Locations' })],
+      ['/filament/locations', () => screen.findByRole('list', { name: 'Locations' })],
       ['/filament/catalog', () => screen.findByRole('table', { name: 'Materials' })],
       ['/filament/ledger', () => screen.findByRole('table', { name: 'Ledger' })],
     ] as const) {

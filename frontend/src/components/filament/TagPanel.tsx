@@ -6,13 +6,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-
-const KINDS: { id: TagBind['kind'] & string; name: string }[] = [
-  { id: 'bambu_mifare', name: 'Bambu Lab (RFID)' },
-  { id: 'ntag_openspool', name: 'OpenSpool (NTAG)' },
-  { id: 'ntag_opentag', name: 'OpenTag (NTAG)' },
-  { id: 'other', name: 'Other' },
-]
+import { KINDS } from './tagKinds'
 
 const message = (cause: unknown) => (cause instanceof ApiError ? cause.detail : 'The server could not be reached. Try again.')
 

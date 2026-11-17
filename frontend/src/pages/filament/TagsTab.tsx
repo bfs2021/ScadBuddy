@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { ApiError } from '../../api/client'
 import { getTag, listSpools, listTags, type TagDetail, type TagRow } from '../../api/filament'
@@ -26,16 +26,17 @@ export function TagsTab() {
   const kind = params.get('kind') ?? ''
   const shown = SHOWN.find((one) => one === params.get('show')) ?? 'all'
   const [tags, setTags] = useState<TagRow[] | null>(null)
-  const [numbers, setNumbers] = useState<Map<string, number>>(new Map())
+  // Spool numbers by id: read when a history opens (a row already carries its spool's number).
+  const [numbers, setNumbers] = useState<Map<string, number> | null>(null)
+  const asked = useRef(0)
+  const historyRef = useRef<HTMLElement>(null)
   const [error, setError] = useState<string | null>(null)
   const [open, setOpen] = useState<TagDetail | null>(null)
   const [historyError, setHistoryError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
-      const [rows, spools] = await Promise.all([listTags({ includeUnbound: true }), listSpools({ includeArchived: true })])
-      setNumbers(new Map(spools.map((spool) => [spool.id, spool.number])))
-      setTags(rows)
+      setTags(await listTags({ includeUnbound: true }))
       setError(null)
     } catch (cause) {
       setError(message(cause))
@@ -58,24 +59,32 @@ export function TagsTab() {
     [tags, kind, shown],
   )
 
+  useEffect(() => {
+    if (open) historyRef.current?.focus()
+  }, [open])
+
   async function openHistory(tag: TagRow) {
+    const mine = ++asked.current
     setHistoryError(null)
     try {
-      setOpen(await getTag(tag.id))
+      const detail = await getTag(tag.id)
+      // A history the numbers cannot name still lists its spools, as "Spool".
+      const known = numbers ?? (await listSpools({ includeArchived: true }).then((spools) => new Map(spools.map((spool) => [spool.id, spool.number])), () => null))
+      if (mine !== asked.current) return
+      if (known) setNumbers(known)
+      setOpen(detail)
     } catch (cause) {
+      if (mine !== asked.current) return
       setOpen(null)
       setHistoryError(message(cause))
     }
   }
 
-  const spoolLink = (id: string) => {
-    const number = numbers.get(id)
-    return (
-      <Link to={spoolPath({ id })} className="font-medium underline-offset-4 hover:underline">
-        {number == null ? 'Spool' : `#${number}`}
-      </Link>
-    )
-  }
+  const spoolLink = (id: string, number: number | null | undefined) => (
+    <Link to={spoolPath({ id })} className="font-medium underline-offset-4 hover:underline">
+      {number == null ? 'Spool' : `#${number}`}
+    </Link>
+  )
 
   return (
     <div className="flex flex-col gap-4">
@@ -127,7 +136,7 @@ export function TagsTab() {
                   <td className={`${TD} font-mono text-[12px]`}>{keyOf(tag)}</td>
                   <td className={TD}>{kindName(tag.kind)}</td>
                   <td className={TD}>
-                    {tag.binding ? spoolLink(tag.binding.spool_id) : <span className="text-muted-foreground">Not on a spool</span>}
+                    {tag.binding ? spoolLink(tag.binding.spool_id, tag.spool_number) : <span className="text-muted-foreground">Not on a spool</span>}
                   </td>
                   <td className={TD}>
                     {tag.binding ? <time dateTime={tag.binding.bound_at}>{when(tag.binding.bound_at)}</time> : ''}
@@ -157,7 +166,7 @@ export function TagsTab() {
         </p>
       )}
       {open && (
-        <section aria-label="Tag history" className="flex flex-col gap-2 rounded-md border p-3">
+        <section ref={historyRef} tabIndex={-1} aria-label="Tag history" className="flex flex-col gap-2 rounded-md border p-3 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold tracking-tight">History of {keyOf(open)}</h2>
             <Button type="button" size="xs" variant="ghost" onClick={() => setOpen(null)}>
@@ -167,7 +176,7 @@ export function TagsTab() {
           <ul className="flex flex-col gap-1 text-[13px]">
             {(open.history ?? []).map((binding) => (
               <li key={binding.id} className="flex flex-wrap items-baseline gap-x-2">
-                {spoolLink(binding.spool_id)}
+                {spoolLink(binding.spool_id, numbers?.get(binding.spool_id))}
                 <span className="text-muted-foreground">
                   <time dateTime={binding.bound_at}>{when(binding.bound_at)}</time>
                   {' to '}

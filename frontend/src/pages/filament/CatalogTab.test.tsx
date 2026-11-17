@@ -1,6 +1,8 @@
 import { screen, waitFor, within } from '@testing-library/react'
+import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
 import { listCatalog, upsertCatalog } from '../../api/filament'
+import { server } from '../../mocks/server'
 import { M } from '../../mocks/features/filament/seed'
 import { renderPage } from '../../test/utils'
 import { CatalogTab } from './CatalogTab'
@@ -84,10 +86,54 @@ describe('the Catalog tab', () => {
   })
 
   it('shows an insert type bb_catalog_id read only', async () => {
+    const real = await listCatalog('insert-types')
+    server.use(
+      http.get('/api/v1/filament/catalog/insert-types', () => HttpResponse.json(real.map((row) => ({ ...row, bb_catalog_id: 4242 })))),
+    )
     const { user } = renderPage(<CatalogTab />, { route: '/filament/catalog?kind=insert-types' })
     await user.click(within(rowOf(await list('Insert types'), 'Cardboard spool')).getByRole('button', { name: 'Edit Cardboard spool' }))
-    expect(screen.getByText('Bambuddy catalog id')).toBeInTheDocument()
-    expect(screen.queryByRole('textbox', { name: 'Bambuddy catalog id' })).toBeNull()
+    const form = screen.getByRole('form', { name: 'Edit Cardboard spool' })
+    expect(within(form).getByText('Bambuddy catalog id')).toBeInTheDocument()
+    expect(within(form).getByText('4242')).toBeInTheDocument()
+    expect(within(form).queryByDisplayValue('4242')).toBeNull()
+  })
+
+  it('names the row whose re-order failed, and reloads', async () => {
+    server.use(http.patch('/api/v1/filament/catalog/brands/:id', () => HttpResponse.json({ detail: 'busy' }, { status: 500 })))
+    const { user } = renderPage(<CatalogTab />, { route: '/filament/catalog?kind=brands' })
+    await user.click(within(rowOf(await list('Brands'), 'Inland')).getByRole('button', { name: 'Move Inland up' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Could not move .*: busy/)
+  })
+
+  it('keeps focus on the moved row after a re-order', async () => {
+    const { user } = renderPage(<CatalogTab />, { route: '/filament/catalog?kind=brands' })
+    await user.click(within(rowOf(await list('Brands'), 'Inland')).getByRole('button', { name: 'Move Inland up' }))
+    await waitFor(() => expect(within(rowOf(screen.getByRole('table', { name: 'Brands' }), 'Inland')).getByRole('button', { name: 'Move Inland up' })).toHaveFocus())
+  })
+
+  it('names an archived row a value points at, marked archived', async () => {
+    await upsertCatalog('subtypes', { name: 'Tough', material_id: M.TPU })
+    await upsertCatalog('materials', { archived: true }, M.TPU)
+    renderPage(<CatalogTab />, { route: '/filament/catalog?kind=subtypes' })
+    expect(within(rowOf(await list('Subtypes'), 'Tough')).getByText('Material: TPU (archived)')).toBeInTheDocument()
+  })
+
+  it('edits the extra colours of a colour as a list of hex values', async () => {
+    const { user } = renderPage(<CatalogTab />, { route: '/filament/catalog?kind=colours' })
+    await user.click(within(rowOf(await list('Colours'), 'Hot Pink')).getByRole('button', { name: 'Edit Hot Pink' }))
+    const extra = screen.getByLabelText('Extra colours')
+    await user.type(extra, '#112233, 445566AA')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(async () => expect((await listCatalog('colours')).find((row) => row.name === 'Hot Pink')?.extra_colours).toEqual(['#112233FF', '#445566AA']))
+  })
+
+  it('refuses an extra colour that is not hex, and sends nothing', async () => {
+    const { user } = renderPage(<CatalogTab />, { route: '/filament/catalog?kind=colours' })
+    await user.click(within(rowOf(await list('Colours'), 'Hot Pink')).getByRole('button', { name: 'Edit Hot Pink' }))
+    await user.type(screen.getByLabelText('Extra colours'), 'teal')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Extra colours')
+    expect((await listCatalog('colours')).find((row) => row.name === 'Hot Pink')?.extra_colours).toBeNull()
   })
 
   it('edits a colour with the colour field', async () => {

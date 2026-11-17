@@ -41,13 +41,13 @@ const titleOf = (list: { id: string; title: string }[], id: string | null) => li
 
 const message = (cause: unknown) => (cause instanceof ApiError ? cause.detail : 'The ledger could not be loaded. Try again.')
 
-/** The first instant after the local day `day` (`YYYY-MM-DD`), in ms; `null` for a bad day. */
-function endOf(day: string | null): number | null {
+/** The first instant after the local day `day` (`YYYY-MM-DD`), as an ISO time; `null` for a bad day. */
+function dayAfter(day: string | null): string | null {
   if (!day) return null
   const at = new Date(`${day}T00:00:00`)
   if (Number.isNaN(at.getTime())) return null
   at.setDate(at.getDate() + 1)
-  return at.getTime()
+  return at.toISOString()
 }
 
 /** A row's grams change, as "268 g to 120 g (-148 g)"; empty when it has none. */
@@ -72,9 +72,8 @@ function detail(row: LedgerRow): string {
 /**
  * #6262 — the Ledger tab: every spool's events, newest first, in pages. "Older" passes the
  * last page's `next_cursor` back as `cursor` (F4), so no row is lost or repeated. The
- * filters (spool number, kind, source, a from and a to day) are in the URL. The API takes
- * a start (`since`) but no end, so the To day drops the rows after it here; a page that
- * has none left to show asks for the next one.
+ * filters (spool number, kind, source, a from and a to day) are in the URL; From is sent as
+ * `since` (the day's start) and To as `until` (the start of the day after it).
  */
 export function LedgerTab() {
   const [params, setParams] = useSearchParams()
@@ -115,15 +114,10 @@ export function LedgerTab() {
       if (source) query.source = source
       const since = from ? new Date(`${from}T00:00:00`) : null
       if (since && !Number.isNaN(since.getTime())) query.since = since.toISOString()
-      const before = endOf(to)
-      const events: LedgerRow[] = []
-      let next = start
-      do {
-        const page = await listEvents({ ...query, cursor: next })
-        events.push(...page.events.filter((row) => before === null || Date.parse(row.at) < before))
-        next = page.next_cursor ?? null
-      } while (next && before !== null && events.length === 0)
-      return { events, next }
+      const until = dayAfter(to)
+      if (until) query.until = until
+      const page = await listEvents({ ...query, cursor: start })
+      return { events: page.events, next: page.next_cursor ?? null }
     },
     [spoolId, kind, source, from, to],
   )

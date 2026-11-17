@@ -591,14 +591,15 @@ export const filamentTools: Tool[] = [
     name: 'filament_ledger_list',
     label: 'Read the filament ledger',
     description:
-      "Every spool's events, newest first, each with its `spool_number`. Filter by `spool_id`, `kind`, `source` " +
-      'and `since` (an ISO time with its offset). A page holds up to `limit` events (at most 500); when ' +
+      "Every spool's events, newest first, each with its `spool_number`. Filter by `spool_id`, `kind`, `source`, " +
+      '`since` (an ISO time with its offset, included) and `until` (the same, excluded). A page holds up to `limit` events (at most 500); when ' +
       '`next_cursor` is set, pass it back as `cursor` for the next page.',
     input: z.object({
       spool_id: z.string().uuid().optional(),
       kind: z.enum(EVENT_KINDS).optional().describe('An event kind'),
       source: z.enum(['ams_remain', 'scale', 'print_estimate', 'print_actual', 'person', 'bb']).optional(),
       since: z.string().optional(),
+      until: z.string().optional(),
       cursor: z.string().optional(),
       limit: z.number().int().min(1).max(500).default(100),
     }),

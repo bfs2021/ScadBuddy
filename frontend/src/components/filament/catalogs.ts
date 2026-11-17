@@ -1,6 +1,6 @@
 import type { CatalogKind } from '../../api/filament'
 
-type FieldKind = 'text' | 'int' | 'decimal' | 'bool' | 'ref' | 'rgba'
+type FieldKind = 'text' | 'int' | 'decimal' | 'bool' | 'ref' | 'rgba' | 'rgbalist'
 
 export interface Field {
   name: string
@@ -62,6 +62,6 @@ export const CATALOGS: { kind: CatalogKind; title: string; fields: Field[] }[] =
   {
     kind: 'colours',
     title: 'Colours',
-    fields: [text('manufacturer', 'Manufacturer'), { name: 'rgba', label: 'Colour', kind: 'rgba', required: true }, ref('material_id', 'Material', 'materials'), ref('effect_id', 'Effect', 'effects')],
+    fields: [text('manufacturer', 'Manufacturer'), { name: 'rgba', label: 'Colour', kind: 'rgba', required: true }, { name: 'extra_colours', label: 'Extra colours', kind: 'rgbalist' }, ref('material_id', 'Material', 'materials'), ref('effect_id', 'Effect', 'effects')],
   },
 ]

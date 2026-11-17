@@ -1,5 +1,5 @@
 import { ArchiveIcon, ArchiveRestoreIcon, ArrowDownIcon, ArrowUpIcon, PencilIcon, PlusIcon } from 'lucide-react'
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router'
 import { ApiError } from '../../api/client'
 import { listCatalog, upsertCatalog, type CatalogInput, type CatalogKind } from '../../api/filament'
@@ -8,6 +8,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { SELECT_CLASS, TD, TH } from './formClasses'
 import { RgbaColourField } from './RgbaColourField'
+import { parseRgba } from '../../lib/rgba'
 import { RgbaSwatch } from './RgbaSwatch'
 import { CATALOGS, type Field } from './catalogs'
 
@@ -17,9 +18,12 @@ type Draft = { id: string | null; name: string; values: Record<string, Value> }
 
 const message = (cause: unknown) => (cause instanceof ApiError ? cause.detail : 'The change could not be saved. Try again.')
 
-/** The route takes any object and checks it against the kind's model, so the body is built from the field list. */
+/**
+ * The route takes any object and checks it against the kind's model, so the body is built
+ * from the field list; this is the one place it is typed as the kind's input.
+ */
 const write = (kind: CatalogKind, body: Record<string, unknown>, id?: string) =>
-  upsertCatalog(kind as 'materials', body as CatalogInput<'materials'>, id)
+  upsertCatalog<CatalogKind>(kind, body as CatalogInput<CatalogKind>, id)
 
 const draftOf = (fields: Field[], row?: Row): Draft => ({
   id: row?.id ?? null,
@@ -27,7 +31,7 @@ const draftOf = (fields: Field[], row?: Row): Draft => ({
   values: Object.fromEntries(
     fields.map((field) => {
       const have = row?.[field.name]
-      return [field.name, field.kind === 'bool' ? have === true : have == null ? null : typeof have === 'string' ? have : String(have)]
+      return [field.name, field.kind === 'bool' ? have === true : Array.isArray(have) ? have.join(', ') : have == null ? null : typeof have === 'string' ? have : String(have)]
     }),
   ),
 })
@@ -37,6 +41,13 @@ function sent(field: Field, value: Value): unknown {
   if (field.kind === 'bool' || field.kind === 'rgba' || field.kind === 'ref') return value === '' ? null : value
   const textual = typeof value === 'string' ? value.trim() : ''
   if (textual === '') return null
+  if (field.kind === 'rgbalist') {
+    return textual.split(/[\s,]+/).filter(Boolean).map((one) => {
+      const parsed = parseRgba(one)
+      if (parsed === null) throw new Error(`${field.label}: "${one}" is not a colour. Use #RRGGBB or #RRGGBBAA, separated by commas.`)
+      return parsed
+    })
+  }
   return field.kind === 'int' ? Number(textual) : textual
 }
 
@@ -49,6 +60,7 @@ function details(fields: Field[], row: Row, names: ReadonlyMap<string, string>):
     if (field.kind === 'bool') parts.push(field.label)
     else if (field.kind === 'ref') parts.push(`${field.label}: ${names.get(String(have)) ?? ''}`)
     else if (field.kind === 'rgba') parts.push(String(have))
+    else if (Array.isArray(have)) parts.push(`${field.label}: ${have.join(' ')}`)
     else parts.push(`${field.label}: ${String(have)}`)
   }
   return parts.join(', ')
@@ -79,10 +91,10 @@ export function CatalogList({ kind }: { kind: CatalogKind }) {
 
   const load = useCallback(async () => {
     try {
-      const [mine, ...others] = await Promise.all([listCatalog(kind, { includeArchived: archived }), ...refs.map((to) => listCatalog(to))])
+      const [mine, ...others] = await Promise.all([listCatalog(kind, { includeArchived: archived }), ...refs.map((to) => listCatalog(to, { includeArchived: true }))])
       setRows(mine as Row[])
       setOptions(Object.fromEntries(refs.map((to, at) => [to, others[at] as Row[]])))
-      setNames(new Map(others.flat().map((row) => [row.id, row.name])))
+      setNames(new Map(others.flat().map((row) => [row.id, row.archived_at ? `${row.name} (archived)` : row.name])))
       setError(null)
     } catch (cause) {
       setError(message(cause))
@@ -121,16 +133,16 @@ export function CatalogList({ kind }: { kind: CatalogKind }) {
     event.preventDefault()
     if (!draft) return
     const was = draft.id ? rows?.find((row) => row.id === draft.id) : undefined
-    const body: Record<string, unknown> = {}
-    if (!was || draft.name.trim() !== was.name) body.name = draft.name.trim()
-    for (const field of spec.fields) {
-      const value = sent(field, draft.values[field.name] ?? null)
-      const before = was ? sent(field, draftOf(spec.fields, was).values[field.name] ?? null) : null
-      if (was ? value !== before : value !== null && value !== false) body[field.name] = value
-    }
     setSaving(true)
     setFormError(null)
     try {
+      const body: Record<string, unknown> = {}
+      if (!was || draft.name.trim() !== was.name) body.name = draft.name.trim()
+      for (const field of spec.fields) {
+        const value = sent(field, draft.values[field.name] ?? null)
+        const before = was ? sent(field, draftOf(spec.fields, was).values[field.name] ?? null) : null
+        if (was ? JSON.stringify(value) !== JSON.stringify(before) : value !== null && value !== false) body[field.name] = value
+      }
       if (was) {
         if (Object.keys(body).length > 0) await write(kind, body, was.id)
       } else {
@@ -139,19 +151,49 @@ export function CatalogList({ kind }: { kind: CatalogKind }) {
       setDraft(null)
       await load()
     } catch (cause) {
-      setFormError(message(cause))
+      setFormError(cause instanceof Error && !(cause instanceof ApiError) ? cause.message : message(cause))
     } finally {
       setSaving(false)
     }
   }
 
-  const move = (at: number, by: -1 | 1) =>
-    run(async () => {
-      const order = [...(rows ?? [])]
-      const [one] = order.splice(at, 1)
-      order.splice(at + by, 0, one!)
-      for (const [index, row] of order.entries()) if (row.sort_order !== index) await write(kind, { sort_order: index }, row.id)
-    })
+  const table = useRef<HTMLTableElement>(null)
+  const refocus = useRef<{ name: string; by: -1 | 1 } | null>(null)
+
+  // After a re-order the moved row's button keeps the focus: the one it was pressed on, or
+  // the other when the row has reached an end and that one is disabled.
+  useEffect(() => {
+    const goal = refocus.current
+    if (!goal || !rows) return
+    refocus.current = null
+    const row = [...(table.current?.querySelectorAll<HTMLElement>('tr[data-name]') ?? [])].find((one) => one.dataset.name === goal.name)
+    const buttons = [...(row?.querySelectorAll<HTMLButtonElement>('button[data-move]') ?? [])]
+    const same = buttons.find((one) => one.dataset.move === String(goal.by))
+    const target = same && !same.disabled ? same : buttons.find((one) => !one.disabled)
+    target?.focus()
+  }, [rows])
+
+  async function move(at: number, by: -1 | 1) {
+    const order = [...(rows ?? [])]
+    const moved = order[at]!
+    order.splice(at, 1)
+    order.splice(at + by, 0, moved)
+    setError(null)
+    let failure: string | null = null
+    refocus.current = { name: moved.name, by }
+    for (const [index, row] of order.entries()) {
+      if (row.sort_order === index) continue
+      try {
+        await write(kind, { sort_order: index }, row.id)
+      } catch (cause) {
+        failure = `Could not move ${row.name}: ${message(cause)}`
+        break
+      }
+    }
+    // Whatever was written stays: show the order the server holds now.
+    await load()
+    if (failure) setError(failure)
+  }
 
   const form = draft && (
     <form aria-label={draft.id ? `Edit ${draft.name}` : `New ${spec.title.toLowerCase()} row`} onSubmit={(event) => void save(event)} className="grid gap-3 rounded-md border bg-muted/20 p-3 text-[13px] sm:grid-cols-2">
@@ -182,9 +224,9 @@ export function CatalogList({ kind }: { kind: CatalogKind }) {
               {field.label}
               <select className={SELECT_CLASS} value={typeof value === 'string' ? value : ''} onChange={(event) => set(event.target.value || null)}>
                 <option value="">None</option>
-                {(options[field.ref!] ?? []).map((row) => (
+                {(options[field.ref!] ?? []).filter((row) => !row.archived_at || row.id === value).map((row) => (
                   <option key={row.id} value={row.id}>
-                    {row.name}
+                    {row.archived_at ? `${row.name} (archived)` : row.name}
                   </option>
                 ))}
               </select>
@@ -194,8 +236,9 @@ export function CatalogList({ kind }: { kind: CatalogKind }) {
           <label key={field.name} className="flex flex-col gap-1">
             {field.label}
             <Input
-              type={field.kind === 'text' ? 'text' : 'number'}
+              type={field.kind === 'text' || field.kind === 'rgbalist' ? 'text' : 'number'}
               step={field.kind === 'decimal' ? 'any' : undefined}
+              placeholder={field.kind === 'rgbalist' ? '#RRGGBB, #RRGGBBAA' : undefined}
               required={field.required}
               value={typeof value === 'string' ? value : ''}
               onChange={(event) => set(event.target.value)}
@@ -270,7 +313,7 @@ export function CatalogList({ kind }: { kind: CatalogKind }) {
       {!rows && !error && <p className="text-[13px] text-muted-foreground">Loading {spec.title.toLowerCase()}…</p>}
       {rows && (
         <div className="overflow-x-auto rounded-md border">
-          <table aria-label={spec.title} className="w-full text-left text-[13px]">
+          <table ref={table} aria-label={spec.title} className="w-full text-left text-[13px]">
             <thead className="bg-muted/50 text-muted-foreground">
               <tr>
                 <th scope="col" className={TH}>Name</th>
@@ -296,10 +339,10 @@ export function CatalogList({ kind }: { kind: CatalogKind }) {
                     <td className={`${TD} text-muted-foreground`}>{details(spec.fields, row, names)}</td>
                     <td className={`${TD} text-right tabular-nums`}>{row.sort_order}</td>
                     <td className={`${TD} whitespace-nowrap text-right`}>
-                      <Button type="button" size="xs" variant="ghost" aria-label={`Move ${row.name} up`} disabled={at === 0} onClick={() => void move(at, -1)}>
+                      <Button type="button" size="xs" variant="ghost" data-move="-1" aria-label={`Move ${row.name} up`} disabled={at === 0} onClick={() => void move(at, -1)}>
                         <ArrowUpIcon />
                       </Button>
-                      <Button type="button" size="xs" variant="ghost" aria-label={`Move ${row.name} down`} disabled={at === rows.length - 1} onClick={() => void move(at, 1)}>
+                      <Button type="button" size="xs" variant="ghost" data-move="1" aria-label={`Move ${row.name} down`} disabled={at === rows.length - 1} onClick={() => void move(at, 1)}>
                         <ArrowDownIcon />
                       </Button>
                       <Button type="button" size="xs" variant="ghost" aria-label={`Edit ${row.name}`} onClick={() => { setFormError(null); setDraft(draftOf(spec.fields, row)) }}>

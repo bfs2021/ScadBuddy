@@ -5,9 +5,9 @@ import { L, spoolId } from '../../mocks/features/filament/seed'
 import { renderPage } from '../../test/utils'
 import { LocationsTab } from './LocationsTab'
 
-const tree = () => screen.findByRole('tree', { name: 'Locations' })
+const tree = () => screen.findByRole('list', { name: 'Locations' })
 const place = async (id: string) => {
-  const found = within(await tree()).getAllByRole('treeitem').find((item) => item.dataset.place === id)
+  const found = within(await tree()).getAllByRole('listitem').find((item) => item.dataset.place === id)
   if (!found) throw new Error(`no place ${id}`)
   return found
 }
@@ -66,6 +66,6 @@ describe('the Locations tab', () => {
   it('archives a place, which leaves the tree', async () => {
     const { user } = renderPage(<LocationsTab />)
     await user.click(within(await place(L.DRY_BOX)).getByRole('button', { name: 'Archive Dry box 1' }))
-    await waitFor(() => expect(within(screen.getByRole('tree', { name: 'Locations' })).queryByText('Dry box 1')).toBeNull())
+    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Locations' })).queryByText('Dry box 1')).toBeNull())
   })
 })

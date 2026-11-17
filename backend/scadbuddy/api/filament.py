@@ -723,7 +723,8 @@ async def get_tag(filament: FilamentDep, tag_id: UUID) -> m.TagDetail:
     description=(
         "Every spool's events, newest first by time then booking order, each with its "
         "`spool_number`. Filter by `spool_id`, `kind`, `source` and `since` (a time with "
-        "its offset). A page holds up to `limit` events (at most 500); `next_cursor` is "
+        "its offset, included) and `until` (the same, excluded, so `since` and `until` give a "
+        "range that tiles). A page holds up to `limit` events (at most 500); `next_cursor` is "
         "opaque, and passing it back as `cursor` gives the next page with no row lost or "
         "repeated. 422 for a cursor no page gave."
     ),
@@ -734,6 +735,7 @@ async def list_events(
     kind: m.EventKind | None = None,
     source: m.EventSource | None = None,
     since: AwareDatetime | None = None,
+    until: AwareDatetime | None = None,
     cursor: str | None = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
 ) -> m.EventPage:
@@ -744,6 +746,7 @@ async def list_events(
             kind=kind,
             source=source,
             since=since,
+            until=until,
             cursor=cursor,
             limit=limit,
         )

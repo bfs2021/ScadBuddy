@@ -1108,11 +1108,13 @@ export const handlers = [
     const offset = Number(search.get('cursor') ?? 0)
     if (!Number.isInteger(offset) || offset < 0) return problem(422, REFUSED.badCursor)
     const since = search.get('since')
+    const until = search.get('until')
     const rows = state.events
       .filter((event) => !search.get('spool_id') || event.spool_id === search.get('spool_id'))
       .filter((event) => !search.get('kind') || event.kind === search.get('kind'))
       .filter((event) => !search.get('source') || event.source === search.get('source'))
       .filter((event) => !since || Date.parse(event.at) >= Date.parse(since))
+      .filter((event) => !until || Date.parse(event.at) < Date.parse(until))
       // Newest first, then booking order: a page boundary never splits ties two ways.
       .sort((a, b) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id))
     const page = rows.slice(offset, offset + limit).map((event) => ({ ...event, spool_number: numberOf(event.spool_id) ?? 0 }))

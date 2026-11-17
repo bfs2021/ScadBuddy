@@ -23,7 +23,7 @@ function Place({ node, ...tree }: Omit<LocationTreeProps, 'nodes'> & { node: Loc
   const archived = node.archived_at != null
   const spools = tree.spoolsAt.get(node.id) ?? []
   return (
-    <li role="treeitem" aria-expanded={(node.children ?? []).length > 0 ? true : undefined} data-place={node.id}>
+    <li data-place={node.id}>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 py-1.5">
         <span className={archived ? 'font-medium text-muted-foreground line-through' : 'font-medium'}>{node.name}</span>
         <span className="text-muted-foreground">{tree.kinds.get(node.kind_id) ?? ''}</span>
@@ -66,7 +66,7 @@ function Place({ node, ...tree }: Omit<LocationTreeProps, 'nodes'> & { node: Loc
         </ul>
       )}
       {(node.children ?? []).length > 0 && (
-        <ul role="group" className="ml-4 border-l pl-3">
+        <ul className="ml-4 border-l pl-3">
           {(node.children ?? []).map((child) => (
             <Place key={child.id} node={child} {...tree} />
           ))}
@@ -80,7 +80,7 @@ function Place({ node, ...tree }: Omit<LocationTreeProps, 'nodes'> & { node: Loc
 export function LocationTree({ nodes, ...tree }: LocationTreeProps) {
   if (nodes.length === 0) return <p className="text-[13px] text-muted-foreground">No places yet. Add a room or a shelf to start.</p>
   return (
-    <ul role="tree" aria-label="Locations" className="rounded-md border px-3 py-1 text-[13px]">
+    <ul aria-label="Locations" className="rounded-md border px-3 py-1 text-[13px]">
       {nodes.map((node) => (
         <Place key={node.id} node={node} {...tree} />
       ))}

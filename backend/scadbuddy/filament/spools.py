@@ -377,6 +377,7 @@ class FilamentSpoolStore:
         kind: m.EventKind | None = None,
         source: m.EventSource | None = None,
         since: datetime | None = None,
+        until: datetime | None = None,
         cursor: str | None = None,
         limit: int = 100,
     ) -> m.EventPage:
@@ -388,6 +389,7 @@ class FilamentSpoolStore:
                 kind=kind,
                 source=source,
                 since=since,
+                until=until,
                 cursor=cursor,
                 limit=limit,
             )
