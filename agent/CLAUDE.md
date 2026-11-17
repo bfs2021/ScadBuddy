@@ -238,7 +238,12 @@ through area `forget-rows` (`forget.ts` `CrudForgetRows`, refused 409 `not-forgo
 with no tombstone), and its background tasks through `BackgroundTaskStore`. The transcript sealing
 backfill (`sealBackfill`) and the `recover-durable-sessions` CLI are gone (#6501): prod had no
 plaintext transcript row and one `durable` session row, archived (measured 2026-11-16 with `psql`
-on `scadbuddy-db-1`, deploy/CLAUDE.md "Prod checks"). Test `test/crudSweeps.test.ts`. A route's
+on `scadbuddy-db-1`, deploy/CLAUDE.md "Prod checks"). Test `test/crudSweeps.test.ts`. Area `mcp-relay` (#5299 step 11, `RELAY_AREAS`, backend
+`api/crud_agent_mcp.py`, `src/mcp/relayRows.ts` `CrudRelayRows` behind `RelayRows`, which
+`SharedMcpSessionRelay` takes) takes the /mcp session relay's directory (`ai_mcp_sessions`) and
+messages (`ai_mcp_relay_messages`): a session hash, a replica, a request and a row id travel in the
+body only, and a message's row and its `scadbuddy_mcp` NOTIFY commit in one transaction on the API.
+`test/mcpSessions.pg.test.ts` runs every relay case over both `PgRelayRows` and `CrudRelayRows`. A route's
 answer counts only with `X-ScadBuddy-Crud: 1`; any other failure takes the read's existing
 error path (a lookup failure the activity retries, a 500, a resync). A session's successful `order_item_revision_add` (or
 `_after_acceptance`) is an `ai_session_order_costs` row (`src/sessions/orderCosts.ts`

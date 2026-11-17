@@ -71,7 +71,7 @@ import {
   withServiceCredential,
 } from './api/serviceCredential.js'
 import { untilBackendAnswers } from './api/backendUp.js'
-import { BLOB_AREAS, CrudAreas, FORGET_AREAS, GATE_AREAS, SECRET_AREAS, SESSION_AREAS, START_AREAS, TASK_AREAS, TURN_AREAS, WORKSPACE_AREAS, REST_AREAS, SWEEP_AREAS } from './api/crudAreas.js'
+import { BLOB_AREAS, CrudAreas, FORGET_AREAS, GATE_AREAS, RELAY_AREAS, SECRET_AREAS, SESSION_AREAS, START_AREAS, TASK_AREAS, TURN_AREAS, WORKSPACE_AREAS, REST_AREAS, SWEEP_AREAS } from './api/crudAreas.js'
 import { CrudApprovals } from './approvals/crudApprovals.js'
 import { CrudAudit } from './audit/crudAudit.js'
 import { CrudPending } from './gate/crudPending.js'
@@ -92,7 +92,8 @@ import { hostTabs, TemporalTabRelay } from './bridge/relay.js'
 import { CrudTabOwnerStore, PostgresTabOwnerStore, type TabOwnerStore } from './bridge/tabOwners.js'
 import { CrudSessionTabStore, PostgresSessionTabStore, type SessionTabStore } from './bridge/sessionTabs.js'
 import { CrudTabImageStore, PostgresTabImageStore, type TabImageStore } from './bridge/tabImages.js'
-import { PgMcpSessionRelay } from './mcp/sessionRelay.js'
+import { CrudRelayRows, PgRelayRows, type RelayRows } from './mcp/relayRows.js'
+import { SharedMcpSessionRelay } from './mcp/sessionRelay.js'
 import { CrudPairingStore, type PairingStore, PostgresPairingStore } from './bridge/pairings.js'
 import { CHAT_FRAME_MAX, startHeartbeat } from './routes/chat.js'
 import { storedModel } from './routes/model.js'
@@ -269,7 +270,7 @@ const serviceCredential: CredentialSource | undefined =
 // gate's writes (#5299 step 10, `GATE_AREAS`), but for a run grant's check, which only the API runs,
 // and the sessions' rows and what their calls touched (#5299 step 9, `SESSION_AREAS`).
 const crudFetch = serviceCredential ? withServiceCredential(globalThis.fetch, serviceCredential, config.backendUrl) : globalThis.fetch
-const crudAreas = new CrudAreas(config.backendUrl, { fetch: crudFetch, wanted: [...SECRET_AREAS, ...FORGET_AREAS, ...STORE_AREAS, ...WORKSPACE_AREAS, ...BLOB_AREAS, ...TASK_AREAS, ...GATE_AREAS, ...SESSION_AREAS, ...REST_AREAS, ...TURN_AREAS, ...START_AREAS, ...SWEEP_AREAS] })
+const crudAreas = new CrudAreas(config.backendUrl, { fetch: crudFetch, wanted: [...SECRET_AREAS, ...FORGET_AREAS, ...STORE_AREAS, ...WORKSPACE_AREAS, ...BLOB_AREAS, ...TASK_AREAS, ...GATE_AREAS, ...SESSION_AREAS, ...REST_AREAS, ...TURN_AREAS, ...RELAY_AREAS, ...START_AREAS, ...SWEEP_AREAS] })
 crudAreas.start()
 // The small stores (#5299 step 5, api/crudStores.ts): each through its CRUD routes once the API
 // lists its area, over SQL until then.
@@ -432,8 +433,16 @@ const tabRelay = database
 // The rows a process before this one left under the same identity (a container restart).
 void tabRelay?.releaseAll()
 // /mcp requests for a session another replica holds (#2086, mcp/sessionRelay.ts), on
-// the listener's connection: made before start(), so its first LISTEN covers it.
-const mcpRelay = role.http && database && events ? new PgMcpSessionRelay(database.sql, { listen: (c, f) => events.listenAlso(c, f) }) : undefined
+// the listener's connection: made before start(), so its first LISTEN covers it. Its directory and
+// messages go through the backend's CRUD routes once the API lists area `mcp-relay` (#5299 step 11,
+// mcp/relayRows.ts), over SQL until then.
+const mcpRelay =
+  role.http && database && events
+    ? new SharedMcpSessionRelay(
+        gated<RelayRows>(new PgRelayRows(database.sql), new CrudRelayRows(crudTarget), () => crudAreas.has('mcp-relay')),
+        { listen: (c, f) => events.listenAlso(c, f) },
+      )
+    : undefined
 // #4975 phase 5 (spec 2026-11-01 §5.6): the signed-in person on /api/v1/ai/*, from the
 // backend's `auth_sessions_agent`; a revocation the backend publishes drops its cache.
 const browserSessions =

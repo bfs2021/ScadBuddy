@@ -62,6 +62,12 @@ export const GATE_AREAS = ['gate', 'pending-input', 'audit', 'approvals', 'quest
 export const SESSION_AREAS = ['sessions', 'session-resources', 'transcripts', 'session-events', 'session-order-costs'] as const
 
 /**
+ * The area of the /mcp session relay's directory and messages (#5299 step 11; backend
+ * api/crud_agent_mcp.py; mcp/relayRows.ts).
+ */
+export const RELAY_AREAS = ['mcp-relay'] as const
+
+/**
  * The NOTIFYs sent outside a store's write (a `session.*` bus event, a warm eviction) and a
  * session's last event reads (its open calls, a child's reasoning) (#6501; backend
  * api/crud_agent_publish.py; sessions/publish.ts, sessions/sessionReads.ts).
