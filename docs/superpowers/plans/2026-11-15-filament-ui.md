@@ -301,7 +301,7 @@ frontend/e2e/filament.spec.ts                                        Task 20
 - `GET /filament/spools/{id}` answers `SpoolDetail` (was `Spool`).
 - `ledger.basis(events, *, weight_locked, label_weight_g) -> GramsBasis` — the same walk as `grams_left`, returning the anchor and the deltas it used. `grams_left` is reimplemented on it, so the two never disagree.
 - `GET /filament/tags?include_unbound=bool` → `list[TagRow]` (`Tag` + `binding: TagBinding | None` + `spool_number: int | None`); `GET /filament/tags/{id}` → `TagDetail` (+ `history: list[TagBinding]`).
-- `GET /filament/events?spool_id&kind&source&since&cursor&limit≤500` → `EventPage(events: list[LedgerRow], next_cursor: str | None)`; `LedgerRow = SpoolEvent + spool_number`. Ordered `(at, seq)` descending; `cursor` is opaque (base64url of `at` and `seq`) and names the last row returned (F4).
+- `GET /filament/events?spool_id&kind&source&since&until&cursor&limit≤500` (`since` included, `until` excluded) → `EventPage(events: list[LedgerRow], next_cursor: str | None)`; `LedgerRow = SpoolEvent + spool_number`. Ordered `(at, seq)` descending; `cursor` is opaque (base64url of `at` and `seq`) and names the last row returned (F4).
 - `GET /filament/summary` → `InventorySummary(spools: int, grams_left: float, value_left: Decimal | None, by_material: list[MaterialStock], loaded: int, low_stock: int, needs_type: int)`; `low_stock` counts `Spool.low_stock`; value uses `cost_per_kg`, else `filament_default_cost_per_kg` (Task 13). No "consumed" figure (Decision 11).
 - Tools: `filament_tag_list`, `filament_tag_get`, `filament_ledger_list`, `filament_summary` (read). `filament_spool_get` describes the new fields.
 
